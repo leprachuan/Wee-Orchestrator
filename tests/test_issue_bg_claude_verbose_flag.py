@@ -6,6 +6,7 @@ Bug: Background tasks dispatched with runtime=claude failed immediately with:
 Fix: _build_bg_cmd() in agent_manager.py must include --verbose when constructing
 the claude CLI command for background tasks.
 """
+
 import sys
 import os
 import unittest
@@ -29,11 +30,15 @@ class TestCluadeBackgroundTaskVerboseFlag(unittest.TestCase):
 
         # Find the _build_bg_cmd function
         start = source.find("def _build_bg_cmd(")
-        self.assertGreater(start, 0, "_build_bg_cmd function not found in agent_manager.py")
+        self.assertGreater(
+            start, 0, "_build_bg_cmd function not found in agent_manager.py"
+        )
 
         # Find the claude runtime branch within the function
         claude_branch_start = source.find('elif eff_runtime == "claude":', start)
-        self.assertGreater(claude_branch_start, 0, "claude runtime branch not found in _build_bg_cmd")
+        self.assertGreater(
+            claude_branch_start, 0, "claude runtime branch not found in _build_bg_cmd"
+        )
 
         # Find the next elif/else after the claude branch (marks end of clause)
         next_branch = source.find("elif eff_runtime ==", claude_branch_start + 1)

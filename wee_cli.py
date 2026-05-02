@@ -141,7 +141,9 @@ def _clone_messages(messages: list) -> list:
     return json.loads(json.dumps(messages))
 
 
-def _prepare_session_messages(system_prompt: str, existing_messages: list = None) -> tuple:
+def _prepare_session_messages(
+    system_prompt: str, existing_messages: list = None
+) -> tuple:
     """Build or resume a message list and return (messages, effective_system)."""
     effective_system = _build_effective_system_prompt(system_prompt).lstrip()
     if existing_messages:
@@ -822,7 +824,9 @@ def run_interactive(
                     _print_error("Compact target must be between 10 and 90.")
                     continue
 
-                current_window = token_tracker.context_window or get_context_window(model)
+                current_window = token_tracker.context_window or get_context_window(
+                    model
+                )
                 token_tracker.context_window = current_window
                 before_tokens = count_message_tokens(messages, model)
                 target_tokens = max(1, int(current_window * (target_pct / 100.0)))
@@ -1093,8 +1097,8 @@ def run_interactive(
                         timeout,
                         output_format,
                         permission,
-                        ),
-                    )
+                    ),
+                )
             if (
                 token_tracker.context_window
                 and token_tracker.percent_used() >= COMPACT_TRIGGER_FRACTION * 100
@@ -1373,7 +1377,9 @@ def main(argv=None):
         session_name = "default"
 
     session_data = {}
-    should_resume_session = bool(args.resume or (session_name == "default" and default_interactive))
+    should_resume_session = bool(
+        args.resume or (session_name == "default" and default_interactive)
+    )
     if session_name and should_resume_session:
         session_data = load_session_data(session_name)
 

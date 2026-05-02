@@ -101,40 +101,64 @@ def gh(*args: str, check: bool = True) -> str:
 
 
 def ensure_labels() -> None:
-    existing = {lbl["name"] for lbl in json.loads(
-        gh("label", "list", "--repo", REPO, "--limit", "200", "--json", "name")
-    )}
+    existing = {
+        lbl["name"]
+        for lbl in json.loads(
+            gh("label", "list", "--repo", REPO, "--limit", "200", "--json", "name")
+        )
+    }
     for name, colour in REQUIRED_LABELS.items():
         if name not in existing:
             if DRY_RUN:
                 log(f"[dry-run] Would create label {name!r}")
                 continue
-            gh("label", "create", name, "--repo", REPO, "--color", colour,
-               "--description", f"wee pipeline: {name}", "--force")
+            gh(
+                "label",
+                "create",
+                name,
+                "--repo",
+                REPO,
+                "--color",
+                colour,
+                "--description",
+                f"wee pipeline: {name}",
+                "--force",
+            )
             log(f"Created label {name!r}")
 
 
 def fetch_issues() -> list[dict]:
     """Fetch all open issues labelled wee-dev, sorted oldest first."""
     raw = gh(
-        "issue", "list", "--repo", REPO, "--label", "wee-dev",
-        "--state", "open", "--limit", "100",
-        "--json", "number,title,labels,body,author,createdAt",
+        "issue",
+        "list",
+        "--repo",
+        REPO,
+        "--label",
+        "wee-dev",
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,labels,body,author,createdAt",
     )
     issues = json.loads(raw)
     items = []
     for issue in issues:
         label_names = {lbl["name"] for lbl in issue.get("labels", [])}
         status = _resolve_status(label_names)
-        items.append({
-            "number": issue["number"],
-            "id": f"#{issue['number']}",
-            "title": issue["title"],
-            "labels": label_names,
-            "status": status,
-            "body": (issue.get("body") or "")[:2000],
-            "author": (issue.get("author") or {}).get("login", ""),
-        })
+        items.append(
+            {
+                "number": issue["number"],
+                "id": f"#{issue['number']}",
+                "title": issue["title"],
+                "labels": label_names,
+                "status": status,
+                "body": (issue.get("body") or "")[:2000],
+                "author": (issue.get("author") or {}).get("login", ""),
+            }
+        )
     items.sort(key=lambda x: x["number"])
     return items
 
@@ -163,7 +187,16 @@ def remove_label(issue: int, label: str) -> None:
     if DRY_RUN:
         log(f"[dry-run] remove label {label!r} from #{issue}")
         return
-    gh("issue", "edit", str(issue), "--repo", REPO, "--remove-label", label, check=False)
+    gh(
+        "issue",
+        "edit",
+        str(issue),
+        "--repo",
+        REPO,
+        "--remove-label",
+        label,
+        check=False,
+    )
 
 
 def add_comment(issue: int, body: str) -> None:
@@ -235,7 +268,9 @@ def _load_api_key() -> str:
 
 def get_agent_dispatch_config(agent_name: str) -> dict:
     config = json.loads(AGENTS_CONFIG_PATH.read_text())
-    agent = next((a for a in config.get("agents", []) if a.get("name") == agent_name), None)
+    agent = next(
+        (a for a in config.get("agents", []) if a.get("name") == agent_name), None
+    )
     if agent is None:
         raise RuntimeError(f"Agent {agent_name!r} not found in agents.json")
 
@@ -352,9 +387,11 @@ def passes_safety_gate(item: dict) -> bool:
     log(f"  {item['id']} filed by {item['author']!r} — needs approval")
     if "wee-dev:needs-approval" not in item["labels"]:
         add_label(item["number"], "wee-dev:needs-approval")
-        add_comment(item["number"],
-                    f"⏳ Awaiting owner approval before wee-dev picks this up. "
-                    f"Filed by @{item['author']}; only @{OWNER_LOGIN} issues are auto-dispatched.")
+        add_comment(
+            item["number"],
+            f"⏳ Awaiting owner approval before wee-dev picks this up. "
+            f"Filed by @{item['author']}; only @{OWNER_LOGIN} issues are auto-dispatched.",
+        )
     return False
 
 
@@ -381,7 +418,9 @@ def dispatch_wee_dev(item: dict, state: dict) -> None:
     prompt = build_wee_dev_prompt(item)
 
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})")
+        log(
+            f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})"
+        )
         return
 
     task_id = dispatch_via_api("wee-dev", prompt, cfg)
@@ -415,7 +454,9 @@ def dispatch_wee_qa(item: dict, state: dict) -> None:
     prompt = build_wee_qa_prompt(item)
 
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-qa for {item['id']} (runtime={cfg['runtime']})")
+        log(
+            f"[dry-run] Would dispatch wee-qa for {item['id']} (runtime={cfg['runtime']})"
+        )
         return
 
     task_id = dispatch_via_api("wee-qa", prompt, cfg)
@@ -458,7 +499,9 @@ def run_pipeline(items: list[dict], state: dict) -> None:
                 )
                 wee_dev_dispatched = True
             else:
-                log(f"Re-dispatching wee-dev for stalled {item['id']} (in-progress, no running task)")
+                log(
+                    f"Re-dispatching wee-dev for stalled {item['id']} (in-progress, no running task)"
+                )
                 try:
                     dispatch_wee_dev(item, state)
                     wee_dev_dispatched = True
@@ -469,25 +512,39 @@ def run_pipeline(items: list[dict], state: dict) -> None:
         item = qa_failed[0]
         log(f"QA-failed: re-dispatching wee-dev for {item['id']}")
         current_label = "wee-dev:qa-failed"
-        transition(item["number"], current_label, "wee-dev:in-progress",
-                   f"🔄 wee-dev re-dispatched to address QA feedback ({now_iso()}).")
+        transition(
+            item["number"],
+            current_label,
+            "wee-dev:in-progress",
+            f"🔄 wee-dev re-dispatched to address QA feedback ({now_iso()}).",
+        )
         try:
             dispatch_wee_dev(item, state)
             wee_dev_dispatched = True
         except Exception as exc:
             log(f"ERROR: Failed to dispatch wee-dev for qa-failed: {exc}")
             # Roll back label
-            transition(item["number"], "wee-dev:in-progress", current_label,
-                       "⚠️ Dispatcher failed to re-dispatch wee-dev; reverted to qa-failed.")
+            transition(
+                item["number"],
+                "wee-dev:in-progress",
+                current_label,
+                "⚠️ Dispatcher failed to re-dispatch wee-dev; reverted to qa-failed.",
+            )
 
     elif queued:
         # Pick next queued issue (FIFO, safety gate)
         for candidate in queued:
             if not passes_safety_gate(candidate):
                 continue
-            log(f"Dispatching wee-dev for queued {candidate['id']}: {candidate['title']}")
-            transition(candidate["number"], None, "wee-dev:in-progress",
-                       f"🚀 wee-dev picking up this issue ({now_iso()}).")
+            log(
+                f"Dispatching wee-dev for queued {candidate['id']}: {candidate['title']}"
+            )
+            transition(
+                candidate["number"],
+                None,
+                "wee-dev:in-progress",
+                f"🚀 wee-dev picking up this issue ({now_iso()}).",
+            )
             try:
                 dispatch_wee_dev(candidate, state)
                 wee_dev_dispatched = True
@@ -533,7 +590,9 @@ def run_pipeline(items: list[dict], state: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Unified wee-dev/wee-qa pipeline dispatcher")
+    parser = argparse.ArgumentParser(
+        description="Unified wee-dev/wee-qa pipeline dispatcher"
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

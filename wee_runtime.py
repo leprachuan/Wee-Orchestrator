@@ -451,9 +451,7 @@ _WEE_TOOLS = [
                     },
                     "content": {
                         "type": "string",
-                        "description": (
-                            "New content to write, replace, or insert."
-                        ),
+                        "description": ("New content to write, replace, or insert."),
                     },
                     "create_if_missing": {
                         "type": "boolean",
@@ -463,9 +461,7 @@ _WEE_TOOLS = [
                     },
                     "new_text": {
                         "type": "string",
-                        "description": (
-                            "Legacy alias for content. Prefer 'content'."
-                        ),
+                        "description": ("Legacy alias for content. Prefer 'content'."),
                     },
                     "old_text": {
                         "type": "string",
@@ -627,7 +623,10 @@ def _updated_text_from_line_operation(
         if start_line < 0:
             return None, "Error: start_line must be >= 0 for insert_after"
         if start_line > total_lines:
-            return None, f"Error: start_line {start_line} exceeds file length {total_lines}"
+            return (
+                None,
+                f"Error: start_line {start_line} exceeds file length {total_lines}",
+            )
         if not isinstance(content, str):
             return None, "Error: edit_file requires string 'content' for insert_after"
         insert_at = start_line
@@ -642,7 +641,10 @@ def _updated_text_from_line_operation(
         action = "deleted"
         if operation == "replace_lines":
             if not isinstance(content, str):
-                return None, "Error: edit_file requires string 'content' for replace_lines"
+                return (
+                    None,
+                    "Error: edit_file requires string 'content' for replace_lines",
+                )
             replacement = [content]
             action = "replaced"
         updated_lines = lines[: start_line - 1] + replacement + lines[end_line:]
@@ -721,9 +723,7 @@ def _execute_edit_file(func_args: dict) -> str:
             action = "created"
 
     try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".wee-edit-", dir=parent_dir, text=True
-        )
+        fd, tmp_path = tempfile.mkstemp(prefix=".wee-edit-", dir=parent_dir, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(updated)

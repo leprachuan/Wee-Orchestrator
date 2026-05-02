@@ -8,11 +8,18 @@ from devin_acp_runtime import DevinACPAdapter
 class TestDevinACPAdapterMapping(unittest.TestCase):
     def setUp(self):
         self.events = []
-        self.adapter = DevinACPAdapter(stream_push=lambda kind, data: self.events.append((kind, data)))
+        self.adapter = DevinACPAdapter(
+            stream_push=lambda kind, data: self.events.append((kind, data))
+        )
 
     def test_agent_message_chunk_maps_to_chunk(self):
         self.adapter._handle_session_update(
-            {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "hello"}}}
+            {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"text": "hello"},
+                }
+            }
         )
         self.assertEqual(self.adapter.collected_text, ["hello"])
         self.assertEqual(self.events, [("chunk", {"text": "hello"})])
@@ -81,7 +88,12 @@ class TestDevinACPAdapterMapping(unittest.TestCase):
         self.adapter._loading_existing_session = True
         self.adapter._accepting_current_turn = False
         self.adapter._handle_session_update(
-            {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "old answer"}}}
+            {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"text": "old answer"},
+                }
+            }
         )
         self.assertEqual(self.adapter.collected_text, [])
         self.assertEqual(self.events, [])
@@ -90,7 +102,12 @@ class TestDevinACPAdapterMapping(unittest.TestCase):
         self.adapter._loading_existing_session = False
         self.adapter._accepting_current_turn = True
         self.adapter._handle_session_update(
-            {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "new answer"}}}
+            {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"text": "new answer"},
+                }
+            }
         )
         self.assertEqual(self.adapter.collected_text, ["new answer"])
         self.assertEqual(self.events, [("chunk", {"text": "new answer"})])

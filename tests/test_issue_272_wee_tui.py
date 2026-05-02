@@ -24,7 +24,10 @@ def test_api_client_initialization():
 def test_api_client_headers():
     """Test API client headers"""
     client = WeeAPIClient(
-        base_url="https://127.0.0.1:8001", auth_token="test_token", user_id="12345", channel="tui"
+        base_url="https://127.0.0.1:8001",
+        auth_token="test_token",
+        user_id="12345",
+        channel="tui",
     )
 
     assert client.headers["Authorization"] == "Bearer test_token"
@@ -33,7 +36,9 @@ def test_api_client_headers():
     assert "Content-Type" in client.headers
 
 
-@unittest.mock.patch.dict(os.environ, {'WEE_AUTH_TOKEN':'','WEE_API_URL':'','WEE_USER_ID':''})
+@unittest.mock.patch.dict(
+    os.environ, {"WEE_AUTH_TOKEN": "", "WEE_API_URL": "", "WEE_USER_ID": ""}
+)
 def test_config_defaults():
     """Test configuration defaults"""
     assert config.api_url == "https://127.0.0.1:8001"
@@ -135,7 +140,10 @@ def test_api_client_methods_exist():
 def test_api_client_verify_ssl_setting():
     """Test SSL verification setting"""
     client_verify = WeeAPIClient(
-        base_url="https://127.0.0.1:8001", auth_token="test_token", user_id="12345", verify_ssl=True
+        base_url="https://127.0.0.1:8001",
+        auth_token="test_token",
+        user_id="12345",
+        verify_ssl=True,
     )
     assert client_verify.verify_ssl == True
 
@@ -155,12 +163,14 @@ if __name__ == "__main__":
 def test_app_imports():
     """Verify WeeTUI and all component imports resolve - catches missing component files."""
     from tui.app import WeeTUI
+
     assert WeeTUI is not None
 
     from tui.components.chat_panel import ChatPanel
     from tui.components.service_status import ServiceStatusPanel
     from tui.components.session_list import SessionListPanel
     from tui.components.task_queue import TaskQueuePanel
+
     assert ChatPanel is not None
     assert ServiceStatusPanel is not None
     assert SessionListPanel is not None
