@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Wee-Dev autonomous dispatcher — no QA, no PRs.
+"""Wee-Dev dispatcher - picks up issues, no QA pipeline.
 
-wee-dev picks up GitHub issues, works directly on dev branch,
-commits directly to dev, and closes the issue when done.
+wee-dev: GitHub issue → dev branch → close issue
+wee-qa: Scheduled gate for dev→main (separate process)
 """
 
 import argparse, json, os, ssl, subprocess, sys
@@ -19,12 +19,9 @@ AGENTS_CONFIG_PATH = Path("/opt/n8n-copilot-shim/agents.json")
 USER_IDENTITY = "8193231291"
 AUTH_CHANNEL = "telegram"
 RUNNING_STATUSES = {"created", "queued", "pending", "running", "in_progress"}
-REQUIRED_LABELS = {"wee-dev": "0075ca", "wee-dev:in-progress": "e4e669", "wee-dev:needs-approval": "f9a825"}
+REQUIRED_LABELS = {"wee-dev": "0075ca", "wee-dev:in-progress": "e4e669"}
 STALL_TIMEOUT_MINUTES = 30
 DRY_RUN = False
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).isoformat()
@@ -76,11 +73,7 @@ def get_open_wee_dev_issues() -> list:
 
 def get_issue_status(item: dict) -> str:
     labels = [l["name"] for l in item.get("labels", [])]
-    if "wee-dev:in-progress" in labels:
-        return "in-progress"
-    if "wee-dev:needs-approval" in labels:
-        return "needs-approval"
-    return "queued"
+    return "in-progress" if "wee-dev:in-progress" in labels else "queued"
 
 def add_label(issue_number: int, label: str) -> None:
     subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", label], check=True)
@@ -88,8 +81,8 @@ def add_label(issue_number: int, label: str) -> None:
 def remove_label(issue_number: int, label: str) -> None:
     subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", label], check=True)
 
-def add_comment(issue_number: int, body: str) -> None:
-    subprocess.run(["gh", "issue", "comment", str(issue_number), "--repo", REPO, "--body", body], check=True)
+def close_issue(issue_number: int) -> None:
+    subprocess.run(["gh", "issue", "close", str(issue_number), "--repo", REPO], check=True)
 
 def ensure_labels_exist() -> None:
     for label, color in REQUIRED_LABELS.items():
@@ -163,40 +156,19 @@ def is_task_running(task_id: str) -> bool:
     except:
         return False
 
-def passes_safety_gate(item: dict) -> bool:
-    author = item.get("author", {}).get("login", "")
-    if author == OWNER_LOGIN:
-        return True
-    labels = [l["name"] for l in item.get("labels", [])]
-    if "wee-dev:needs-approval" not in labels:
-        log(f"  Issue #{item['number']} filed by @{author} — needs approval")
-        add_label(item["number"], "wee-dev:needs-approval")
-        add_comment(item["number"], f"⏳ Awaiting owner approval before wee-dev picks this up. Filed by @{author}; only @{OWNER_LOGIN} issues are auto-dispatched.")
-    return False
-
 def build_wee_dev_prompt(item: dict) -> str:
     return (f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
         f"Issue body:\n{item['body']}\n\n"
-        "## Task:\n"
-        "1. Read the full issue on GitHub to understand all requirements:\n"
-        f"   gh issue view {item['number']} --repo {REPO} --comments\n\n"
-        "2. Implement on dev host (192.168.1.100): ssh root@192.168.1.100\n"
-        "   Path: /opt/n8n-copilot-shim-dev/\n\n"
-        "3. Work directly on dev branch (no feature branches):\n"
-        "   git checkout dev && git pull origin dev\n"
-        "   (make changes, test locally)\n"
-        "   git commit -m 'message'\n"
-        "   git push origin dev\n\n"
-        "4. Leave clear notes on GitHub as you work:\n"
-        "   - Implementation decisions\n"
-        "   - Test results\n"
-        "   - Final commit SHA\n"
-        "   ⚠️ NEVER put secrets, API keys, or credentials in GitHub\n\n"
-        "5. When complete:\n"
-        "   - Remove the 'wee-dev' label\n"
-        "   - Close the issue\n"
-        "   - Leave final comment with summary\n\n"
-        "6. Work on only ONE issue at a time.")
+        "## Your task:\n"
+        f"1. Read: gh issue view {item['number']} --repo {REPO} --comments\n"
+        "2. Develop on dev host (192.168.1.100): /opt/n8n-copilot-shim-dev/\n"
+        "3. Work on dev branch (git checkout dev && git pull)\n"
+        "4. Test your changes locally\n"
+        "5. Commit & push to dev branch\n"
+        "6. Leave notes on GitHub (commit SHA, test results)\n"
+        "7. Remove 'wee-dev' label when done\n"
+        "8. Close the issue\n\n"
+        "⚠️ Never put secrets/keys in GitHub. Work on ONE issue at a time.")
 
 def dispatch_wee_dev(item: dict, state: dict) -> None:
     cfg = get_agent_dispatch_config("wee-dev")
@@ -207,7 +179,7 @@ def dispatch_wee_dev(item: dict, state: dict) -> None:
     task_id = dispatch_via_api("wee-dev", prompt, cfg)
     log(f"Dispatched wee-dev task_id={task_id} for #{item['number']}: {item['title']}")
     set_issue_field(state, item["number"], "wee_dev_task_id", task_id)
-    set_issue_field(state, item["number"], "wee_dev_dispatched_at", now_iso())
+    set_issue_field(state, item["number"], "wee_dev_dispatched_at", datetime.now(timezone.utc).isoformat())
 
 def run_pipeline() -> None:
     state = load_state()
@@ -215,22 +187,22 @@ def run_pipeline() -> None:
     items = get_open_wee_dev_issues()
     log(f"Found {len(items)} open wee-dev issue(s)")
     in_progress = [i for i in items if get_issue_status(i) == "in-progress"]
-    needs_approval = [i for i in items if get_issue_status(i) == "needs-approval"]
     queued = [i for i in items if get_issue_status(i) == "queued"]
     log(f"  in-progress: {', '.join(f'#{i['number']}' for i in in_progress) or '(none)'}")
-    log(f"  needs-approval: {', '.join(f'#{i['number']}' for i in needs_approval) or '(none)'}")
     log(f"  queued: {', '.join(f'#{i['number']}' for i in queued) or '(none)'}")
+    
+    # Check in-progress for stall
     if in_progress:
         item = in_progress[0]
         issue_state = get_issue_state(state, item["number"])
         task_id = issue_state.get("wee_dev_task_id")
         if task_id and is_task_running(task_id):
-            log(f"wee-dev still running task={task_id} for #{item['number']} — waiting")
+            log(f"wee-dev running task={task_id} for #{item['number']} — waiting")
             return
         dispatched_at = issue_state.get("wee_dev_dispatched_at")
-        mins = minutes_since(dispatched_at) if dispatched_at else None
+        mins = minutes_since(dispatched_at)
         if mins is not None and mins < STALL_TIMEOUT_MINUTES:
-            log(f"wee-dev task for #{item['number']} ended within {mins:.1f}min (< {STALL_TIMEOUT_MINUTES}min stall timeout) — may still be processing")
+            log(f"wee-dev task for #{item['number']} ended within {mins:.1f}min — may still be processing")
             return
         log(f"Re-dispatching stalled #{item['number']} (no running task after {mins:.1f}min)")
         add_label(item["number"], "wee-dev:in-progress")
@@ -240,23 +212,24 @@ def run_pipeline() -> None:
             log(f"ERROR: Failed to re-dispatch: {exc}")
             remove_label(item["number"], "wee-dev:in-progress")
         return
+    
+    # Dispatch next queued
     if queued:
-        for candidate in queued:
-            if not passes_safety_gate(candidate):
-                continue
-            log(f"Dispatching wee-dev for #{candidate['number']}: {candidate['title']}")
-            add_label(candidate["number"], "wee-dev:in-progress")
-            try:
-                dispatch_wee_dev(candidate, state)
-            except Exception as exc:
-                log(f"ERROR: Failed to dispatch: {exc}")
-                remove_label(candidate["number"], "wee-dev:in-progress")
-            return
+        item = queued[0]
+        log(f"Dispatching wee-dev for #{item['number']}: {item['title']}")
+        add_label(item["number"], "wee-dev:in-progress")
+        try:
+            dispatch_wee_dev(item, state)
+        except Exception as exc:
+            log(f"ERROR: Failed to dispatch: {exc}")
+            remove_label(item["number"], "wee-dev:in-progress")
+        return
+    
     log("No wee-dev work to do.")
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Wee-Dev autonomous dispatcher")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate without dispatching")
+    parser = argparse.ArgumentParser(description="Wee-Dev dispatcher")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     global DRY_RUN
     DRY_RUN = args.dry_run
