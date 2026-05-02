@@ -778,6 +778,7 @@ Wee CLI Interactive Mode — Commands:
   /model list         List all available models
   /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
   /tokens             Show token usage
+  /context            Show context window usage and compaction trigger point
   /compact [PCT]      Summarize old context to target percent of window (default 50)
   /system PROMPT      Set system prompt
   /config             Show current configuration
@@ -920,6 +921,35 @@ def run_interactive(
                 _print_info(token_tracker.summary())
                 continue
 
+            
+            elif cmd == "/context":
+                # Display context window usage and compaction trigger point
+                if not token_tracker.context_window:
+                    _print_error("Context window size unknown. Run a query first.")
+                    continue
+                
+                trigger_pct = COMPACT_TRIGGER_FRACTION * 100
+                current_pct = token_tracker.percent_used()
+                trigger_tokens = int(token_tracker.context_window * COMPACT_TRIGGER_FRACTION)
+                remaining_tokens = token_tracker.context_window - token_tracker.last_prompt_tokens
+                tokens_to_trigger = trigger_tokens - token_tracker.last_prompt_tokens
+                
+                lines = [
+                    f"Context Window: {token_tracker.last_prompt_tokens:,} / {token_tracker.context_window:,} tokens",
+                    f"Usage: {current_pct:.1f}%",
+                    f"Compaction Trigger: {trigger_pct:.0f}% ({trigger_tokens:,} tokens)",
+                ]
+                
+                if tokens_to_trigger > 0:
+                    lines.append(f"Tokens until trigger: {tokens_to_trigger:,} ({(tokens_to_trigger / token_tracker.context_window * 100):.1f}%)")
+                else:
+                    lines.append(f"⚠ TRIGGER POINT REACHED — consider running /compact")
+                
+                lines.append(f"Tokens remaining: {remaining_tokens:,}")
+                
+                _print_info("\n".join(lines))
+                continue
+                
             elif cmd == "/compact":
                 if arg:
                     try:
