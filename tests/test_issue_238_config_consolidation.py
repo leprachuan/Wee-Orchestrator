@@ -206,9 +206,7 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
         This is the core of issue #238: the old overlay path was removed so
         config/agents.json can never be silently consulted.
         """
-        script_path = Path(
-            "/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py"
-        )
+        script_path = Path("/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py")
         self.assertTrue(script_path.exists(), "dispatch script missing")
         content = script_path.read_text()
         self.assertNotIn(
@@ -223,9 +221,7 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
 
         Checks actual AST to distinguish docstring mentions from live code.
         """
-        script_path = Path(
-            "/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py"
-        )
+        script_path = Path("/opt/n8n-copilot-shim-dev/scripts/dispatch_pipeline.py")
         content = script_path.read_text()
         try:
             tree = ast.parse(content)
