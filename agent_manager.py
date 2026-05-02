@@ -3676,7 +3676,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         "Wee Native (Ollama)": [
             ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
             ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
-            ("ollama/qwen3.5-64k:latest", "Ollama Qwen 3.5 64K (local)", ["qwen3.5-64k", "qwen3.5"]),
+            (
+                "ollama/qwen3.5-64k:latest",
+                "Ollama Qwen 3.5 64K (local)",
+                ["qwen3.5-64k", "qwen3.5"],
+            ),
             (
                 "ollama/granite3.3-tuned",
                 "Ollama Granite 3.3 Tuned (local)",
@@ -4056,7 +4060,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                 if ollama_models:
                     return {"Ollama": ollama_models}
         except Exception as e:
-            print(f"[Warning] Failed to read ollama models from manifest: {e}", file=sys.stderr)
+            print(
+                f"[Warning] Failed to read ollama models from manifest: {e}",
+                file=sys.stderr,
+            )
         return {}
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
@@ -8739,7 +8746,9 @@ User Request:
                 if compacted_messages != messages:
                     messages = compacted_messages
                     auto_compacted = True
-                    compacted_tokens = self._wee_estimate_tokens(messages, resolved_model)
+                    compacted_tokens = self._wee_estimate_tokens(
+                        messages, resolved_model
+                    )
                     token_tracker.current_context_tokens = compacted_tokens
                     token_tracker.last_prompt_tokens = compacted_tokens
 
@@ -8961,9 +8970,7 @@ User Request:
         tracker.session_total = int(usage.get("session_total", 0) or 0)
         tracker.last_prompt_tokens = int(usage.get("last_prompt_tokens", 0) or 0)
         tracker.current_context_tokens = int(
-            usage.get("current_context_tokens", 0)
-            or tracker.last_prompt_tokens
-            or 0
+            usage.get("current_context_tokens", 0) or tracker.last_prompt_tokens or 0
         )
         tracker.context_window = int(usage.get("context_window", context_window) or 0)
         return tracker
@@ -9030,9 +9037,7 @@ User Request:
         if last_usage:
             meta["tokens"] = int(last_usage.get("total_tokens", 0) or 0)
             meta["prompt_tokens"] = int(last_usage.get("prompt_tokens", 0) or 0)
-            meta["completion_tokens"] = int(
-                last_usage.get("completion_tokens", 0) or 0
-            )
+            meta["completion_tokens"] = int(last_usage.get("completion_tokens", 0) or 0)
 
         api_base_lower = (api_base or "").lower()
         if "11434" in api_base_lower or api_base_lower.startswith(
@@ -12610,7 +12615,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     fallback_runtime=fallback_runtime,
                     fallback_model=fallback_model,
                 )
-            
+
             # Build full context prompt with agent/runtime/channel metadata
             # Pass user_identity explicitly so the system prompt curl command
             # gets the correct X-User-Identity (avoids telegram_unknown race).
