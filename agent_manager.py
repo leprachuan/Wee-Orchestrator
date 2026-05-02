@@ -3074,6 +3074,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 bg_prompt_parts.append(word)
         bg_prompt = " ".join(bg_prompt_parts)
+        # Resolve runtime, model, permission_mode from dispatch_config
+        agent_config = self.AGENTS.get(bg_agent, {})
+        dispatch_config = agent_config.get("dispatch_config", {})
+        if not any(word.startswith("runtime=") for word in sub.split()):
+            bg_runtime = dispatch_config.get("runtime", bg_runtime)
+        if not any(word.startswith("model=") for word in sub.split()):
+            bg_model = dispatch_config.get("model", bg_model)
+        bg_permission_mode = dispatch_config.get("permission_mode", "restricted")
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -3110,6 +3118,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             model=bg_model,
             prompt=bg_prompt,
             origin_session_id=n8n_session_id,
+            permission_mode=bg_permission_mode,
         )
         # Launch in background thread
         import concurrent.futures as _cf
