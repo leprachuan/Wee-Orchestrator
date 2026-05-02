@@ -29,10 +29,10 @@ from wee_cli import (
     run_single_shot,
 )
 
-
 # ---------------------------------------------------------------------------
 # ThinkingBuffer unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestThinkingBuffer(unittest.TestCase):
     """Unit tests for the ThinkingBuffer streaming state machine."""
@@ -140,6 +140,7 @@ class TestThinkingBuffer(unittest.TestCase):
 # _strip_thinking utility
 # ---------------------------------------------------------------------------
 
+
 class TestStripThinking(unittest.TestCase):
     """Tests for _strip_thinking post-processing helper."""
 
@@ -174,6 +175,7 @@ class TestStripThinking(unittest.TestCase):
 # build_parser: --show-thinking flag
 # ---------------------------------------------------------------------------
 
+
 class TestBuildParserShowThinking(unittest.TestCase):
     """Test that --show-thinking flag exists and defaults correctly."""
 
@@ -196,6 +198,7 @@ class TestBuildParserShowThinking(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # chat_stream: show_thinking integration
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_stream(tokens):
     """Build a mock OpenAI streaming response from a list of token strings."""
@@ -296,11 +299,13 @@ class TestChatStreamThinking(unittest.TestCase):
 # agent_manager.strip_thinking_tags: existing behavior unchanged
 # ---------------------------------------------------------------------------
 
+
 class TestAgentManagerStripThinkingTags(unittest.TestCase):
     """Verify that agent_manager's strip_thinking_tags still works as before."""
 
     def setUp(self):
         import agent_manager
+
         self.mgr = agent_manager.SessionManager.__new__(agent_manager.SessionManager)
 
     def test_strips_complete_block(self):
@@ -320,9 +325,7 @@ class TestAgentManagerStripThinkingTags(unittest.TestCase):
         self.assertEqual(result, text)
 
     def test_strips_multiline(self):
-        result = self.mgr.strip_thinking_tags(
-            "Start<think>\nline1\nline2\n</think>End"
-        )
+        result = self.mgr.strip_thinking_tags("Start<think>\nline1\nline2\n</think>End")
         self.assertEqual(result, "Start" + "End".strip())
 
 

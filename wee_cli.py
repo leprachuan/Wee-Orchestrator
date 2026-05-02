@@ -456,12 +456,10 @@ class ThinkingBuffer:
                     self._current_thinking.append(thinking_text)
                     if self.show:
                         output_parts.append(thinking_text + self._CLOSE)
-                    self.thinking_blocks.append(
-                        "".join(self._current_thinking).strip()
-                    )
+                    self.thinking_blocks.append("".join(self._current_thinking).strip())
                     self._current_thinking = []
                     self.in_thinking = False
-                    self._buf = self._buf[pos + len(self._CLOSE):]
+                    self._buf = self._buf[pos + len(self._CLOSE) :]
             else:
                 pos = self._buf.find(self._OPEN)
                 if pos == -1:
@@ -475,12 +473,15 @@ class ThinkingBuffer:
                     if self.show:
                         output_parts.append(self._OPEN)
                     self.in_thinking = True
-                    self._buf = self._buf[pos + len(self._OPEN):]
+                    self._buf = self._buf[pos + len(self._OPEN) :]
 
         return "".join(output_parts)
 
     def flush(self) -> str:
-        """Flush remaining buffer at stream end. Returns any pending non-thinking text."""
+        """Flush remaining buffer at stream end.
+
+        Returns any pending non-thinking text.
+        """
         remaining = self._buf
         self._buf = ""
         if self.in_thinking:
@@ -488,7 +489,7 @@ class ThinkingBuffer:
             self.thinking_blocks.append("".join(self._current_thinking).strip())
             self._current_thinking = []
             self.in_thinking = False
-            return self._OPEN + remaining if self.show else ""
+            return remaining if self.show else ""
         return remaining
 
 
