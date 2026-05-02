@@ -1,7 +1,7 @@
 """Tests for Issue #119: Wire up OpenRouter in wee runtime UI.
 
 Covers:
-  - WEE_MODELS structure and OPENROUTER_POPULAR_MODELS constant
+  - WEE_MODELS structure
   - fetch_wee_models() with mocked API responses, cache, fallback
   - _get_model_description() for wee models
   - get_model_from_name() with wee aliases
