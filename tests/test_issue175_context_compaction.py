@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agent_manager import SessionManager
+from wee_cli import TokenTracker
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -306,6 +307,29 @@ class TestWeeMaybeCompact(unittest.TestCase):
             )
         client.chat.completions.create.assert_not_called()
 
+    def test_saved_api_context_tokens_can_trigger_compaction(self):
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "current question"},
+        ]
+        client = _make_client("Summary from actual usage.")
+        tracker = TokenTracker(context_window=100)
+        tracker.current_context_tokens = 90
+        with patch.object(self.mgr, "_wee_save_transcript", return_value="/tmp/fake.json"):
+            result = self.mgr._wee_maybe_compact(
+                client,
+                "sess-api-usage",
+                msgs,
+                "gemma4:e4b",
+                "sys",
+                token_tracker=tracker,
+                context_window=100,
+            )
+        client.chat.completions.create.assert_called_once()
+        self.assertNotEqual(result, msgs)
+
 
 # ---------------------------------------------------------------------------
 # _wee_compact_context output structure
@@ -483,6 +507,76 @@ class TestRunWeeNativeCompactionIntegration(unittest.TestCase):
             _run_wee_native_test(self.mgr, self.session_id)
             mock_compact.assert_called_once()
 
+    @patch("openai.OpenAI")
+    def test_usage_chunk_without_choices_updates_webui_runtime_state(self, MockOpenAI):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.mgr.session_map_file = Path(tmpdir) / "session_map.json"
+            persisted = {
+                self.session_id: {
+                    "agent": "orchestrator",
+                    "runtime": "wee",
+                    "model": "ollama/qwen3.5-64k:latest",
+                    "channel": "webui",
+                    "wee_messages": [],
+                }
+            }
+            self.mgr.session_map_file.write_text(json.dumps(persisted))
+
+            mock_instance = MagicMock()
+            MockOpenAI.return_value = mock_instance
+
+            content_chunk = MagicMock()
+            content_chunk.choices = [MagicMock()]
+            content_chunk.choices[0].delta.content = "response text"
+            content_chunk.choices[0].delta.tool_calls = None
+            content_chunk.usage = None
+
+            usage_obj = MagicMock()
+            usage_obj.prompt_tokens = 2400
+            usage_obj.completion_tokens = 120
+            usage_obj.total_tokens = 2520
+
+            usage_chunk = MagicMock()
+            usage_chunk.choices = []
+            usage_chunk.usage = usage_obj
+
+            mock_instance.chat.completions.create.return_value = iter(
+                [content_chunk, usage_chunk]
+            )
+
+            with patch.object(
+                self.mgr, "build_agent_context_prompt", return_value="You are helpful."
+            ):
+                result = self.mgr.run_wee_native(
+                    prompt="test",
+                    model="ollama/qwen3.5-64k:latest",
+                    agent="orchestrator",
+                    session_id=None,
+                    resume=False,
+                    n8n_session_id=self.session_id,
+                    timeout=30,
+                    render_type="text",
+                )
+
+            self.assertEqual(result, "response text")
+            create_kwargs = mock_instance.chat.completions.create.call_args.kwargs
+            self.assertEqual(
+                create_kwargs.get("stream_options"), {"include_usage": True}
+            )
+
+            saved = json.loads(self.mgr.session_map_file.read_text())[self.session_id]
+            usage_state = saved.get("wee_context_usage")
+            self.assertIsNotNone(usage_state)
+            self.assertEqual(usage_state["current_context_tokens"], 2400)
+            self.assertEqual(usage_state["context_window"], 65536)
+            self.assertEqual(usage_state["source"], "api_prompt_tokens")
+
+            wee_meta = saved.get("wee_last_meta")
+            self.assertIsNotNone(wee_meta)
+            self.assertEqual(wee_meta["prompt_tokens"], 2400)
+            self.assertEqual(wee_meta["completion_tokens"], 120)
+            self.assertEqual(wee_meta["tokens"], 2520)
+
 
 class TestIssue175WEESaveMessagesPersistedOnly(unittest.TestCase):
     """Regression: _wee_save_messages must save even when the session exists
@@ -626,7 +720,7 @@ class TestIssue175FallbackStreamOrdering(unittest.TestCase):
                     with patch.object(
                         self.mgr,
                         "_wee_maybe_compact",
-                        side_effect=lambda cl, sid, msgs, mdl, ctx: msgs,
+                        side_effect=lambda cl, sid, msgs, mdl, ctx, **kwargs: msgs,
                     ):
                         result = _run_wee_native_test(
                             self.mgr, self.session_id, model="openrouter/free-a"

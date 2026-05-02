@@ -85,6 +85,29 @@ def minutes_since(iso_str: str) -> float | None:
     return (datetime.now(timezone.utc) - t).total_seconds() / 60
 
 
+# Alias retained for test imports that used the old dispatch_wee_dev_work_queue name.
+parse_iso_datetime = parse_iso
+
+# States where stall-timeout detection applies (waiting on an external agent).
+_STALL_STATES = {"qa-review", "in-progress", "qa-failed"}
+
+
+def check_stall_timeout(lock: dict | None) -> bool:
+    """Return True when a lock entry has been in a stall-eligible state longer
+    than STALL_TIMEOUT_MINUTES, indicating the responsible agent is stuck."""
+    if lock is None:
+        return False
+    if lock.get("state") not in _STALL_STATES:
+        return False
+    created_at = lock.get("created_at")
+    if not created_at:
+        return False
+    mins = minutes_since(created_at)
+    if mins is None:
+        return False
+    return mins >= STALL_TIMEOUT_MINUTES
+
+
 # ---------------------------------------------------------------------------
 # GitHub helpers
 # ---------------------------------------------------------------------------
@@ -101,105 +124,79 @@ def gh(*args: str, check: bool = True) -> str:
 
 
 def ensure_labels() -> None:
-    existing = {lbl["name"] for lbl in json.loads(
-        gh("label", "list", "--repo", REPO, "--limit", "200", "--json", "name")
-    )}
+    existing = {
+        lbl["name"]
+        for lbl in json.loads(
+            gh("label", "list", "--repo", REPO, "--limit", "200", "--json", "name")
+        )
+    }
     for name, colour in REQUIRED_LABELS.items():
         if name not in existing:
             if DRY_RUN:
                 log(f"[dry-run] Would create label {name!r}")
                 continue
-            gh("label", "create", name, "--repo", REPO, "--color", colour,
-               "--description", f"wee pipeline: {name}", "--force")
+            gh(
+                "label",
+                "create",
+                name,
+                "--repo",
+                REPO,
+                "--color",
+                colour,
+                "--description",
+                f"wee pipeline: {name}",
+                "--force",
+            )
             log(f"Created label {name!r}")
-
-
-def fetch_issue_comments(issue_number: int) -> str:
-    """Fetch all comments for an issue and format them."""
-    try:
-        raw = gh(
-            "issue", "view", str(issue_number), "--repo", REPO,
-            "--json", "comments",
-        )
-        data = json.loads(raw)
-        comments = data.get("comments", [])
-        if not comments:
-            return ""
-        
-        formatted = []
-        for comment in comments:
-            author = comment.get("author", {}).get("login", "unknown")
-            body = comment.get("body", "")
-            formatted.append(f"**@{author}:**\n{body}")
-        return "\n\n---\n\n".join(formatted)
-    except Exception as e:
-        log(f"WARNING: Failed to fetch comments for #{issue_number}: {e}")
-        return ""
 
 
 def fetch_issues() -> list[dict]:
     """Fetch all open issues labelled wee-dev, sorted oldest first."""
     raw = gh(
-        "issue", "list", "--repo", REPO, "--label", "wee-dev",
-        "--state", "open", "--limit", "100",
-        "--json", "number,title,labels,body,author,createdAt",
+        "issue",
+        "list",
+        "--repo",
+        REPO,
+        "--label",
+        "wee-dev",
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,labels,body,author,createdAt",
     )
     issues = json.loads(raw)
     items = []
     for issue in issues:
         label_names = {lbl["name"] for lbl in issue.get("labels", [])}
-        # Clean up stale conflicting labels (e.g., both in-progress + qa-review)
-        _cleanup_stale_labels(issue["number"], label_names)
         status = _resolve_status(label_names)
-        items.append({
-            "number": issue["number"],
-            "id": f"#{issue['number']}",
-            "title": issue["title"],
-            "labels": label_names,
-            "status": status,
-            "body": (issue.get("body") or "")[:2000],
-            "author": (issue.get("author") or {}).get("login", ""),
-        })
+        items.append(
+            {
+                "number": issue["number"],
+                "id": f"#{issue['number']}",
+                "title": issue["title"],
+                "labels": label_names,
+                "status": status,
+                "body": (issue.get("body") or "")[:2000],
+                "author": (issue.get("author") or {}).get("login", ""),
+            }
+        )
     items.sort(key=lambda x: x["number"])
     return items
 
 
 def _resolve_status(labels: set[str]) -> str:
-    # Check in order of advancement — later pipeline stages win over earlier ones
-    # so that a task with both in-progress + qa-review is treated as qa-review.
     for label, status in [
-        ("wee-dev:approved", "approved"),
+        ("wee-dev:in-progress", "in-progress"),
         ("wee-dev:qa-review", "qa-review"),
         ("wee-dev:qa-failed", "qa-failed"),
-        ("wee-dev:in-progress", "in-progress"),
+        ("wee-dev:approved", "approved"),
         ("wee-dev:queued", "queued"),
     ]:
         if label in labels:
             return status
     return "queued"
-
-
-def _cleanup_stale_labels(issue: int, labels: set[str]) -> None:
-    """Remove stale state labels when an issue has conflicting states.
-    
-    This handles race conditions where wee-dev/wee-qa add a new state label
-    but forget to remove the old one (e.g., both in-progress + qa-review).
-    The rule: keep only the most advanced state label, remove earlier ones.
-    """
-    state_labels = [
-        "wee-dev:approved",
-        "wee-dev:qa-review",
-        "wee-dev:qa-failed",
-        "wee-dev:in-progress",
-        "wee-dev:queued",
-    ]
-    found_labels = [l for l in state_labels if l in labels]
-    
-    # If more than one state label exists, keep the first (most advanced) and remove others
-    if len(found_labels) > 1:
-        for stale_label in found_labels[1:]:
-            log(f"Cleaning up stale label {stale_label!r} from #{issue} (keeping {found_labels[0]!r})")
-            remove_label(issue, stale_label)
 
 
 def add_label(issue: int, label: str) -> None:
@@ -213,7 +210,16 @@ def remove_label(issue: int, label: str) -> None:
     if DRY_RUN:
         log(f"[dry-run] remove label {label!r} from #{issue}")
         return
-    gh("issue", "edit", str(issue), "--repo", REPO, "--remove-label", label, check=False)
+    gh(
+        "issue",
+        "edit",
+        str(issue),
+        "--repo",
+        REPO,
+        "--remove-label",
+        label,
+        check=False,
+    )
 
 
 def add_comment(issue: int, body: str) -> None:
@@ -285,7 +291,9 @@ def _load_api_key() -> str:
 
 def get_agent_dispatch_config(agent_name: str) -> dict:
     config = json.loads(AGENTS_CONFIG_PATH.read_text())
-    agent = next((a for a in config.get("agents", []) if a.get("name") == agent_name), None)
+    agent = next(
+        (a for a in config.get("agents", []) if a.get("name") == agent_name), None
+    )
     if agent is None:
         raise RuntimeError(f"Agent {agent_name!r} not found in agents.json")
 
@@ -310,7 +318,7 @@ def get_agent_dispatch_config(agent_name: str) -> dict:
         yolo = agent_name in ("wee-dev", "wee-qa")
     return {
         "runtime": agent.get("primary_runtime", "copilot"),
-        "model": agent.get("primary_model") or None,
+        "model": agent.get("primary_model", "auto"),
         "fallback_runtime": agent.get("fallback_runtime"),
         "fallback_model": agent.get("fallback_model"),
         "permission_mode": permission_mode,
@@ -325,6 +333,15 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
     import hmac
 
     api_key = _load_api_key()
+    # "auto" is a dispatcher placeholder meaning "no explicit model" — omit the
+    # field so the API resolves the runtime's default instead of rejecting it.
+    raw_model = cfg.get("model") or ""
+    resolved_model = None if raw_model.lower() in ("auto", "") else raw_model
+    raw_fallback_model = cfg.get("fallback_model") or ""
+    resolved_fallback_model = (
+        None if raw_fallback_model.lower() in ("auto", "") else raw_fallback_model
+    )
+
     body = {
         "prompt": prompt,
         "agent": agent,
@@ -332,16 +349,16 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
         "timeout": cfg.get("timeout", 3600),
         "notify": False,
     }
-    if cfg.get("model"):
-        body["model"] = cfg["model"]
+    if resolved_model:
+        body["model"] = resolved_model
     if cfg.get("permission_mode"):
         body["permission_mode"] = cfg["permission_mode"]
     if cfg.get("yolo"):
         body["yolo"] = cfg["yolo"]
     if cfg.get("fallback_runtime"):
         body["fallback_runtime"] = cfg["fallback_runtime"]
-    if cfg.get("fallback_model"):
-        body["fallback_model"] = cfg["fallback_model"]
+    if resolved_fallback_model:
+        body["fallback_model"] = resolved_fallback_model
 
     payload_json = json.dumps(body, sort_keys=True)
     signature = hmac.new(
@@ -403,9 +420,11 @@ def passes_safety_gate(item: dict) -> bool:
     log(f"  {item['id']} filed by {item['author']!r} — needs approval")
     if "wee-dev:needs-approval" not in item["labels"]:
         add_label(item["number"], "wee-dev:needs-approval")
-        add_comment(item["number"],
-                    f"⏳ Awaiting owner approval before wee-dev picks this up. "
-                    f"Filed by @{item['author']}; only @{OWNER_LOGIN} issues are auto-dispatched.")
+        add_comment(
+            item["number"],
+            f"⏳ Awaiting owner approval before wee-dev picks this up. "
+            f"Filed by @{item['author']}; only @{OWNER_LOGIN} issues are auto-dispatched.",
+        )
     return False
 
 
@@ -417,18 +436,13 @@ def passes_safety_gate(item: dict) -> bool:
 def build_wee_dev_prompt(item: dict) -> str:
     return (
         f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
-        f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
-        "## Task:\n"
-        "1. Read the issue on GitHub to understand all requirements and context.\n"
-        "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
-        "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
-        "4. Leave clear notes on this GitHub issue as you work.\n"
-        "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
-        "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
-        "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
-        "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
-        "7. Do not work on more than one issue at a time."
+        f"Issue body:\n{item['body']}\n\n"
+        "Read the full issue on GitHub for complete details. Implement the fix/feature "
+        "on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/. "
+        "Follow /opt/wee-dev/AGENTS.md for all git workflow rules. "
+        "When implementation is complete and tests pass, add the label "
+        "'wee-dev:qa-review' to the issue — the dispatcher will pick it up for wee-qa. "
+        "Do not dispatch wee-qa yourself. Do not work on more than this one issue."
     )
 
 
@@ -437,7 +451,9 @@ def dispatch_wee_dev(item: dict, state: dict) -> None:
     prompt = build_wee_dev_prompt(item)
 
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})")
+        log(
+            f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})"
+        )
         return
 
     task_id = dispatch_via_api("wee-dev", prompt, cfg)
@@ -454,24 +470,16 @@ def dispatch_wee_dev(item: dict, state: dict) -> None:
 def build_wee_qa_prompt(item: dict) -> str:
     return (
         f"QA review for GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Read the full issue (body + all comments) directly from GitHub before starting:\n"
-        f"  gh issue view {item['number']} --repo {REPO} --comments\n\n"
-        "## Task:\n"
-        "1. Read the issue on GitHub to understand all requirements and what was implemented.\n"
-        "2. The implementation is on dev host 192.168.1.100 in /opt/n8n-copilot-shim-dev/.\n"
-        "3. Run the full test suite, check code quality (flake8/black), verify requirements are met.\n"
-        "4. Leave notes on this GitHub issue as you work.\n"
-        "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
-        "   - Do leave test results, code quality findings, and specific pass/fail details.\n"
-        "5. When QA is complete:\n"
-        "   - If APPROVED:\n"
-        "     a. Merge the PR to dev: gh pr merge <pr_number> --merge --repo {REPO}\n"
-        "     b. Close the issue: gh issue close {item['number']} --repo {REPO}\n"
-        "     c. Add comment: 'VERDICT: APPROVE ✅' + test count + summary.\n"
-        "   - If REJECTED: Add label 'wee-dev:qa-failed', remove 'wee-dev:qa-review', post comment: 'VERDICT: REJECT' + specific failures.\n"
-        "6. wee-qa is responsible for merging approved PRs and closing issues. Do not add 'wee-dev:approved' label."
+        f"Issue body:\n{item['body']}\n\n"
+        "Read the full issue on GitHub. The implementation is on dev host 192.168.1.100 "
+        "in /opt/n8n-copilot-shim-dev/. Run the full test suite, check code quality "
+        "(flake8/black), verify the implementation matches issue requirements. "
+        "When done: if QA passes, add label 'wee-dev:approved' and post a comment "
+        "with 'VERDICT: APPROVE' and the passing test count. "
+        "If QA fails, add label 'wee-dev:qa-failed' and post a comment with "
+        "'VERDICT: REJECT' and specific failure details. "
+        "Remove the 'wee-dev:qa-review' label when you start reviewing."
     )
-
 
 
 def dispatch_wee_qa(item: dict, state: dict) -> None:
@@ -479,7 +487,9 @@ def dispatch_wee_qa(item: dict, state: dict) -> None:
     prompt = build_wee_qa_prompt(item)
 
     if DRY_RUN:
-        log(f"[dry-run] Would dispatch wee-qa for {item['id']} (runtime={cfg['runtime']})")
+        log(
+            f"[dry-run] Would dispatch wee-qa for {item['id']} (runtime={cfg['runtime']})"
+        )
         return
 
     task_id = dispatch_via_api("wee-qa", prompt, cfg)
@@ -495,87 +505,15 @@ def dispatch_wee_qa(item: dict, state: dict) -> None:
 
 def run_pipeline(items: list[dict], state: dict) -> None:
     # -----------------------------------------------------------------------
-    # Determine what is actively running vs stalled (label stuck after task done)
-    # -----------------------------------------------------------------------
-    
-    stalled_qa = []   # qa-review items whose task completed without transitioning label
-    stalled_dev = []  # in-progress items whose task completed without transitioning label
-    wee_dev_blocked = False  # Set if wee-dev has a running or recent task
-    wee_qa_blocked = False   # Set if wee-qa has a running or recent task
-
-    for item in items:
-        issue_state = get_issue_state(state, item["number"])
-
-        if item["status"] == "in-progress":
-            task_id = issue_state.get("wee_dev_task_id")
-            dispatched_at = issue_state.get("wee_dev_dispatched_at")
-            mins = minutes_since(dispatched_at) if dispatched_at else None
-            if task_id and is_task_running(task_id):
-                log(f"wee-dev running task={task_id} for {item['id']} — blocking wee-dev dispatch")
-                wee_dev_blocked = True
-                continue  # Don't return — allow approved items to still be processed
-            if mins is not None and mins < STALL_TIMEOUT_MINUTES:
-                log(f"wee-dev task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
-                wee_dev_blocked = True  # Block wee-dev dispatch this cycle
-                continue
-            stalled_dev.append(item)
-            log(f"wee-dev task for {item['id']} stalled (completed without label transition)")
-
-        elif item["status"] == "qa-review":
-            task_id = issue_state.get("wee_qa_task_id")
-            dispatched_at = issue_state.get("wee_qa_dispatched_at")
-            mins = minutes_since(dispatched_at) if dispatched_at else None
-            if task_id and is_task_running(task_id):
-                log(f"wee-qa running task={task_id} for {item['id']} — blocking wee-qa dispatch")
-                wee_qa_blocked = True
-                continue
-            if mins is not None and mins < STALL_TIMEOUT_MINUTES:
-                # Stale label edge case: wee-qa may have updated labels just after this
-                # cycle began. Check if the actual label on GitHub has changed (stale cache).
-                # Fetch fresh labels for this issue to detect label transition.
-                fresh_labels = set(get_issue_labels(item["number"]))
-                fresh_status = _resolve_status(fresh_labels)
-                if fresh_status != "qa-review":
-                    # Labels HAVE changed! Process the new status instead.
-                    log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — labels have transitioned from qa-review to {fresh_status} (refreshed)")
-                    item["status"] = fresh_status  # Update item to reflect actual GitHub state
-                    # Fall through to process the new status (don't return early)
-                else:
-                    log(f"wee-qa task for {item['id']} ended {mins:.1f}min ago — waiting for label transition")
-                    wee_qa_blocked = True
-                    continue
-            # If we get here and status is still qa-review, check for stall
-            if item["status"] == "qa-review":
-                stalled_qa.append(item)
-                log(f"wee-qa task for {item['id']} stalled (completed without label transition)")
-
-    # -----------------------------------------------------------------------
-    # Priority 1: Re-dispatch wee-qa for stalled qa-review items
-    # -----------------------------------------------------------------------
-    if stalled_qa:
-        item = stalled_qa[0]
-        log(f"Re-dispatching wee-qa for stalled {item['id']}: {item['title']}")
-        try:
-            dispatch_wee_qa(item, state)
-        except Exception as exc:
-            log(f"ERROR: Failed to re-dispatch wee-qa for {item['id']}: {exc}")
-        return  # Serial: one dispatch per cycle
-
-    # -----------------------------------------------------------------------
-    # wee-dev slot: one task at a time (handles stalled, qa-failed, queued, approved)
+    # wee-dev slot: one in-progress wee-dev task at a time
     # -----------------------------------------------------------------------
     in_progress = [i for i in items if i["status"] == "in-progress"]
     qa_failed = [i for i in items if i["status"] == "qa-failed"]
     queued = [i for i in items if i["status"] == "queued"]
 
-
     wee_dev_dispatched = False
 
-    # Skip all wee-dev dispatch if wee-dev is currently blocked
-    if wee_dev_blocked:
-        log("wee-dev is blocked (running/recent task) — skipping dispatch this cycle")
-    
-    elif in_progress:
+    if in_progress:
         item = in_progress[0]
         issue_state = get_issue_state(state, item["number"])
         task_id = issue_state.get("wee_dev_task_id")
@@ -594,7 +532,9 @@ def run_pipeline(items: list[dict], state: dict) -> None:
                 )
                 wee_dev_dispatched = True
             else:
-                log(f"Re-dispatching wee-dev for stalled {item['id']} (in-progress, no running task)")
+                log(
+                    f"Re-dispatching wee-dev for stalled {item['id']} (in-progress, no running task)"
+                )
                 try:
                     dispatch_wee_dev(item, state)
                     wee_dev_dispatched = True
@@ -605,25 +545,39 @@ def run_pipeline(items: list[dict], state: dict) -> None:
         item = qa_failed[0]
         log(f"QA-failed: re-dispatching wee-dev for {item['id']}")
         current_label = "wee-dev:qa-failed"
-        transition(item["number"], current_label, "wee-dev:in-progress",
-                   f"🔄 wee-dev re-dispatched to address QA feedback ({now_iso()}).")
+        transition(
+            item["number"],
+            current_label,
+            "wee-dev:in-progress",
+            f"🔄 wee-dev re-dispatched to address QA feedback ({now_iso()}).",
+        )
         try:
             dispatch_wee_dev(item, state)
             wee_dev_dispatched = True
         except Exception as exc:
             log(f"ERROR: Failed to dispatch wee-dev for qa-failed: {exc}")
             # Roll back label
-            transition(item["number"], "wee-dev:in-progress", current_label,
-                       "⚠️ Dispatcher failed to re-dispatch wee-dev; reverted to qa-failed.")
+            transition(
+                item["number"],
+                "wee-dev:in-progress",
+                current_label,
+                "⚠️ Dispatcher failed to re-dispatch wee-dev; reverted to qa-failed.",
+            )
 
     elif queued:
         # Pick next queued issue (FIFO, safety gate)
         for candidate in queued:
             if not passes_safety_gate(candidate):
                 continue
-            log(f"Dispatching wee-dev for queued {candidate['id']}: {candidate['title']}")
-            transition(candidate["number"], None, "wee-dev:in-progress",
-                       f"🚀 wee-dev picking up this issue ({now_iso()}).")
+            log(
+                f"Dispatching wee-dev for queued {candidate['id']}: {candidate['title']}"
+            )
+            transition(
+                candidate["number"],
+                None,
+                "wee-dev:in-progress",
+                f"🚀 wee-dev picking up this issue ({now_iso()}).",
+            )
             try:
                 dispatch_wee_dev(candidate, state)
                 wee_dev_dispatched = True
@@ -639,12 +593,8 @@ def run_pipeline(items: list[dict], state: dict) -> None:
         log("No wee-dev work to do.")
 
     # -----------------------------------------------------------------------
-    # wee-qa slot: only runs if wee-dev did NOT dispatch this cycle (serial)
+    # wee-qa slot: can run in parallel with wee-dev (different issue)
     # -----------------------------------------------------------------------
-    if wee_dev_dispatched:
-        log("wee-dev dispatched this cycle — skipping wee-qa (serial enforcement)")
-        return
-
     qa_review = [i for i in items if i["status"] == "qa-review"]
 
     if not qa_review:
@@ -673,7 +623,9 @@ def run_pipeline(items: list[dict], state: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Unified wee-dev/wee-qa pipeline dispatcher")
+    parser = argparse.ArgumentParser(
+        description="Unified wee-dev/wee-qa pipeline dispatcher"
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
