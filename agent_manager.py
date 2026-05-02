@@ -4884,6 +4884,37 @@ You can mention an agent in your prompt and it will auto-delegate:
             return "elevated"
         return "restricted"
 
+    def build_runtime_permission_env(
+        self, runtime: str, permission_mode: str
+    ) -> dict:
+        """Build runtime-specific environment variables for permission modes.
+
+        Maps permission_mode to runtime-specific env vars/flags that need to be
+        passed to subprocess environments. This allows devin, copilot, and other
+        runtimes to inherit the elevated permissions in their child processes.
+
+        Args:
+            runtime: The runtime name (e.g., 'devin', 'copilot', 'claude-code')
+            permission_mode: The permission mode ('elevated', 'restricted', 'sandboxed')
+
+        Returns:
+            A dict of environment variable updates to merge into subprocess env
+        """
+        env_updates = {}
+
+        if permission_mode == "elevated":
+            if runtime == "devin":
+                env_updates["DEVIN_PERMISSION_MODE"] = "dangerous"
+            elif runtime in ("claude-code", "claude-acp"):
+                # Claude Code / ACP equivalent for elevated permissions
+                # (May not have exact equivalent; document if needed)
+                pass
+            elif runtime == "cursor":
+                # Cursor editor's permission handling (if applicable)
+                pass
+
+        return env_updates
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
@@ -6195,6 +6226,7 @@ User Request:
         n8n_session_id: str,
         use_pty: bool = False,
         stdin_text: str = "",
+        permission_mode: str = "restricted",
     ) -> str:
         """Execute a subprocess with PID tracking.
 
@@ -6209,6 +6241,10 @@ User Request:
         When *use_pty* is True and streaming is active, stdout is connected to
         a pseudo-terminal so that runtimes whose binaries buffer stdout (e.g.
         the Rust-based Devin CLI) flush output incrementally.
+
+        Args:
+            permission_mode: Permission mode for the subprocess ('elevated', 'restricted', 'sandboxed')
+                           This determines which runtime-specific permission env vars are set.
         """
         import threading as _threading
 
@@ -6248,6 +6284,12 @@ User Request:
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
             _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
+            
+            # Apply runtime-specific permission mode environment variables
+            # This allows subprocesses (e.g., devin) to inherit elevated permissions
+            perm_env = self.build_runtime_permission_env(runtime, permission_mode)
+            _sub_env.update(perm_env)
+            
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -7096,6 +7138,7 @@ User Request:
             prompt,
             n8n_session_id,
             stdin_text=context_prompt,
+            permission_mode=mode,
         )
         result = self.strip_metadata(output, "copilot")
 
@@ -7169,6 +7212,7 @@ User Request:
                 _recovery_preamble,
                 n8n_session_id,
                 stdin_text=_recovery_context,
+                permission_mode=mode,
             )
             _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
             if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
@@ -7813,7 +7857,8 @@ User Request:
         cmd.append(context_prompt)
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "opencode", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "opencode", agent, prompt, n8n_session_id,
+            permission_mode=mode,
         )
 
         # Check for session errors
@@ -7909,7 +7954,8 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id,
+            permission_mode=mode,
         )
 
         if "Error: Claude command failed" in output:
@@ -8034,7 +8080,8 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id,
+            permission_mode=mode,
         )
 
         if "Error: Gemini command failed" in output:
@@ -8151,7 +8198,8 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
+            cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id,
+            permission_mode=mode,
         )
 
         if "Error: CODEX command failed" in output:
@@ -8279,6 +8327,7 @@ User Request:
             prompt,
             n8n_session_id,
             use_pty=True,
+            permission_mode=mode,
         )
 
         # After each run, capture and persist the most recent devin session UUID
@@ -8402,6 +8451,7 @@ User Request:
             prompt,
             n8n_session_id,
             use_pty=True,
+            permission_mode=mode,
         )
 
         # After each run, persist session state for future resumption
