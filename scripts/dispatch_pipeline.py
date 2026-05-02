@@ -118,7 +118,8 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
         body["permission_mode"] = cfg["permission_mode"]
     if cfg.get("yolo"):
         body["yolo"] = cfg["yolo"]
-    if cfg.get("fallback_runtime"):
+    # Only send fallback if it's different from primary runtime
+    if cfg.get("fallback_runtime") and cfg.get("fallback_runtime") != cfg["runtime"]:
         body["fallback_runtime"] = cfg["fallback_runtime"]
     if resolved_fallback_model:
         body["fallback_model"] = resolved_fallback_model
