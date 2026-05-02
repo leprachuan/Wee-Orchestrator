@@ -91,6 +91,18 @@ _CURL_USER_RE = re.compile(
     r"""(-u\s+)(\S+)""",
 )
 
+_ELEVATED_MODE_INSTRUCTIONS = (
+    "\n\n[ELEVATED MODE ENABLED]\n"
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+    "prefix with 'sudo' — no exceptions. This includes:\n"
+    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+    "• Any command that would fail due to insufficient permissions\n"
+    "Sudo is configured without password prompt (NOPASSWD:ALL). "
+    "Never ask for confirmation — execute privileged commands immediately with sudo."
+)
+
 
 def _sanitize_command_for_display(text: str) -> str:
     """Redact sensitive headers and credentials from command strings for UI display.
