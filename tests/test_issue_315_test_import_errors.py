@@ -29,7 +29,7 @@ def test_pytest_collection_succeeds():
 
 
 def test_no_stale_test_references():
-    """Ensure no references to deleted dispatcher stall timeout test exist."""
+    """Ensure no references to deleted dispatcher stall timeout test exist in runtime."""
     result = subprocess.run(
         ["grep", "-r", "test_issue_dispatcher_stall_timeout", "/opt/n8n-copilot-shim-dev"],
         capture_output=True,
@@ -37,12 +37,14 @@ def test_no_stale_test_references():
     )
     # Should find nothing (grep returns 1 when no match found)
     if result.returncode == 0:
-        # Found references - check if they're in pytest cache or other safe locations
+        # Found references - check if they're in safe locations only
         lines = result.stdout.strip().split('\n')
         for line in lines:
-            # Exclude this test file and pytest cache references
-            if ".pytest_cache" not in line and "test_issue_315_test_import_errors.py" not in line:
-                raise AssertionError(f"Found reference to deleted test file: {line}")
+            # Exclude safe locations: .pytest_cache, this test file, .git directory
+            if (".pytest_cache" not in line and 
+                "test_issue_315_test_import_errors.py" not in line and
+                ".git/" not in line):
+                raise AssertionError(f"Found reference to deleted test file in runtime: {line}")
 
 
 def test_dispatch_pipeline_has_required_functions():
