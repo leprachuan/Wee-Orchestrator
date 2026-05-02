@@ -54,9 +54,7 @@ class TestIssue298CodexStreamingJsonl(unittest.TestCase):
 
         output_text = "\n".join(codex_lines) + "\n"
         script = (
-            "import sys; "
-            f"sys.stdout.write({output_text!r}); "
-            "sys.stdout.flush()"
+            "import sys; " f"sys.stdout.write({output_text!r}); " "sys.stdout.flush()"
         )
         cmd = ["python3", "-c", script]
 

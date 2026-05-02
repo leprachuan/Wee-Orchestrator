@@ -398,6 +398,54 @@ Both files used `os.environ.get('OPENROUTER_API_KEY', 'ollama')` — the `'ollam
 
 ---
 
+## [Issue #153] Bug Fix: OpenRouter 401 Authentication Error
+**Status:** ✅ QA Approved (Commit: 1dae171, PR #154)
+
+### Summary
+Fixed silent 401 failures when using OpenRouter models in the wee runtime. Both `agent_manager.py` and `wee_runtime.py` were falling back to the local Ollama API key (`ollama`) as the Bearer token for OpenRouter requests. OpenRouter rejects this with HTTP 401 "Missing Authentication header". The fix adds proper `OPENROUTER_API_KEY` environment variable and keyring resolution, raising a clear error instead of silently using an invalid default.
+
+### Root Cause
+Both files used `os.environ.get('OPENROUTER_API_KEY', 'ollama')` — the `'ollama'` default is not a valid OpenRouter Bearer token.
+
+### Solution
+
+#### Key Resolution Order (after fix)
+1. `OPENROUTER_API_KEY` (explicit kwarg)
+2. `WEE_OPENROUTER_KEY` env var
+3. `OPENROUTER_API_KEY` env var
+4. keyring: `openrouter_api_key`
+5. Raise `ValueError` / `RuntimeError` — never `'ollama'` for OpenRouter
+
+#### agent_manager.py Changes
+- `_resolve_openrouter_key()` helper: env var first, then keyring lookup
+- `run_openrouter_model()`: uses resolver instead of hardcoded default
+- Raises `ValueError` with clear message when no key found
+
+#### wee_runtime.py Changes
+- `_get_openrouter_key()` helper: same env var → keyring resolution chain
+- OpenRouter request builder: uses helper, raises `RuntimeError` on missing key
+- Removed silent `'ollama'` fallback
+
+### Files Changed
+- `agent_manager.py` — `_resolve_openrouter_key()`, updated OpenRouter key resolution
+- `wee_runtime.py` — `_get_openrouter_key()`, updated OpenRouter request builder
+- `tests/test_issue153_openrouter_auth.py` — 16 regression tests
+
+### Tests
+- 16 new regression tests covering:
+  - Env var key resolution in both files
+  - Keyring fallback when env var absent
+  - `ValueError`/`RuntimeError` raised when no key found
+  - `'ollama'` string rejected as OpenRouter key
+  - Key priority ordering
+- Total: 1462 passed, 0 regressions
+
+### Non-Blocking Findings
+- N-1 (NITPICK): Minor punctuation inconsistency in error message
+- N-2 (NITPICK): PR description lists 1445 total pass vs 1462 actual (minor discrepancy, test suite grew between branch and QA)
+
+---
+
 ## [Issue #119] Feature: Wire Up OpenRouter in Wee Runtime UI
 **Status:** ✅ QA Approved (Commit: 168a958, PR #121)
 
@@ -467,6 +515,25 @@ Added a custom robot leprechaun SVG icon for the wee runtime in the WebUI runtim
   - App.js RUNTIME_ICONS map, fallback list, runtimeIconHTML function
   - Backend API includes wee with icon field
 
+
+## [Issue #123, #124] Wee runtime tool calling + live Ollama discovery
+**Status:** Verified (Branch: issue/123-124, PR #127)
+
+### Summary
+Issue #123: Wee runtime tool call agentic loop verified working end-to-end.
+Issue #124: Replaced hardcoded 3-model Ollama list with live discovery from kubuntu.
+
+### Fixes
+- Added _fetch_ollama_models_live() with 60s TTL, queries /api/tags on kubuntu
+- Static descriptions from WEE_MODELS preserved; auto-generated for new models
+- Independent TTL caches: Ollama (60s) and OpenRouter (300s)
+- WEE_OLLAMA_HOST env var for configuring Ollama endpoint
+- /api/v1/models?runtime=wee returns 19 live models (was 3 hardcoded)
+
+### Verification
+- Tool calls: disk usage query via wee+gemma4:e4b returns real df output
+- /api/v1/models?runtime=wee: 19 Ollama models + OpenRouter groups
+- 19 new tests, 1250 total pass, 0 failures
 
 ## [Wee Runtime Fix] End-to-end Ollama + OpenRouter + Tool Calling
 **Status:** ✅ Verified (Branch: issue/wee-runtime-fix, PR #122)
@@ -562,6 +629,105 @@ switcher when using the wee runtime, alongside local Ollama models.
   - fetch_wee_models() reads key from keyring first, falls back to env var
 
 - **Tests** (34 new tests in tests/test_issue119_openrouter.py)
+
+## [Issue #114] Feature: Wee Runtime Model Auto-Discovery
+**Status:** QA Approved (Commit: edd2219)
+
+### Summary
+Adds automatic model discovery for the **wee** native runtime. Polls configured Ollama and OpenAI-compatible hosts at startup and on demand, with TTL caching (60s default), singleton pattern, and graceful offline fallback to last-known models. Model list is surfaced in the /api/v1/models endpoint and runtime dispatch.
+
+### Changes
+- **wee_model_discovery.py** - New module for model auto-discovery
+  - WeeModelDiscovery class with TTL cache (default 60s), thread-safe via threading.Lock
+  - discover_all() - polls all configured hosts, returns group_label to model_ids; offline hosts fall back to last-known cached models (bug-fixed in edd2219)
+  - discover_all_enriched() - always-live poll with metadata (size, modified_at); force param accepted for API compat but has no cache effect (documented in edd2219)
+  - get_discovery() - global singleton accessor
+  - Config via WEE_DISCOVERY_HOSTS env var (JSON array); defaults to Ollama on 192.168.1.101:11434 and LM Studio on 192.168.1.101:11437
+  - Cache invalidation via invalidate_cache()
+- **agent_manager.py** - _fetch_wee_models() uses discovery module; returns flat strings; integrated into get_models_for_runtime('wee') and /api/v1/models endpoint
+
+### Bug Fix (edd2219 - QA Round 2)
+- Offline fallback ordering bug: old_cached was read AFTER self._cache was overwritten with the fresh (failed) result, so fallback always returned an empty list. Fixed by saving old_cached = self._cache.get(cache_key) BEFORE the fresh discovery write.
+
+### Tests
+- **30 tests** in tests/test_issue114_model_discovery.py (1172 total pass)
+  - Init, singleton, env override, Ollama/OpenAI discovery, caching (TTL hit/miss/force/invalidate), offline fallback regression, host status, _fetch_wee_models, tuple handling, thread safety, enriched metadata
+
+### Test Results
+- 1172 total tests pass, 9 skipped, 0 failures
+- All 30 Issue #114 tests pass (100%)
+- No BLOCKERs or MAJORs
+
+
+## [Issue #125] Feature: Wee Runtime — 429 Retry with Exponential Backoff + Free Model Fallback Chain
+**Status:** 🔧 In QA Review (Commit: 8bfd992)
+
+**Problem:** Free OpenRouter models (`:free` suffix) crash immediately on `429 - Provider returned error` instead of retrying or falling back to alternative models.
+
+**3-Layer Solution:**
+1. **Layer 1 — openrouter/free as primary:** Built-in OpenRouter auto-router selects whichever free model is available
+2. **Layer 2 — Retry with exponential backoff:** Up to 3 retries on 429 (2s, 5s, 10s). Only retries on 429, not auth errors or 5xx
+3. **Layer 3 — Manual fallback chain:** If retries exhausted, iterates through ordered model list from wee_free_models.json
+
+**Added:**
+- `_wee_is_free_model()` — detects openrouter/free or :free suffix models
+- `_wee_load_free_config()` — loads wee_free_models.json with hardcoded defaults
+- `_wee_run_attempt()` — single model attempt with 429 retry loop and backoff
+- 429 retry loop in `run_wee_native()` with SSE status messages
+- Fallback chain in `run_wee_native()` — iterates alternative free models on 429 exhaustion
+- `wee_free_models.json` — configurable fallback chain (11 models) + retry settings
+- Full retry/fallback in standalone `wee_runtime.py` — `_call_with_retry()`, `run_with_fallback()`, `is_free_openrouter_model()`, `load_free_model_config()`
+- Cleaned up stale files (agent_manager.py.bak, logs/wee_executor.log) and updated .gitignore
+- 38 regression tests (test_issue125_429_retry.py)
+
+**Tests:** 37 passed, 1 skipped
+
+
+## [Issue #123] Bug Fix: Wee Runtime Tool Calling Returns {no response}
+**Status:** 🔧 In QA Review (Commit: 6c14696)
+
+**Root Cause:** The `dev` branch `run_wee_native()` made a single streaming API call with NO `tools` parameter. When a model requested a tool call (e.g. `bash` for `df -h`), Ollama returned chunks with `content: ""` and a `tool_calls` delta, but the code only checked `delta.content` and ignored tool calls entirely — resulting in empty output shown as `{no response}` in the WebUI.
+
+**6 Bugs Fixed:**
+1. No tool definitions passed to Ollama API (`tools` parameter missing)
+2. No tool call detection in streaming response loop
+3. No tool execution after detecting tool calls
+4. No conversation history persistence (Ollama is stateless)
+5. Wrong Ollama port: 11436 → 11434
+6. Wrong `build_agent_context_prompt` argument order
+
+**Added:**
+- Full agentic tool loop in `run_wee_native()` (max 10 rounds)
+- `_wee_execute_tool()` — bash, python, file_read, file_write
+- `_wee_load_messages()` / `_wee_save_messages()` — conversation history persistence
+- `_wee_augment_system_prompt_with_tools()` — system prompt tool capability declaration
+- Wee case in `session_exists()` for message-based session detection
+- Full tool-calling support in standalone `wee_runtime.py`
+- 41 regression tests (`test_issue123_tool_calling.py`)
+- Updated 3 pre-existing tests for port fix compatibility
+
+**Tests:** 1183 passed, 9 skipped (41 new)
+
+
+## [Issue #126] Feature: Wee Runtime Icon (Robot Leprechaun SVG)
+**Status:** ✅ Implemented (Commits: b772237, d0cb1d1)
+
+### Summary
+Added a custom robot leprechaun SVG icon for the wee runtime in the WebUI runtime switcher. The icon features a tall top hat with wide brim, rounded robot head with circular eye cutouts, and a pill-shaped mouth — all using the evenodd fill rule for clean transparency.
+
+### Changes
+- **webui/dist/assets/runtime-icons/wee.svg** — New 430-byte SVG icon
+  - Tall top hat crown (9x6.5) + wide brim (18x2)
+  - Rounded robot head (14x13, rx=3) with circular eye cutouts (r=2)
+  - Pill-shaped mouth using evenodd path rule
+  - No hardcoded colors — inherits from CSS filters like other runtime icons
+- **webui/dist/app.js** — Already registered in RUNTIME_ICONS map and fallback list (prior commit)
+- **agent_manager.py** — Wee already included in get_available_runtimes() with leaf icon emoji
+- **tests/test_issue126_wee_icon.py** — 10 new regression tests
+  - SVG existence, validity, viewBox, size, no hardcoded fills
+  - App.js RUNTIME_ICONS map, fallback list, runtimeIconHTML function
+  - Backend API includes wee with icon field
+
 
 ## [Issue #100] Feature: GitHub Issues Integration for TODO Endpoints
 **Status:** ✅ QA Approved (Commit: ca21379)

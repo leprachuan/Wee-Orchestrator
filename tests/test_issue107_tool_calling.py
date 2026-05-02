@@ -10,7 +10,6 @@ Tests the full tool-calling agentic loop:
 7. wee_runtime.py standalone tool calling
 """
 
-import json
 import os
 import sys
 import threading

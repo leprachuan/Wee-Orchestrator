@@ -141,7 +141,9 @@ def _clone_messages(messages: list) -> list:
     return json.loads(json.dumps(messages))
 
 
-def _prepare_session_messages(system_prompt: str, existing_messages: list = None) -> tuple:
+def _prepare_session_messages(
+    system_prompt: str, existing_messages: list = None
+) -> tuple:
     """Build or resume a message list and return (messages, effective_system)."""
     effective_system = _build_effective_system_prompt(system_prompt).lstrip()
     if existing_messages:
@@ -397,6 +399,99 @@ def _print_info(msg: str):
         print(msg, file=sys.stderr)
 
 
+def _strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks from text."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
+    return text.strip()
+
+
+class ThinkingBuffer:
+    """State machine that filters <think>...</think> blocks during streaming.
+
+    When show=False (default): thinking content is buffered and discarded;
+    only non-thinking content is returned from feed().
+
+    When show=True: all content is returned unchanged; thinking blocks are
+    additionally recorded in thinking_blocks for inspection.
+    """
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self, show: bool = False):
+        self.show = show
+        self.in_thinking = False
+        self._buf = ""
+        self._current_thinking: list = []
+        self.thinking_blocks: list = []
+
+    @staticmethod
+    def _longest_prefix_suffix(s: str, tag: str) -> int:
+        """Return len of longest suffix of s that is a prefix of tag (< len(tag))."""
+        max_len = min(len(tag) - 1, len(s))
+        for length in range(max_len, 0, -1):
+            if s[-length:] == tag[:length]:
+                return length
+        return 0
+
+    def feed(self, token: str) -> str:
+        """Process a streaming token. Returns text that should be written to stdout."""
+        self._buf += token
+        output_parts: list = []
+
+        while self._buf:
+            if self.in_thinking:
+                pos = self._buf.find(self._CLOSE)
+                if pos == -1:
+                    tail = self._longest_prefix_suffix(self._buf, self._CLOSE)
+                    safe = self._buf[:-tail] if tail else self._buf
+                    self._current_thinking.append(safe)
+                    if self.show:
+                        output_parts.append(safe)
+                    self._buf = self._buf[-tail:] if tail else ""
+                    break
+                else:
+                    thinking_text = self._buf[:pos]
+                    self._current_thinking.append(thinking_text)
+                    if self.show:
+                        output_parts.append(thinking_text + self._CLOSE)
+                    self.thinking_blocks.append(
+                        "".join(self._current_thinking).strip()
+                    )
+                    self._current_thinking = []
+                    self.in_thinking = False
+                    self._buf = self._buf[pos + len(self._CLOSE):]
+            else:
+                pos = self._buf.find(self._OPEN)
+                if pos == -1:
+                    tail = self._longest_prefix_suffix(self._buf, self._OPEN)
+                    safe = self._buf[:-tail] if tail else self._buf
+                    output_parts.append(safe)
+                    self._buf = self._buf[-tail:] if tail else ""
+                    break
+                else:
+                    output_parts.append(self._buf[:pos])
+                    if self.show:
+                        output_parts.append(self._OPEN)
+                    self.in_thinking = True
+                    self._buf = self._buf[pos + len(self._OPEN):]
+
+        return "".join(output_parts)
+
+    def flush(self) -> str:
+        """Flush remaining buffer at stream end. Returns any pending non-thinking text."""
+        remaining = self._buf
+        self._buf = ""
+        if self.in_thinking:
+            self._current_thinking.append(remaining)
+            self.thinking_blocks.append("".join(self._current_thinking).strip())
+            self._current_thinking = []
+            self.in_thinking = False
+            return self._OPEN + remaining if self.show else ""
+        return remaining
+
+
 # ---------------------------------------------------------------------------
 # Token usage tracking
 # ---------------------------------------------------------------------------
@@ -468,6 +563,7 @@ def chat_stream(
     permission: str = "auto",
     stream_output: bool = True,
     tool_results_buffer: dict = None,
+    show_thinking: bool = False,
 ) -> str:
     """Send a chat completion request and stream the response.
 
@@ -479,12 +575,16 @@ def chat_stream(
             treated the same as "auto" (no additional privilege escalation in CLI).
         tool_results_buffer: Optional dict to collect tool results. Will be populated
             with {tool_name: result} entries during tool execution.
-    Returns the full response text. Handles tool-calling loops.
+        show_thinking: When True, stream <think>...</think> blocks to stdout.
+            When False (default), thinking blocks are suppressed from stdout but
+            the full response (including thinking) is still returned for history.
+    Returns the full response text including thinking. Handles tool-calling loops.
     """
     tool_call_counter = 0
     collected_output = []
     if tool_results_buffer is None:
         tool_results_buffer = {}
+    thinking_filter = ThinkingBuffer(show=show_thinking)
 
     for round_num in range(MAX_TOOL_ROUNDS + 1):
         create_kwargs = {
@@ -519,8 +619,10 @@ def chat_stream(
                 token = delta.content
                 round_content.append(token)
                 if stream_output:
-                    sys.stdout.write(token)
-                    sys.stdout.flush()
+                    filtered = thinking_filter.feed(token)
+                    if filtered:
+                        sys.stdout.write(filtered)
+                        sys.stdout.flush()
 
             if getattr(delta, "tool_calls", None):
                 for tc_delta in delta.tool_calls:
@@ -546,6 +648,12 @@ def chat_stream(
             # Track usage from the final chunk
             if hasattr(chunk, "usage") and chunk.usage and token_tracker:
                 token_tracker.update(chunk.usage)
+
+        if stream_output:
+            remaining = thinking_filter.flush()
+            if remaining:
+                sys.stdout.write(remaining)
+                sys.stdout.flush()
 
         content_text = "".join(round_content)
 
@@ -675,6 +783,8 @@ Wee CLI Interactive Mode — Commands:
   /tools              Show tool status
   /tools on|off       Enable/disable tool calling
   /tools-output       Show last tool call outputs
+  /thinking           Show thinking visibility status
+  /thinking on|off    Show or hide model thinking output (default: off)
   /permission MODE    Set permission level (restricted, auto, elevated)
   /agents             List agents. Use call_agent tool to dispatch work
   /skills             List available skills (alias: /discover-skills)
@@ -700,6 +810,7 @@ def run_interactive(
     model_str: str = None,
     session_name: str = None,
     existing_messages: list = None,
+    show_thinking: bool = False,
 ) -> str:
     """Run the interactive REPL.
 
@@ -822,7 +933,9 @@ def run_interactive(
                     _print_error("Compact target must be between 10 and 90.")
                     continue
 
-                current_window = token_tracker.context_window or get_context_window(model)
+                current_window = token_tracker.context_window or get_context_window(
+                    model
+                )
                 token_tracker.context_window = current_window
                 before_tokens = count_message_tokens(messages, model)
                 target_tokens = max(1, int(current_window * (target_pct / 100.0)))
@@ -909,6 +1022,20 @@ def run_interactive(
                 elif arg.lower() in ("off", "disable", "no", "false"):
                     tools_enabled = False
                     _print_info("Tool calling disabled.")
+                else:
+                    _print_error(f"Invalid argument: {arg}. Use 'on' or 'off'.")
+                continue
+
+            elif cmd == "/thinking":
+                if not arg:
+                    status = "on" if show_thinking else "off"
+                    _print_info(f"Model thinking visibility is {status}.")
+                elif arg.lower() in ("on", "show", "yes", "true"):
+                    show_thinking = True
+                    _print_info("Thinking visibility enabled.")
+                elif arg.lower() in ("off", "hide", "no", "false"):
+                    show_thinking = False
+                    _print_info("Thinking visibility disabled.")
                 else:
                     _print_error(f"Invalid argument: {arg}. Use 'on' or 'off'.")
                 continue
@@ -1079,6 +1206,7 @@ def run_interactive(
                 token_tracker=token_tracker,
                 permission=permission,
                 tool_results_buffer=tool_results_buffer,
+                show_thinking=show_thinking,
             )
             messages.append({"role": "assistant", "content": response})
             if session_name:
@@ -1093,8 +1221,8 @@ def run_interactive(
                         timeout,
                         output_format,
                         permission,
-                        ),
-                    )
+                    ),
+                )
             if (
                 token_tracker.context_window
                 and token_tracker.percent_used() >= COMPACT_TRIGGER_FRACTION * 100
@@ -1159,6 +1287,7 @@ def run_single_shot(
     output_format: str,
     permission: str = "auto",
     existing_messages: list = None,
+    show_thinking: bool = False,
 ):
     """Run a single prompt and exit."""
     client = _make_client(api_base, api_key, timeout)
@@ -1180,9 +1309,13 @@ def run_single_shot(
             token_tracker=token_tracker,
             permission=permission,
             stream_output=stream_output,
+            show_thinking=show_thinking,
         )
         messages.append({"role": "assistant", "content": response})
-        _print_markdown(response, output_format)
+        # For non-streaming formats (json/markdown), strip thinking here since
+        # ThinkingBuffer only applies during streaming (text format).
+        display_response = response if show_thinking else _strip_thinking(response)
+        _print_markdown(display_response, output_format)
         return messages
     except KeyboardInterrupt:
         sys.exit(130)
@@ -1308,6 +1441,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="List available models (optional: ollama, openrouter, lmstudio)",
     )
     parser.add_argument(
+        "--show-thinking",
+        action="store_true",
+        default=False,
+        help=(
+            "Show model thinking/reasoning output (<think>...</think> blocks) "
+            "when the runtime emits it. By default, thinking is hidden."
+        ),
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Prompt text (omit for interactive mode or pipe from stdin)",
@@ -1373,7 +1515,9 @@ def main(argv=None):
         session_name = "default"
 
     session_data = {}
-    should_resume_session = bool(args.resume or (session_name == "default" and default_interactive))
+    should_resume_session = bool(
+        args.resume or (session_name == "default" and default_interactive)
+    )
     if session_name and should_resume_session:
         session_data = load_session_data(session_name)
 
@@ -1426,6 +1570,7 @@ def main(argv=None):
             model_str=model_str,
             session_name=session_name,
             existing_messages=existing_messages,
+            show_thinking=args.show_thinking,
         )
         # Persist model choice for next session
         cfg["model"] = updated_model
@@ -1463,6 +1608,7 @@ def main(argv=None):
             model_str=model_str,
             session_name=session_name,
             existing_messages=existing_messages,
+            show_thinking=args.show_thinking,
         )
         # Persist model choice for next session
         cfg["model"] = updated_model
@@ -1481,6 +1627,7 @@ def main(argv=None):
             output_format=output_format,
             permission=permission,
             existing_messages=existing_messages,
+            show_thinking=args.show_thinking,
         )
         if session_name:
             save_session_data(

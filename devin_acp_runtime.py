@@ -16,7 +16,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-
 StreamPush = Callable[[str, Any], None]
 PidCallback = Callable[[int], None]
 
@@ -69,14 +68,17 @@ class DevinACPAdapter:
                     },
                 },
             )
-            self._push("tool_call", {
-                "event": "status",
-                "id": "devin-acp-initialize",
-                "name": "devin-acp",
-                "output": f"Initialized Devin ACP: {self._agent_name(init_result)}",
-                "runtime": "devin-acp",
-                "timestamp": self._ts(),
-            })
+            self._push(
+                "tool_call",
+                {
+                    "event": "status",
+                    "id": "devin-acp-initialize",
+                    "name": "devin-acp",
+                    "output": f"Initialized Devin ACP: {self._agent_name(init_result)}",
+                    "runtime": "devin-acp",
+                    "timestamp": self._ts(),
+                },
+            )
 
             session_params: dict[str, Any] = {"cwd": self.cwd, "mcpServers": []}
             if self.model:
@@ -93,23 +95,29 @@ class DevinACPAdapter:
                     finally:
                         self._loading_existing_session = False
                     self.session_id = self.existing_session_id
-                    self._push("tool_call", {
-                        "event": "status",
-                        "id": "devin-acp-session-load",
-                        "name": "session/load",
-                        "output": f"Loaded Devin ACP session {self.session_id}",
-                        "runtime": "devin-acp",
-                        "timestamp": self._ts(),
-                    })
+                    self._push(
+                        "tool_call",
+                        {
+                            "event": "status",
+                            "id": "devin-acp-session-load",
+                            "name": "session/load",
+                            "output": f"Loaded Devin ACP session {self.session_id}",
+                            "runtime": "devin-acp",
+                            "timestamp": self._ts(),
+                        },
+                    )
                 except Exception as exc:
-                    self._push("tool_call", {
-                        "event": "status",
-                        "id": "devin-acp-session-load-fallback",
-                        "name": "session/load",
-                        "output": f"Could not load Devin ACP session {self.existing_session_id}: {exc}; starting a new session",
-                        "runtime": "devin-acp",
-                        "timestamp": self._ts(),
-                    })
+                    self._push(
+                        "tool_call",
+                        {
+                            "event": "status",
+                            "id": "devin-acp-session-load-fallback",
+                            "name": "session/load",
+                            "output": f"Could not load Devin ACP session {self.existing_session_id}: {exc}; starting a new session",
+                            "runtime": "devin-acp",
+                            "timestamp": self._ts(),
+                        },
+                    )
                     session_params.pop("sessionId", None)
                     session = await self._rpc("session/new", session_params)
                     self.session_id = session.get("sessionId") or session.get("id")
@@ -118,7 +126,9 @@ class DevinACPAdapter:
                 self.session_id = session.get("sessionId") or session.get("id")
 
             if not self.session_id:
-                raise RuntimeError(f"Devin ACP session setup returned no sessionId: {session!r}")
+                raise RuntimeError(
+                    f"Devin ACP session setup returned no sessionId: {session!r}"
+                )
 
             mode_id = self._mode_to_acp(self.mode)
             try:
@@ -127,14 +137,17 @@ class DevinACPAdapter:
                     {"sessionId": self.session_id, "modeId": mode_id},
                 )
             except Exception as exc:  # non-fatal; older builds may not support this
-                self._push("tool_call", {
-                    "event": "status",
-                    "id": "devin-acp-mode",
-                    "name": "session/set_mode",
-                    "output": f"Could not set ACP mode {mode_id}: {exc}",
-                    "runtime": "devin-acp",
-                    "timestamp": self._ts(),
-                })
+                self._push(
+                    "tool_call",
+                    {
+                        "event": "status",
+                        "id": "devin-acp-mode",
+                        "name": "session/set_mode",
+                        "output": f"Could not set ACP mode {mode_id}: {exc}",
+                        "runtime": "devin-acp",
+                        "timestamp": self._ts(),
+                    },
+                )
 
             self._accepting_current_turn = True
             prompt_task = asyncio.create_task(
@@ -212,10 +225,13 @@ class DevinACPAdapter:
         self.next_id += 1
         fut = asyncio.get_running_loop().create_future()
         self.pending[rid] = fut
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": rid, "method": method, "params": params},
-            separators=(",", ":"),
-        ) + "\n"
+        body = (
+            json.dumps(
+                {"jsonrpc": "2.0", "id": rid, "method": method, "params": params},
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
         self.proc.stdin.write(body.encode())
         await self.proc.stdin.drain()
         return await fut
@@ -229,14 +245,17 @@ class DevinACPAdapter:
             try:
                 msg = json.loads(line)
             except Exception:
-                self._push("tool_call", {
-                    "event": "status",
-                    "id": f"devin-acp-stdout-{time.time_ns()}",
-                    "name": "stdout",
-                    "output": line[:2000],
-                    "runtime": "devin-acp",
-                    "timestamp": self._ts(),
-                })
+                self._push(
+                    "tool_call",
+                    {
+                        "event": "status",
+                        "id": f"devin-acp-stdout-{time.time_ns()}",
+                        "name": "stdout",
+                        "output": line[:2000],
+                        "runtime": "devin-acp",
+                        "timestamp": self._ts(),
+                    },
+                )
                 continue
             if "id" in msg and msg["id"] in self.pending:
                 fut = self.pending.pop(msg["id"])
@@ -258,14 +277,17 @@ class DevinACPAdapter:
             # Surface auth/MCP warnings without spamming every debug line.
             lower = line.lower()
             if any(k in lower for k in ("mcp", "auth", "error", "warn", "failed")):
-                self._push("tool_call", {
-                    "event": "status",
-                    "id": f"devin-acp-stderr-{time.time_ns()}",
-                    "name": "devin-stderr",
-                    "output": line[:2000],
-                    "runtime": "devin-acp",
-                    "timestamp": self._ts(),
-                })
+                self._push(
+                    "tool_call",
+                    {
+                        "event": "status",
+                        "id": f"devin-acp-stderr-{time.time_ns()}",
+                        "name": "devin-stderr",
+                        "output": line[:2000],
+                        "runtime": "devin-acp",
+                        "timestamp": self._ts(),
+                    },
+                )
 
     def _handle_session_update(self, params: dict[str, Any]) -> None:
         update = params.get("update") or params
@@ -284,48 +306,72 @@ class DevinACPAdapter:
         elif kind == "agent_thought_chunk":
             text = self._extract_text(update.get("content"))
             if text:
-                self._push("tool_call", {
-                    "event": "status",
-                    "id": f"devin-thought-{time.time_ns()}",
-                    "name": "thought",
-                    "output": text[:2000],
+                self._push(
+                    "tool_call",
+                    {
+                        "event": "status",
+                        "id": f"devin-thought-{time.time_ns()}",
+                        "name": "thought",
+                        "output": text[:2000],
+                        "runtime": "devin-acp",
+                        "timestamp": self._ts(),
+                    },
+                )
+        elif kind == "tool_call":
+            tool_id = (
+                update.get("toolCallId")
+                or update.get("id")
+                or f"tc_devin_acp_{time.time_ns()}"
+            )
+            self._push(
+                "tool_call",
+                {
+                    "event": "start",
+                    "id": tool_id,
+                    "name": update.get("title") or update.get("name") or "tool",
+                    "input": update.get("content") or update,
                     "runtime": "devin-acp",
                     "timestamp": self._ts(),
-                })
-        elif kind == "tool_call":
-            tool_id = update.get("toolCallId") or update.get("id") or f"tc_devin_acp_{time.time_ns()}"
-            self._push("tool_call", {
-                "event": "start",
-                "id": tool_id,
-                "name": update.get("title") or update.get("name") or "tool",
-                "input": update.get("content") or update,
-                "runtime": "devin-acp",
-                "timestamp": self._ts(),
-            })
+                },
+            )
         elif kind == "tool_call_update":
-            tool_id = update.get("toolCallId") or update.get("id") or f"tc_devin_acp_{time.time_ns()}"
+            tool_id = (
+                update.get("toolCallId")
+                or update.get("id")
+                or f"tc_devin_acp_{time.time_ns()}"
+            )
             status = update.get("status") or update.get("state") or "completed"
-            self._push("tool_call", {
-                "event": "completed" if status in ("completed", "complete", "done") else "result",
-                "id": tool_id,
-                "name": update.get("title") or update.get("name") or "tool",
-                "output": json.dumps(update, default=str)[:2000],
-                "status": status,
-                "is_error": status in ("error", "failed"),
-                "runtime": "devin-acp",
-                "timestamp": self._ts(),
-            })
+            self._push(
+                "tool_call",
+                {
+                    "event": (
+                        "completed"
+                        if status in ("completed", "complete", "done")
+                        else "result"
+                    ),
+                    "id": tool_id,
+                    "name": update.get("title") or update.get("name") or "tool",
+                    "output": json.dumps(update, default=str)[:2000],
+                    "status": status,
+                    "is_error": status in ("error", "failed"),
+                    "runtime": "devin-acp",
+                    "timestamp": self._ts(),
+                },
+            )
         elif kind == "usage_update":
             # The SessionManager done event handles token metadata for Wee-native.
             # For now, expose usage as a status event so it is visible/debuggable.
-            self._push("tool_call", {
-                "event": "status",
-                "id": f"devin-usage-{time.time_ns()}",
-                "name": "usage_update",
-                "output": json.dumps(update, default=str)[:1000],
-                "runtime": "devin-acp",
-                "timestamp": self._ts(),
-            })
+            self._push(
+                "tool_call",
+                {
+                    "event": "status",
+                    "id": f"devin-usage-{time.time_ns()}",
+                    "name": "usage_update",
+                    "output": json.dumps(update, default=str)[:1000],
+                    "runtime": "devin-acp",
+                    "timestamp": self._ts(),
+                },
+            )
         elif kind in ("_cognition.ai/agent_stopped", "agent_stopped"):
             if self._turn_done:
                 self._turn_done.set()

@@ -697,6 +697,7 @@ class TaskSchedulerExecutor:
         finally:
             self._clear_checkpoint(job_id)
 
+
     def _execute_command_mode(self, job: Dict) -> Optional[str]:
         """Execute job as direct shell/python command (no LLM)."""
         job_id = job["id"]

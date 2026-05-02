@@ -91,6 +91,18 @@ _CURL_USER_RE = re.compile(
     r"""(-u\s+)(\S+)""",
 )
 
+_ELEVATED_MODE_INSTRUCTIONS = (
+    "\n\n[ELEVATED MODE ENABLED]\n"
+    "Full permissions granted. ALL commands requiring elevated privileges MUST automatically "
+    "prefix with 'sudo' — no exceptions. This includes:\n"
+    "• Service management: sudo systemctl restart/start/stop/reload/enable/disable <service>\n"
+    "• Network commands: sudo ping, sudo ssh, sudo iptables, sudo ip, etc.\n"
+    "• System administration: sudo journalctl, sudo systemd-*, sudo chmod/chown on system paths\n"
+    "• Any command that would fail due to insufficient permissions\n"
+    "Sudo is configured without password prompt (NOPASSWD:ALL). "
+    "Never ask for confirmation — execute privileged commands immediately with sudo."
+)
+
 
 def _sanitize_command_for_display(text: str) -> str:
     """Redact sensitive headers and credentials from command strings for UI display.
@@ -1803,6 +1815,8 @@ class SessionManager:
         self._env_cursor_models = None
         self._env_wee_models = None  # Cache for dynamically-discovered wee models
         self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
+        self._ollama_models_cache: list = []  # Live-discovered Ollama model names
+        self._ollama_cache_ts: float = 0  # TTL timestamp for Ollama discovery (60s)
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -1821,7 +1835,7 @@ class SessionManager:
         # Per-session stream buffers for multi-session streaming support.
         # Buffers all chunks so disconnected clients can reconnect and replay.
         # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}  # noqa: F821
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -2795,11 +2809,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not SCHEDULER_ENABLED:
+        if not self.SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = _get_scheduler()
+            scheduler = self._get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
@@ -3222,7 +3236,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         )
                         continue
                     agents[name] = {
-                        "path": agent.get("path", ""),
+                        "path": os.path.expanduser(agent.get("path", "")),
                         "description": agent.get("description", ""),
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
@@ -3231,6 +3245,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "primary_model": agent.get("primary_model"),
                         "fallback_runtime": agent.get("fallback_runtime"),
                         "fallback_model": agent.get("fallback_model"),
+                        "permission_mode": agent.get("permission_mode"),
+                        "yolo": agent.get("yolo", False),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3239,6 +3255,36 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
+
+        try:
+            from pydantic import ValidationError as _ValidationError
+
+            from config_schemas import validate_agents_config
+
+            validate_agents_config(config)
+        except ImportError:
+            pass
+        except _ValidationError as _schema_exc:
+            logger.critical(
+                "[config] agents.json schema validation failed: %s",
+                _schema_exc,
+            )
+            raise
+
+        agents = {}
+        for agent in config.get("agents", []):
+            name = agent.get("name")
+            if not name:
+                logger.warning("[Warning] Agent entry missing 'name' field")
+                continue
+            agents[name] = {
+                "path": agent.get("path", ""),
+                "description": agent.get("description", ""),
+                "max_concurrent": agent.get("max_concurrent", 1),
+                "runtime": agent.get("runtime", "copilot"),
+                "model": agent.get("model", ""),
+            }
+        return agents
 
     def reload_agents_from_disk(self) -> tuple:
         """Hot-reload agents.json with validation and safe fallback.
@@ -3276,11 +3322,17 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not name:
                 continue
             fresh[name] = {
-                "path": agent.get("path", ""),
+                "path": os.path.expanduser(agent.get("path", "")),
                 "description": agent.get("description", ""),
                 "max_concurrent": agent.get("max_concurrent", 1),
                 "runtime": agent.get("runtime", "copilot"),
                 "model": agent.get("model", ""),
+                "primary_runtime": agent.get("primary_runtime"),
+                "primary_model": agent.get("primary_model"),
+                "fallback_runtime": agent.get("fallback_runtime"),
+                "fallback_model": agent.get("fallback_model"),
+                "permission_mode": agent.get("permission_mode"),
+                "yolo": agent.get("yolo", False),
             }
 
         if not fresh and self.AGENTS:
@@ -3976,25 +4028,98 @@ You can mention an agent in your prompt and it will auto-delegate:
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama + OpenRouter cloud models.
 
-        Queries OpenRouter GET /api/v1/models, filters to
-        OPENROUTER_POPULAR_MODELS, and caches for 300s. Falls back
-        to the static WEE_MODELS list on any error.
+        Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
+        Returns model names suitable for ollama/<name> ID format.
+        """
+        import time as _time
+        import urllib.request as _urllib_req
+
+        ollama_ttl = 60
+        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
+            return self._ollama_models_cache
+
+        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        try:
+            req = _urllib_req.Request(ollama_url)
+            resp = _urllib_req.urlopen(req, timeout=5)
+            data = json.loads(resp.read())
+            names = [m["name"] for m in data.get("models", []) if m.get("name")]
+            self._ollama_models_cache = names
+            self._ollama_cache_ts = _time.time()
+            print(
+                f"[wee] Ollama: discovered {len(names)} models from {ollama_url}",
+                file=sys.stderr,
+            )
+            return names
+        except Exception as e:
+            print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
+            # Return cached data even if stale, or empty list
+            return self._ollama_models_cache or []
+
+    def fetch_wee_models(self) -> Dict:
+        """Return available wee models: local Ollama (live) + OpenRouter cloud models.
+
+        Issue #124: Ollama models are fetched live from kubuntu (60s TTL cache).
+        OpenRouter models are fetched live and cached for 300s.
+        Falls back to the static WEE_MODELS list on any error.
         """
         import time as _time
 
-        cache_ttl = 300  # 5 minutes
+        or_cache_ttl = 300  # 5 minutes for OpenRouter
 
-        # Return cache if still valid
+        # Return cache if still valid (OpenRouter cache governs full refresh)
         if (
             self._env_wee_models is not None
-            and _time.time() - self._openrouter_cache_ts < cache_ttl
+            and _time.time() - self._openrouter_cache_ts < or_cache_ttl
         ):
+            # Even when OR cache is valid, refresh Ollama section if its 60s TTL expired
+            ollama_names = self._fetch_ollama_models_live()
+            if ollama_names:
+                _static_ollama = {
+                    mid: (desc, aliases)
+                    for mid, desc, aliases in self.WEE_MODELS.get("Wee Native (Ollama)", [])
+                }
+                ollama_entries = []
+                for name in ollama_names:
+                    oid = f"ollama/{name}"
+                    if oid in _static_ollama:
+                        desc, aliases = _static_ollama[oid]
+                    else:
+                        desc, aliases = f"Ollama {name} (local)", []
+                    ollama_entries.append((oid, desc, aliases))
+                self._env_wee_models["Wee Native (Ollama)"] = ollama_entries
             return self._static_models_to_dict(self._env_wee_models)
 
-        # Start with static Ollama models
+        # Build fresh result: live Ollama + static OpenRouter stubs as fallback
         result = {}
+
+        # Issue #124: Live Ollama discovery replaces hardcoded 3-model list
+        ollama_names = self._fetch_ollama_models_live()
+        if ollama_names:
+            # Build lookup from static WEE_MODELS to preserve curated descriptions
+            _static_ollama = {
+                mid: (desc, aliases)
+                for mid, desc, aliases in self.WEE_MODELS.get("Wee Native (Ollama)", [])
+            }
+            ollama_entries = []
+            for name in ollama_names:
+                oid = f"ollama/{name}"
+                if oid in _static_ollama:
+                    desc, aliases = _static_ollama[oid]
+                else:
+                    desc, aliases = f"Ollama {name} (local)", []
+                ollama_entries.append((oid, desc, aliases))
+            result["Wee Native (Ollama)"] = ollama_entries
+        else:
+            # Fall back to static Ollama entries if discovery fails
+            result["Wee Native (Ollama)"] = list(
+                self.WEE_MODELS.get("Wee Native (Ollama)", [])
+            )
+
+        # Copy static OpenRouter entries as initial values (overwritten below if live succeeds)
         for cat, entries in self.WEE_MODELS.items():
-            result[cat] = list(entries)
+            if "Ollama" not in cat:
+                result[cat] = list(entries)
 
         # Try live OpenRouter discovery
         try:
@@ -4046,10 +4171,13 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         except Exception as e:
             print(
-                "[wee] OpenRouter discovery failed, using static list: %s" % e,
+                "[wee] OpenRouter discovery failed: %s — using live Ollama + static OR list" % e,
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.WEE_MODELS)
+            # Return result with live Ollama (already populated) + static OpenRouter fallback
+            self._env_wee_models = result
+            self._openrouter_cache_ts = _time.time()
+            return self._static_models_to_dict(result)
 
     def fetch_ollama_models(self) -> Dict:
         """Fetch available ollama models from the model manifest."""
@@ -4667,6 +4795,17 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Substring matching with longest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
+        
+        # Issue #142 B01: For wee runtime, exclude multi-namespace models from substring
+        # matching (e.g., "openrouter/openai/gpt-5-mini" has 2+ slashes = multi-namespace)
+        if runtime == "wee" and matches:
+            single_ns = [m for m in matches if m.count("/") == 1]
+            # If multi-namespace models exist, don't use any substring matches for wee
+            has_multi_ns = any(m.count("/") >= 2 for m in matches)
+            if has_multi_ns:
+                # Don't use substring matching when multi-namespace models are present
+                matches = single_ns if single_ns else []
+        
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -6325,7 +6464,7 @@ User Request:
                                                 "status": _gobj.get(
                                                     "status", "completed"
                                                 ),
-                                                "output": _gobj.get("output", "")[:500],
+                                                "output": _gobj.get("output", "")[:2000],
                                             }
                                             if stream_buffer:
                                                 stream_buffer.push(
@@ -7208,6 +7347,7 @@ User Request:
                             "id": f"tc_copilot-sdk_{_tool_call_counter[0]}",
                             "name": str(tool_name),
                             "input": "",
+                            "output": tool_output,
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
@@ -7494,6 +7634,9 @@ User Request:
                                 if stream_buffer:
                                     stream_buffer.push("tool_call", tc_evt)
                             elif isinstance(block, ToolResultBlock):
+                                _block_content = block.content
+                                if isinstance(_block_content, list):
+                                    _block_content = " ".join(getattr(b, "text", str(b)) for b in _block_content)
                                 tc_evt = {
                                     "event": "completed",
                                     "id": block.tool_use_id
@@ -8262,9 +8405,7 @@ User Request:
     ) -> str:
         """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
-        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
-        LM Studio, etc.) using the openai Python package. No external CLI
-        binary required.
+    # ---- Issue #125 helpers ------------------------------------------------
 
         Model format: [provider/]model_name
         Examples:
@@ -8279,16 +8420,15 @@ User Request:
             - SSE streaming of tool execution (#109)
         """
         import json as _json
-
+        config_path = Path(__file__).parent / "wee_free_models.json"
         try:
             from openai import OpenAI
         except ImportError:
             return "Error: openai package not installed. " "Run: pip install openai"
 
-        session_data = self.get_or_create_session_data(n8n_session_id)
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        channel = session_data.get("channel", "webui")
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Return True if model is an OpenRouter :free model."""
+        return ":free" in model.lower() and "openrouter" in model.lower()
 
         # -- Resolve model, endpoint, and API key --
         api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
@@ -8300,7 +8440,8 @@ User Request:
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
-
+        api_base = session_api_base or os.environ.get("WEE_API_BASE")
+        api_key = session_api_key or os.environ.get("WEE_API_KEY")
         resolved_model = model
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
@@ -8310,11 +8451,9 @@ User Request:
                 if not api_key and preset_key:
                     api_key = preset_key
                 break
-
         if not api_base:
             api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
-            # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
                 try:
                     import keyring
@@ -8326,14 +8465,9 @@ User Request:
                     api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
                 api_key = "ollama"
+        return api_base, api_key, resolved_model
 
-        print(
-            f"[Wee Native] model={resolved_model} api_base={api_base} "
-            f"session={n8n_session_id[:8]}...",
-            file=sys.stderr,
-        )
-        context_window = self._wee_get_context_limit_for_api(resolved_model, api_base)
-        token_tracker = self._wee_load_token_tracker(n8n_session_id, context_window)
+    # ---- End Issue #125 helpers ---------------------------------------------
 
         # Issue #111: Build context prompt with correct args (after model resolution)
         base_context_prompt = self.build_agent_context_prompt(
@@ -8353,11 +8487,29 @@ User Request:
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
+        # -- Issue #125: Free model 429 retry + fallback chain --
+        _free_cfg = self._wee_load_free_config()
+        _max_retries_429 = _free_cfg.get("max_retries_per_model", 3)
+        _backoff_429 = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
+        _is_free_model_req = self._wee_is_free_model(model)
+        if _is_free_model_req:
+            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
+            _attempt_chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
+        else:
+            _attempt_chain = [model]
+
         # -- Create OpenAI client and call API --
+        import httpx as _httpx_wee
         client = OpenAI(
             base_url=api_base,
             api_key=api_key,
-            timeout=effective_timeout,
+            timeout=_httpx_wee.Timeout(
+                connect=15.0,
+                read=float(effective_timeout),
+                write=30.0,
+                pool=15.0,
+            ),
+            max_retries=0,
         )
 
         # -- Issue #108: Load conversation history --
@@ -8502,6 +8654,44 @@ User Request:
                             },
                         },
                         "required": ["task_id"],
+                    },
+                },
+            },
+        ]
+
+        # -- Tool definitions for agentic loop (Issue #123) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
                     },
                 },
             },
@@ -8675,15 +8865,27 @@ User Request:
                     except (ValueError, _json.JSONDecodeError):
                         func_args = {"raw": func_args_str}
 
-                    # Issue #109: Emit tool start event to SSE stream
+                    # Issue #109 / #142: Emit tool start event to SSE stream
                     tc_start_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
+                        "event": "detected",
+                        "input": func_args,
                         "status": "running",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_start_event)
+
+                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.append_tool_call(bg_task_id, {
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
+                            "status": "running",
+                            "runtime": "wee",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        })
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -8693,16 +8895,26 @@ User Request:
                     # Execute the tool
                     tool_result = self._wee_execute_tool(func_name, func_args, agent)
 
-                    # Issue #109: Emit tool complete event to SSE stream
+                    # Issue #109 / #142: Emit tool complete event to SSE stream
                     tc_done_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "arguments": func_args,
-                        "result": tool_result[:2000] if tool_result else "",
+                        "event": "result",
+                        "input": func_args,
+                        "output": tool_result[:2000] if tool_result else "",
                         "status": "complete",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_done_event)
+
+                    # Issue #142: Update tool call completion in bg_task_mgr
+                    if bg_task_id and self._bg_task_mgr:
+                        self._bg_task_mgr.update_tool_call(
+                            bg_task_id,
+                            tc_id,
+                            status="completed",
+                            output=str(tool_result[:500]) if tool_result else "",
+                        )
 
                     # Append tool result to conversation for next round
                     messages.append(
@@ -8779,20 +8991,146 @@ User Request:
                 stream_buffer.push("done", output)
 
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
+                + " session=" + n8n_session_id[:8] + "..."
+                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")",
                 file=sys.stderr,
             )
-            return output
 
         except Exception as e:
+            _e_str = str(e)
+            _is_429 = "429" in _e_str or "rate limit" in _e_str.lower() or "429 exhausted" in _e_str
+            if _is_free_model_req and _is_429:
+                # Try next model in fallback chain
+                _cur_idx = _attempt_chain.index(model) if model in _attempt_chain else 0
+                for _fi, _fallback_model in enumerate(_attempt_chain):
+                    if _fallback_model.lower() == model.lower():
+                        _cur_idx = _fi
+                        break
+                if _cur_idx + 1 < len(_attempt_chain):
+                    _next_model = _attempt_chain[_cur_idx + 1]
+                    _fb_msg = f"\n⚠️ Still rate limited, falling back to {_next_model.split('/')[-1]}...\n"
+                    print(f"[Wee Native] {_fb_msg.strip()}", file=sys.stderr)
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": _fb_msg})
+                    # Recurse with next model (single fallback step)
+                    return self.run_wee_native(
+                        prompt=prompt, model=_next_model, agent=agent,
+                        session_id=session_id, resume=resume,
+                        n8n_session_id=n8n_session_id, timeout=timeout,
+                        render_type=render_type,
+                    )
+                else:
+                    _done_msg = "\n❌ All free model fallbacks exhausted. Please try again later or switch to a paid model."
+                    if stream_buffer:
+                        stream_buffer.push("done", _done_msg)
+                    return _done_msg
+
             error_msg = f"Error: Wee native runtime failed: {e}"
             print(f"[Wee Native] {error_msg}", file=sys.stderr)
 
-            # Push error as done sentinel
-            if stream_buffer:
-                stream_buffer.push("done", error_msg)
+            collected_output = []
+            _got_429 = False
+            _wee_start = _time.time()
+            _last_usage = [None]
+            _max_attempts = _max_retries if _is_free else 1
 
-            return error_msg
+            for _retry in range(_max_attempts):
+                try:
+                    stream = client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages,
+                        stream=True,
+                        stream_options={"include_usage": True},
+                    )
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            token = chunk.choices[0].delta.content
+                            collected_output.append(token)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": token})
+                        if hasattr(chunk, "usage") and chunk.usage is not None:
+                            _last_usage[0] = chunk.usage
+                    _got_429 = False
+                    break  # success
+
+                except Exception as _e:
+                    _e_str = str(_e)
+                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
+                    if _is_rate_limit and _is_free:
+                        _got_429 = True
+                        if _retry < _max_attempts - 1:
+                            _wait = (
+                                _backoff[_retry] if _retry < len(_backoff)
+                                else (_backoff[-1] if _backoff else 5)
+                            )
+                            _retry_msg = (
+                                "\n\u26a0\ufe0f Rate limited, retrying in "
+                                + str(_wait)
+                                + "s ("
+                                + str(_retry + 1)
+                                + "/"
+                                + str(_max_attempts)
+                                + ")...\n"
+                            )
+                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": _retry_msg})
+                            # M01: time.sleep is correct here — sync function in thread-pool worker
+                            _time.sleep(_wait)
+                    else:
+                        error_msg = "Error: Wee native runtime failed: " + str(_e)
+                        print("[Wee Native] " + error_msg, file=sys.stderr)
+                        if stream_buffer:
+                            stream_buffer.push("done", error_msg)
+                        return error_msg
+
+            if not _got_429:
+                output = "".join(collected_output)
+                try:
+                    _duration_ms = int((_time.time() - _wee_start) * 1000)
+                    if _last_usage[0] is not None:
+                        _u = _last_usage[0]
+                        _pt = getattr(_u, "prompt_tokens", 0) or 0
+                        _ct = getattr(_u, "completion_tokens", 0) or 0
+                        _total = getattr(_u, "total_tokens", _pt + _ct)
+                        _provider = (
+                            "ollama" if "192.168" in api_base else
+                            "openrouter" if "openrouter" in api_base else "wee"
+                        )
+                        _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
+                        _cost_usd, _cost_label = self._calculate_wee_cost(
+                            _attempt_model, _pt, _ct, _pricing
+                        )
+                        self.update_session_field(n8n_session_id, "wee_meta", {
+                            "tokens": _total, "prompt_tokens": _pt,
+                            "completion_tokens": _ct, "cost_usd": _cost_usd,
+                            "cost_label": _cost_label, "model": _attempt_model, "runtime": "wee",
+                        })
+                        self._log_token_usage(
+                            session_id=n8n_session_id, model=_attempt_model, runtime="wee",
+                            provider=_provider, prompt_tokens=_pt, completion_tokens=_ct,
+                            total_tokens=_total, cost_usd=_cost_usd, duration_ms=_duration_ms,
+                        )
+                except Exception as _meta_err:
+                    print("[Wee Native] wee_meta error: " + str(_meta_err), file=sys.stderr)
+
+                if stream_buffer:
+                    stream_buffer.push("done", output)
+                print("[Wee Native] Completed. Output length: " + str(len(output)) + " chars", file=sys.stderr)
+                return output
+            # _got_429=True — continue outer loop to next fallback model
+
+        # B01: all models exhausted — iterative approach, no stack overflow
+        exhausted_msg = (
+            "\n\u274c All free model fallbacks exhausted. "
+            "Please try again later or switch to a paid model.\n"
+        )
+        print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
+        if stream_buffer:
+            stream_buffer.push("done", exhausted_msg)
+        return exhausted_msg
+
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
@@ -9560,6 +9898,8 @@ User Request:
         # Background tasks run unattended — grant elevated permissions so
         # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
         self.update_session_field(session_id, "permissions", {"mode": "elevated"})
+        # Issue #142: Store task_id so run_wee_native can track tool calls
+        self.update_session_field(session_id, "bg_task_id", task_id)
         if timeout is not None:
             self.update_session_field(session_id, "timeout", timeout)
         try:
@@ -10831,6 +11171,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             models = []
             for group_name, model_ids in raw.items():
                 for model_id in model_ids:
+                    # Support both flat strings and (id, desc, aliases) tuples
+                    if isinstance(model_id, tuple):
+                        model_id = model_id[0]
                     label = (
                         session_mgr._get_model_description(model_id, runtime)
                         or model_id
@@ -10839,6 +11182,42 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
+
+    @app.get("/api/v1/wee/models")
+    async def get_wee_models(force: bool = False):
+        """Return discovered wee models with enriched metadata.
+
+        Queries Ollama and OpenAI-compatible hosts, returns models grouped
+        by provider with size, status, and modification time.
+
+        Query params:
+            force: bypass cache and re-discover (default false)
+        """
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            enriched = discovery.discover_all_enriched(force=force)
+            host_status = discovery.get_host_status()
+            return {
+                "runtime": "wee",
+                "providers": enriched,
+                "host_status": host_status,
+            }
+        except Exception as e:
+            return {"runtime": "wee", "providers": {}, "error": str(e)}
+
+    @app.post("/api/v1/wee/models/refresh")
+    async def refresh_wee_models():
+        """Force refresh the wee model cache."""
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            discovery.invalidate_cache()
+            result = discovery.discover_all(force=True)
+            total = sum(len(v) for v in result.values())
+            return {"status": "refreshed", "total_models": total, "providers": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     @app.post("/api/v1/auth/request-pairing")
     async def request_pairing(body: PairingRequest, request: Request):
@@ -12191,6 +12570,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
@@ -12216,17 +12598,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         notify: bool = True,
         agent: Optional[str] = None,
     ):
-        """Emit a background task completion notification via notification_mgr."""
+        """Emit a background task completion notification via notification_mgr.
+
+        When ``is_critical`` is True the notification bypasses the global
+        suppression toggle (used for heartbeat alerts and system crashes).
+        """
         if notification_mgr is None:
             return
         try:
-            # Re-check per-identity AND global mute preference at emit time
-            # (user may have muted after the task was created, or muted from
-            # a different channel whose identity doesn't match).
-            if notify:
-                if notification_mgr.is_muted(
-                    user_identity
-                ) or notification_mgr.is_muted("_global"):
+            # Re-check per-identity mute preference at emit time
+            # (user may have muted after the task was created).
+            if notify and not is_critical:
+                if notification_mgr.is_muted(user_identity):
                     notify = False
                 elif agent and notification_mgr.is_agent_muted(user_identity, agent):
                     notify = False
@@ -12607,6 +12990,158 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 }
             return None
 
+        # Fallback eligibility patterns for bg tasks (Issue #219).
+        # All patterns use \b word boundaries so tokens embedded inside
+        # underscore-separated identifiers (e.g. status_code_429_count,
+        # unauthorized_users, timeout_value, api_key_invalid_count) are NOT
+        # matched.  Python's \w class includes '_', so \b fires only at
+        # alphanumeric↔non-alphanumeric transitions, not at '_' boundaries.
+        _BG_FALLBACK_PATTERNS = [
+            re.compile(p, re.IGNORECASE)
+            for p in [
+                r"\b429\b",
+                r"\brate[\s\-]?limit(?:ed|ing)?\b",
+                r"\bquota[\s\-]exceeded\b",
+                r"\b401\b",
+                r"\bunauthorized\b",
+                r"\bmissing[\s\-]authentication\b",
+                r"\bapi[\s_\-]?key[\s_\-]?(?:invalid|expired|missing)\b",
+                r"\b503\b",
+                r"\bservice[\s\-]unavailable\b",
+                r"\b502\b",
+                r"\bbad[\s\-]gateway\b",
+                r"\bconnection[\s\-]refused\b",
+                r"\btimed?\s*out\b",
+                r"\betimedout\b",
+                r"\boverloaded\b",
+            ]
+        ]
+
+        # Errors starting with Python application-exception prefixes are
+        # not infrastructure failures; exclude them so test-assertion text
+        # like "AssertionError: expected fixture text 503 …" doesn't trigger
+        # a fallback retry.
+        _BG_EXCLUSION_RE = re.compile(
+            r"^(?:assert(?:ion)?error|typeerror|valueerror|keyerror"
+            r"|attributeerror|nameerror|runtimeerror)\s*:",
+            re.IGNORECASE,
+        )
+
+        def _is_bg_fallback_eligible(error_text):
+            if not error_text:
+                return False
+            if _BG_EXCLUSION_RE.match(error_text.strip()):
+                return False
+            for pat in _BG_FALLBACK_PATTERNS:
+                if pat.search(error_text):
+                    return True
+            return False
+
+        def _build_bg_cmd(rt, mdl, ctx_prompt, perm_mode):
+            from shutil import which as _which_bin
+
+            _agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
+
+            if rt == "gemini":
+                _gemini_bin = _which_bin("gemini") or "gemini"
+                _cmd = [_gemini_bin]
+                if perm_mode == "elevated":
+                    _cmd.append("--yolo")
+                _cmd.extend(["-o", "stream-json", "-p", ctx_prompt])
+                if mdl:
+                    _cmd.extend(["--model", mdl])
+            elif rt == "opencode":
+                _oc_bin = (
+                    str(session_mgr.opencode_bin)
+                    if session_mgr.opencode_bin
+                    else (_which_bin("opencode") or "opencode")
+                )
+                _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
+            elif rt == "codex":
+                _codex_bin = _which_bin("codex") or "codex"
+                _cmd = [_codex_bin, "exec"]
+                if perm_mode == "elevated":
+                    _cmd.extend([
+                        "--dangerously-bypass-approvals-and-sandbox",
+                        "-c",
+                        "shell_environment_policy.inherit=all",
+                    ])
+                if mdl:
+                    _cmd.extend(["-m", mdl])
+                _cmd.append(ctx_prompt)
+            elif rt == "claude":
+                _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
+                _claude_perm = {
+                    "elevated": "bypassPermissions",
+                    "sandboxed": "plan",
+                }.get(perm_mode, "default")
+                _cmd = [
+                    _claude_bin, "-p", ctx_prompt,
+                    "--output-format", "stream-json",
+                    "--verbose", "--model", mdl,
+                    "--permission-mode", _claude_perm,
+                ]
+            elif rt == "devin":
+                _devin_bin = (
+                    session_mgr.devin_bin
+                    if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                    else (_which_bin("devin") or "devin")
+                )
+                _devin_perm = "dangerous"
+                _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
+                if mdl:
+                    _cmd.extend(["--model", mdl])
+                _cmd.extend(["--", ctx_prompt])
+            elif rt == "cursor":
+                _cursor_bin = (
+                    session_mgr.cursor_bin
+                    if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                    else (_which_bin("agent") or "agent")
+                )
+                _cursor_model = mdl
+                if not _cursor_model or not session_mgr.get_model_from_name(_cursor_model, "cursor"):
+                    _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                _cmd = [_cursor_bin, "-p", "--trust"]
+                if perm_mode == "elevated":
+                    _cmd.append("--yolo")
+                _cmd.extend(["--model", _cursor_model, "--workspace", _agent_dir, "--", ctx_prompt])
+            elif rt == "wee":
+                _wee_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wee_runtime.py")
+                _cmd = [sys.executable, _wee_script, "--model", mdl, "--timeout", str(timeout or 300)]
+                _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                if _wee_api_base:
+                    _cmd.extend(["--api-base", _wee_api_base])
+                if _wee_api_key:
+                    _cmd.extend(["--api-key", _wee_api_key])
+                _cmd.extend(["--system-prompt", ctx_prompt])
+                _cmd.append(prompt)
+            elif rt in ("claude-sdk", "copilot-sdk"):
+                _am_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_manager.py")
+                _cmd = [sys.executable, _am_script, "--runtime", rt, "--model", mdl, "--agent", agent, ctx_prompt, session_id or str(uuid4())]
+            else:
+                copilot_bin = (
+                    session_mgr.copilot_bin
+                    or _which_bin("copilot")
+                    or "/home/flipkey/.local/bin/copilot"
+                )
+                _cmd = [copilot_bin, "-p", ctx_prompt, "--no-color", "--model", mdl, "--allow-all-tools"]
+                if perm_mode == "elevated":
+                    _cmd.extend(["--allow-all-paths", "--yolo"])
+
+            _proc_timeout = (timeout or 900) + 30
+            _env = {
+                **os.environ,
+                "COPILOT_AGENT": agent,
+                "COPILOT_RUNTIME": rt,
+                "WEE_AGENT_DIR": _agent_dir,
+                "WEE_SESSION_ID": session_id,
+                "WEE_TASK_ID": task_id,
+            }
+            return _cmd, _env, _proc_timeout, _agent_dir
+
         try:
             # Update task record with fallback params (for retry logic)
             if fallback_runtime or fallback_model:
@@ -12826,8 +13361,36 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             start_time = time.time()
 
             for line in process.stdout:
-                stdout_lines.append(line)
                 line_text = line.rstrip("\n\r")
+
+                # Issue #142: Handle wee runtime structured tool call events
+                # These JSON lines are for tool tracking only — skip them from output
+                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
+                    try:
+                        _wee_tc = _json.loads(line_text.strip())
+                        if _wee_tc.get("__wee_tc__") == "start":
+                            _tool_call_counter += 1
+                            _tc_input = _wee_tc.get("input", {})
+                            bg_task_mgr.append_tool_call(task_id, {
+                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                "name": _wee_tc.get("name", "tool"),
+                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                        elif _wee_tc.get("__wee_tc__") == "done":
+                            bg_task_mgr.update_tool_call(
+                                task_id,
+                                _wee_tc.get("id", ""),
+                                status="completed",
+                                output=str(_wee_tc.get("output", ""))[:500],
+                            )
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    continue  # Don't include tool-tracking JSON in output
+
+                stdout_lines.append(line)
 
                 # Append to output_lines for live log viewing
                 if line_text:
@@ -13211,12 +13774,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         # Determine notification preference:
-        #   body override > global mute > per-identity store > session default > True
+        #   body override > global toggle > per-identity store > session default > True
         notify_pref = body.notify
         if notify_pref is None:
             if notification_mgr:
-                # Global mute takes priority (covers cross-channel identity mismatch)
-                if notification_mgr.is_muted("_global"):
+                # Global toggle takes priority (Issue #146)
+                if not notification_mgr.is_global_enabled():
                     notify_pref = False
                 # Per-identity store is authoritative
                 elif notification_mgr.is_muted(identity):
@@ -13235,6 +13798,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
+
+        # Resolve permission mode: body permission_mode > body yolo > agent yolo > agent permission_mode > default
+        perm_mode = body.permission_mode
+        if not perm_mode:
+            # body.yolo can explicitly override agent yolo
+            if body.yolo is True:
+                perm_mode = "elevated"
+            elif body.yolo is False:
+                # Explicit False overrides agent yolo:true
+                perm_mode = "restricted"
+            elif agent_config.get("yolo", False):
+                perm_mode = "elevated"
+            else:
+                perm_mode = agent_config.get("permission_mode", "restricted")
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
         if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
             task = bg_task_mgr.create_task(
@@ -13252,6 +13831,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 origin_session_id=body.origin_session_id,
                 fallback_runtime=body.fallback_runtime,
                 fallback_model=body.fallback_model,
+                permission_mode=perm_mode,
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -13263,16 +13843,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
-                "permission_mode": body.permission_mode or "restricted",
+                "permission_mode": perm_mode,
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
-
-        # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
 
         # Create task record (running immediately)
         task = bg_task_mgr.create_task(
@@ -13309,8 +13884,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
-            body.fallback_runtime,
-            body.fallback_model,
+            bg_fallback_runtime,
+            bg_fallback_model,
         )
 
         return {
@@ -13518,6 +14093,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         next_q.get("timeout") or 900,
                         next_q.get("notify", True),
                         next_q.get("permission_mode", "restricted"),
+                        next_q.get("fallback_runtime"),
+                        next_q.get("fallback_model"),
                     )
             return {"task_id": task_id, "action": "killed"}
         else:
@@ -13675,6 +14252,51 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         deleted = notification_mgr.delete_all_read(user_key)
         return {"deleted": deleted}
 
+    # --- Global Notification Settings (Issue #146) ---
+
+    class NotificationSettingsRequest(BaseModel):
+        notifications_enabled: bool
+
+    @app.get("/api/v1/settings/notifications")
+    async def get_notification_settings(request: Request):
+        """Return the global notification toggle state."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications_enabled": True, "available": False}
+        settings = notification_mgr.get_global_settings()
+        settings["available"] = True
+        return settings
+
+    @app.put("/api/v1/settings/notifications")
+    async def set_notification_settings(
+        body: NotificationSettingsRequest, request: Request
+    ):
+        """Set the global notification toggle."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        notification_mgr.set_global_enabled(body.notifications_enabled)
+        return {
+            "notifications_enabled": body.notifications_enabled,
+            "message": (
+                "Notifications enabled for all channels"
+                if body.notifications_enabled
+                else "Notifications suppressed globally (critical alerts still delivered)"
+            ),
+        }
+
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
         # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
@@ -13765,6 +14387,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 None  # elevated, restricted (default), sandboxed
             )
 
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
+
         class UpdateJobRequest(BaseModel):
             name: Optional[str] = None
             schedule: Optional[str] = None
@@ -13780,6 +14406,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             permission_mode: Optional[str] = (
                 None  # elevated, restricted (default), sandboxed
             )
+
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
 
         class ValidateScheduleRequest(BaseModel):
             schedule: str
@@ -14022,6 +14652,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     status="running",
                     timeout=timeout,
                     notify=job.get("notify", False),
+                    fallback_runtime=job.get("fallback_runtime"),
+                    fallback_model=job.get("fallback_model"),
                 )
 
                 loop = asyncio.get_running_loop()
@@ -14039,6 +14671,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     timeout,
                     job.get("notify", False),
                     perm_mode,
+                    job.get("fallback_runtime"),
+                    job.get("fallback_model"),
                 )
 
                 return {

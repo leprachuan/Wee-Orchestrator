@@ -12,7 +12,6 @@ import sys
 import tempfile
 import threading
 
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -79,10 +78,10 @@ class TestSetAgentAppliesDefaults:
             assert (
                 sm["sess-001"]["runtime"] == "opencode"
             ), f"Expected 'opencode', got {sm['sess-001'].get('runtime')}"
-            assert (
-                sm["sess-001"]["model"] == "nvidia/llama-3.1-nemotron"
-            ), f"Expected 'nvidia/llama-3.1-nemotron', got " \
+            assert sm["sess-001"]["model"] == "nvidia/llama-3.1-nemotron", (
+                f"Expected 'nvidia/llama-3.1-nemotron', got "
                 f"{sm['sess-001'].get('model')}"
+            )
             assert sm["sess-001"]["agent"] == "research"
         finally:
             os.unlink(path)

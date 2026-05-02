@@ -11,17 +11,16 @@ Tests:
 """
 
 import json
-import os
 import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from agent_manager import SessionManager
+from agent_manager import SessionManager  # noqa: E402
 
 
 def _make_mgr():
@@ -195,7 +194,7 @@ class TestIssue111ToolAudit(unittest.TestCase):
         self.assertEqual(
             call_args["n8n_session_id"],
             sid,
-            f"Third arg must be n8n_session_id='{sid}', got {call_args['n8n_session_id']!r}",
+            f"Third arg must be n8n_session_id='{sid}', got {call_args['n8n_session_id']!r}",  # noqa: E501
         )
 
     @patch("openai.OpenAI")
@@ -346,7 +345,7 @@ class TestIssue111ToolAudit(unittest.TestCase):
 
     @patch("openai.OpenAI")
     def test_tool_schemas_have_correct_structure(self, mock_openai_cls):
-        """Issue #111: Tool schemas must have correct OpenAI function-calling structure."""
+        """Issue #111: Tool schemas must have correct OpenAI function-calling structure."""  # noqa: E501
         mgr = _make_mgr()
         sid = "test_111_schema_structure"
         session_data = {"runtime": "wee", "model": "ollama/qwen3:8b", "channel": "api"}

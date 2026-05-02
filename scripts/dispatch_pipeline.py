@@ -42,14 +42,14 @@ AUTH_CHANNEL = "telegram"
 RUNNING_STATUSES = {"created", "queued", "pending", "running", "in_progress"}
 
 # Labels required in the repository (name → colour hex without #)
+# NEW WORKFLOW: wee-dev commits directly to dev branch, no QA labels.
+# Labels are: wee-dev (queued) → wee-dev:in-progress (working) → removed (complete)
+# QA and release to prod are manual/controlled separately.
 REQUIRED_LABELS = {
     "wee-dev": "0075ca",
     "wee-dev:in-progress": "e4e669",
-    "wee-dev:qa-review": "d93f0b",
-    "wee-dev:qa-failed": "e11d48",
-    "wee-dev:approved": "0e8a16",
+    "wee-dev:qa-failed": "e11d48",  # For manual QA rejections if needed
     "wee-dev:needs-approval": "f9a825",
-    "wee-dev:queued": "cccccc",
 }
 
 # Stall timeout: if in-progress/qa-review with no running task for this long, re-dispatch
@@ -196,7 +196,10 @@ def _resolve_status(labels: set[str]) -> str:
     ]:
         if label in labels:
             return status
-    return "queued"
+    # If only "wee-dev" label exists (no sub-labels), it's queued
+    if "wee-dev" in labels:
+        return "queued"
+    return "done"
 
 
 def add_label(issue: int, label: str) -> None:
@@ -591,6 +594,7 @@ def run_pipeline(items: list[dict], state: dict) -> None:
 
     if not wee_dev_dispatched and not in_progress and not qa_failed and not queued:
         log("No wee-dev work to do.")
+
 
     # -----------------------------------------------------------------------
     # wee-qa slot: can run in parallel with wee-dev (different issue)

@@ -16,7 +16,10 @@ class TestIssue302CodexDoneHandler:
 
     def test_done_handler_uses_clean_response_for_codex_jsonl(self):
         assert "const doneResponse = evt.response || '(no response)';" in self.app_js
-        assert "const normalizedRawText = normalizeCodexStreamText(rawText);" in self.app_js
+        assert (
+            "const normalizedRawText = normalizeCodexStreamText(rawText);"
+            in self.app_js
+        )
         assert ": doneResponse;" in self.app_js
 
     def test_streaming_chunks_are_normalized_before_render(self):
