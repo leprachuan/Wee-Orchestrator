@@ -97,8 +97,9 @@ def test_issue_295_tilde_path_expansion_on_reload(tmp_path):
     # Now reload and verify ~ paths are still expanded
     success, msg = mgr.reload_agents_from_disk()
     assert success, f"reload failed: {msg}"
-    assert mgr.AGENTS["test"]["path"] == expected, \
-        f"reload did not expand ~ paths: got {mgr.AGENTS['test']['path']}"
+    assert (
+        mgr.AGENTS["test"]["path"] == expected
+    ), f"reload did not expand ~ paths: got {mgr.AGENTS['test']['path']}"
 
 
 def test_issue_295_reload_preserves_all_fields(tmp_path):
@@ -130,11 +131,11 @@ def test_issue_295_reload_preserves_all_fields(tmp_path):
 
     mgr = SessionManager()
     agents = mgr._load_agents_config(config_file)
-    
+
     # Reload and verify all fields
     success, msg = mgr.reload_agents_from_disk()
     assert success, f"reload failed: {msg}"
-    
+
     agent = mgr.AGENTS["test"]
     assert agent["path"] == os.path.expanduser("~/test")
     assert agent["description"] == "Test Agent"
