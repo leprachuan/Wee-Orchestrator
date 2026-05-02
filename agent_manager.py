@@ -1803,6 +1803,8 @@ class SessionManager:
         self._env_cursor_models = None
         self._env_wee_models = None  # Cache for dynamically-discovered wee models
         self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
+        self._ollama_models_cache: list = []  # Live-discovered Ollama model names
+        self._ollama_cache_ts: float = 0  # TTL timestamp for Ollama discovery (60s)
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3971,25 +3973,98 @@ You can mention an agent in your prompt and it will auto-delegate:
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama + OpenRouter cloud models.
 
-        Queries OpenRouter GET /api/v1/models, filters to
-        OPENROUTER_POPULAR_MODELS, and caches for 300s. Falls back
-        to the static WEE_MODELS list on any error.
+        Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
+        Returns model names suitable for ollama/<name> ID format.
+        """
+        import time as _time
+        import urllib.request as _urllib_req
+
+        ollama_ttl = 60
+        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
+            return self._ollama_models_cache
+
+        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        try:
+            req = _urllib_req.Request(ollama_url)
+            resp = _urllib_req.urlopen(req, timeout=5)
+            data = json.loads(resp.read())
+            names = [m["name"] for m in data.get("models", []) if m.get("name")]
+            self._ollama_models_cache = names
+            self._ollama_cache_ts = _time.time()
+            print(
+                f"[wee] Ollama: discovered {len(names)} models from {ollama_url}",
+                file=sys.stderr,
+            )
+            return names
+        except Exception as e:
+            print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
+            # Return cached data even if stale, or empty list
+            return self._ollama_models_cache or []
+
+    def fetch_wee_models(self) -> Dict:
+        """Return available wee models: local Ollama (live) + OpenRouter cloud models.
+
+        Issue #124: Ollama models are fetched live from kubuntu (60s TTL cache).
+        OpenRouter models are fetched live and cached for 300s.
+        Falls back to the static WEE_MODELS list on any error.
         """
         import time as _time
 
-        cache_ttl = 300  # 5 minutes
+        or_cache_ttl = 300  # 5 minutes for OpenRouter
 
-        # Return cache if still valid
+        # Return cache if still valid (OpenRouter cache governs full refresh)
         if (
             self._env_wee_models is not None
-            and _time.time() - self._openrouter_cache_ts < cache_ttl
+            and _time.time() - self._openrouter_cache_ts < or_cache_ttl
         ):
+            # Even when OR cache is valid, refresh Ollama section if its 60s TTL expired
+            ollama_names = self._fetch_ollama_models_live()
+            if ollama_names:
+                _static_ollama = {
+                    mid: (desc, aliases)
+                    for mid, desc, aliases in self.WEE_MODELS.get("Wee Native (Ollama)", [])
+                }
+                ollama_entries = []
+                for name in ollama_names:
+                    oid = f"ollama/{name}"
+                    if oid in _static_ollama:
+                        desc, aliases = _static_ollama[oid]
+                    else:
+                        desc, aliases = f"Ollama {name} (local)", []
+                    ollama_entries.append((oid, desc, aliases))
+                self._env_wee_models["Wee Native (Ollama)"] = ollama_entries
             return self._static_models_to_dict(self._env_wee_models)
 
-        # Start with static Ollama models
+        # Build fresh result: live Ollama + static OpenRouter stubs as fallback
         result = {}
+
+        # Issue #124: Live Ollama discovery replaces hardcoded 3-model list
+        ollama_names = self._fetch_ollama_models_live()
+        if ollama_names:
+            # Build lookup from static WEE_MODELS to preserve curated descriptions
+            _static_ollama = {
+                mid: (desc, aliases)
+                for mid, desc, aliases in self.WEE_MODELS.get("Wee Native (Ollama)", [])
+            }
+            ollama_entries = []
+            for name in ollama_names:
+                oid = f"ollama/{name}"
+                if oid in _static_ollama:
+                    desc, aliases = _static_ollama[oid]
+                else:
+                    desc, aliases = f"Ollama {name} (local)", []
+                ollama_entries.append((oid, desc, aliases))
+            result["Wee Native (Ollama)"] = ollama_entries
+        else:
+            # Fall back to static Ollama entries if discovery fails
+            result["Wee Native (Ollama)"] = list(
+                self.WEE_MODELS.get("Wee Native (Ollama)", [])
+            )
+
+        # Copy static OpenRouter entries as initial values (overwritten below if live succeeds)
         for cat, entries in self.WEE_MODELS.items():
-            result[cat] = list(entries)
+            if "Ollama" not in cat:
+                result[cat] = list(entries)
 
         # Try live OpenRouter discovery
         try:
@@ -4041,10 +4116,13 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         except Exception as e:
             print(
-                "[wee] OpenRouter discovery failed, using static list: %s" % e,
+                "[wee] OpenRouter discovery failed: %s — using live Ollama + static OR list" % e,
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.WEE_MODELS)
+            # Return result with live Ollama (already populated) + static OpenRouter fallback
+            self._env_wee_models = result
+            self._openrouter_cache_ts = _time.time()
+            return self._static_models_to_dict(result)
 
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.

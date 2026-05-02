@@ -468,6 +468,25 @@ Added a custom robot leprechaun SVG icon for the wee runtime in the WebUI runtim
   - Backend API includes wee with icon field
 
 
+## [Issue #123, #124] Wee runtime tool calling + live Ollama discovery
+**Status:** Verified (Branch: issue/123-124, PR #127)
+
+### Summary
+Issue #123: Wee runtime tool call agentic loop verified working end-to-end.
+Issue #124: Replaced hardcoded 3-model Ollama list with live discovery from kubuntu.
+
+### Fixes
+- Added _fetch_ollama_models_live() with 60s TTL, queries /api/tags on kubuntu
+- Static descriptions from WEE_MODELS preserved; auto-generated for new models
+- Independent TTL caches: Ollama (60s) and OpenRouter (300s)
+- WEE_OLLAMA_HOST env var for configuring Ollama endpoint
+- /api/v1/models?runtime=wee returns 19 live models (was 3 hardcoded)
+
+### Verification
+- Tool calls: disk usage query via wee+gemma4:e4b returns real df output
+- /api/v1/models?runtime=wee: 19 Ollama models + OpenRouter groups
+- 19 new tests, 1250 total pass, 0 failures
+
 ## [Wee Runtime Fix] End-to-end Ollama + OpenRouter + Tool Calling
 **Status:** ✅ Verified (Branch: issue/wee-runtime-fix, PR #122)
 
