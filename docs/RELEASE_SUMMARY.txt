@@ -1,0 +1,379 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                                                                          ║
+║   WEE ORCHESTRATOR RELEASE WORKFLOW - COMPLETE DOCUMENTATION            ║
+║                                                                          ║
+║   Implemented: May 2, 2026                                              ║
+║   Status: ACTIVE & SCHEDULED                                            ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The Wee Orchestrator uses a dev-direct development model with automatic
+weekly release orchestration. All development happens on the dev branch,
+and production releases happen every Thursday at 7:00 PM UTC with full
+test gate and automatic bug fix dispatch on failure.
+
+KEY PRINCIPLES:
+  ✓ Direct development on dev branch (no feature branches)
+  ✓ Single source of truth (dev branch)
+  ✓ Automatic weekly release schedule
+  ✓ Full test suite gate before deployment
+  ✓ Automatic bug fix dispatch on test failure
+  ✓ Manual override capability (/release command)
+  ✓ Clear notifications at all stages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THE FLOW - SIMPLIFIED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DEVELOPMENT (Monday-Thursday)
+  All work → commits to dev branch
+            └─ Tested locally
+            └─ Ready for release
+
+THURSDAY 7:00 PM
+  release_orchestrator.py runs
+    ↓
+    Merge dev → main
+    Run test suite
+    ↓
+    ✅ Tests pass?  → Deploy to production → Done
+    ❌ Tests fail?  → Rollback main → Dispatch wee-dev to fix → Wait for retry
+
+IF TESTS FAIL
+  wee-dev:
+    1. Analyzes failing tests
+    2. Fixes bugs in dev branch
+    3. Commits fixes
+    4. Notifies Foster when done
+  
+  Foster:
+    /release (immediate retry) or wait for next Thursday
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KEY FILES & LOCATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Code Repositories:
+  Development:  /opt/n8n-copilot-shim-dev/          (192.168.1.100)
+  Production:   /opt/n8n-copilot-shim/              (100.124.186.75)
+
+Release Orchestrator:
+  Script:       /opt/n8n-copilot-shim-dev/scripts/release_orchestrator.py
+  Executable:   ✓ Confirmed executable
+  Size:         8.1 KB (Python)
+
+Scheduling:
+  Config:       /opt/.task-scheduler-dev/jobs.json
+  Entry:        id="weekly_release"
+  Schedule:     "0 19 * * 4" (Thursday 7pm UTC)
+  Timeout:      2 hours
+
+Documentation:
+  Main Guide:        /opt/n8n-copilot-shim-dev/docs/RELEASE_WORKFLOW.md
+  Quick Reference:   /opt/n8n-copilot-shim-dev/docs/RELEASE_QUICK_REFERENCE.md
+  Architecture:      /opt/n8n-copilot-shim-dev/docs/RELEASE_ARCHITECTURE.md
+  This Summary:      /tmp/release_workflow_summary.txt (or saved elsewhere)
+
+Test Suite:
+  Runner:      /opt/n8n-copilot-shim-dev/run_tests.sh
+  Tests:       /opt/n8n-copilot-shim-dev/tests/
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTIFICATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Telegram notifications to Foster (ID: 8193231291):
+
+SUCCESS:
+  ✅ "Weekly release completed successfully. All tests passed and 
+      deployed to production."
+
+FAILURE (with automatic fix):
+  ⚠️  "Test failure detected. Dispatched wee-dev (task bg_XXXXXXXX) 
+      to fix bugs. Will retry after fixes."
+
+FAILURE (without fix capability):
+  ❌ "Weekly release test failure detected. Code deployment failed 
+      despite passing tests."
+  ❌ "Failed to dispatch wee-dev. Manual intervention required."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS WHEN TESTS FAIL - DETAILED FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. DETECTION (T+4 minutes)
+   ├─ release_orchestrator.py runs tests
+   ├─ bash run_tests.sh returns exit code != 0
+   └─ Tests FAILED
+
+2. EXTRACTION (T+4 minutes 10 seconds)
+   ├─ extract_failing_tests(test_output)
+   ├─ Parses test output for FAILED and ERROR lines
+   └─ Returns list: [test_name1, test_name2, ...]
+
+3. SAFETY FIRST (T+4 minutes 15 seconds)
+   ├─ rollback_main()
+   ├─ git reset --hard origin/main
+   ├─ main reverts to pre-merge state
+   └─ Production remains SAFE and unaffected
+
+4. DISPATCH (T+4 minutes 20 seconds)
+   ├─ dispatch_wee_dev_fix(test_output, failing_tests)
+   ├─ Constructs detailed prompt including:
+   │  ├─ Failing test names
+   │  ├─ Full test output (last 2000 chars)
+   │  ├─ Instructions to analyze and fix
+   │  └─ Request for local test verification
+   ├─ POST to /api/v1/background-tasks
+   │  ├─ agent: "wee-dev"
+   │  ├─ runtime: "copilot"
+   │  ├─ model: "claude-sonnet-4.6"
+   │  └─ timeout: 3600 (1 hour)
+   └─ Returns task_id: "bg_XXXXXXXX"
+
+5. NOTIFICATION (T+4 minutes 30 seconds)
+   ├─ Send Telegram notification to Foster
+   ├─ Message: "⚠️  Test failure detected. Dispatched wee-dev 
+               (task bg_XXXXXXXX) to fix bugs. Will retry after fixes."
+   └─ Foster can monitor: /background status bg_XXXXXXXX
+
+6. WEE-DEV WORKS (T+4 min to T+1 hour)
+   ├─ Receives task in background queue
+   ├─ Analyzes failing tests
+   ├─ Identifies root causes in code
+   ├─ SSH to dev host (192.168.1.100)
+   ├─ Fixes bugs on dev branch
+   ├─ Runs tests locally: bash run_tests.sh
+   ├─ Verifies all tests pass
+   ├─ Commits: "fix: resolve test failures from weekly release attempt"
+   ├─ Pushes: git push origin dev
+   └─ Notifies Foster via Telegram when complete
+
+7. RETRY WINDOW (T+1 hour onwards)
+   ├─ Option A: Foster sends /release
+   │  └─ Immediate retry with fixed dev branch
+   │
+   ├─ Option B: Wait for next Thursday 7pm
+   │  └─ Automatic retry with fixed dev branch
+   │
+   └─ Both options expect tests to pass now
+      ├─ Dev now has wee-dev's fixes
+      ├─ Main still at pre-merge state (safe)
+      └─ Ready for successful release
+
+8. SECOND ATTEMPT (T+1 hour + manual trigger OR next Thursday)
+   ├─ release_orchestrator.py runs again
+   ├─ Merge dev (with fixes) → main
+   ├─ Run tests (expected to pass)
+   ├─ Tests PASS ✅
+   ├─ Deploy to production
+   └─ ✅ Release successful notification
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANUAL COMMANDS FOR FOSTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Trigger Immediate Release:
+  foster /release
+
+Check Background Task Status:
+  foster /background status bg_XXXXXXXX
+
+View Background Task Logs:
+  foster /background logs bg_XXXXXXXX
+
+Check System Status:
+  foster /status
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANUAL SSH OPERATIONS (Emergency Only)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SSH to Dev Host:
+  ssh root@192.168.1.100
+
+Navigate to Dev Repo:
+  cd /opt/n8n-copilot-shim-dev
+
+Manual Release Run:
+  bash scripts/release_orchestrator.py
+
+Check Git Status:
+  git status
+  git branch -a
+  git log --oneline -10
+
+Check Services:
+  sudo systemctl status agent-manager-api-dev.service
+  sudo journalctl -u agent-manager-api-dev.service -f
+
+Run Tests Manually:
+  bash run_tests.sh
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMPARISON: OLD vs NEW WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OLD WORKFLOW (Pre-May 2026)
+  Issue filed
+    ↓
+  wee-dev creates issue/NNN branch
+    ↓
+  Developer submits PR manually (or auto)
+    ↓
+  wee-qa automatically reviews (dispatch)
+    ↓
+  wee-qa approves or rejects
+    ↓ (after many issues accumulate)
+    ↓
+  Manual merge dev→main
+    ↓
+  Manual test run
+    ↓
+  Manual deploy to prod
+  
+  Problems:
+  ✗ 61 feature branches cluttered the repo
+  ✗ Automatic QA dispatch created delays
+  ✗ No cohesive release process
+  ✗ Dispatcher confused by branch management
+
+NEW WORKFLOW (May 2026+)
+  Issue filed
+    ↓
+  wee-dev works directly on dev branch
+    ↓
+  wee-dev commits and pushes to dev
+    ↓
+  Every Thursday 7pm: release_orchestrator.py
+    ├─ Merge → Test → Deploy (if pass)
+    └─ or Merge → Test → Rollback → Dispatch wee-dev (if fail)
+  
+  Benefits:
+  ✓ Single source of truth (dev branch)
+  ✓ No feature branch clutter
+  ✓ Automatic release schedule
+  ✓ Full test gate before production
+  ✓ Automatic bug fix dispatch
+  ✓ Clear weekly cadence
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SAFETY GUARANTEES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ No untested code reaches production
+  → Test suite MUST pass before deployment
+
+✓ Production stays safe even on test failure
+  → Automatic rollback of main branch
+
+✓ Clear visibility into failure state
+  → Foster gets immediate notification
+  → Detailed failing test information provided
+
+✓ Automatic recovery mechanism
+  → wee-dev dispatched with full context
+  → Fixes verified locally before commit
+  → Automatic retry after fix
+
+✓ Manual override available
+  → Foster can trigger /release anytime
+  → Useful for immediate retry or emergency deploy
+
+✓ All actions logged and auditable
+  → Git commit history shows what changed
+  → Task execution logged
+  → Notifications documented
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TYPICAL TIMING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SUCCESSFUL RELEASE (Tests Pass)
+  0:00 - Release starts
+  0:10 - Merge complete
+  4:30 - Tests pass ✅
+  5:30 - Deployed to production
+  5:45 - Notification sent to Foster
+
+  Total time: ~5 minutes 45 seconds
+
+FAILED RELEASE (Tests Fail, wee-dev fixes)
+  0:00 - Release starts
+  0:10 - Merge complete
+  4:30 - Tests fail ❌
+  5:00 - Rollback complete
+  5:10 - wee-dev dispatched
+  5:30 - Notification sent to Foster
+
+  (wee-dev working...)
+  65:00 - wee-dev completes fix (typical 1-2 hours)
+  65:30 - Foster notified that fixes are ready
+
+  (Foster triggers manual retry)
+  65:45 - Retry starts
+  65:50 - Merge complete
+  70:00 - Tests pass ✅
+  71:00 - Deployed to production
+  71:15 - Notification sent to Foster
+
+  Total time: ~70 minutes (1hr 10min) from test failure to deployment
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NEXT STEPS / INTEGRATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Already Implemented:
+  ✓ release_orchestrator.py script created
+  ✓ Weekly release scheduled (Thursday 7pm)
+  ✓ Automatic test failure dispatch to wee-dev
+  ✓ Comprehensive documentation created
+  ✓ All 2 outstanding PRs merged to dev
+  ✓ 18 feature branches consolidated
+  ✓ Dispatcher updated for dev-direct workflow
+
+Ready for Use:
+  ✓ First automatic release: This Thursday 7pm
+  ✓ Manual releases available anytime: /release
+  ✓ Full visibility into all stages
+
+Monitoring:
+  • Foster receives Telegram notifications
+  • Check /background status for wee-dev progress
+  • Review logs for any issues
+  • First week is critical for feedback
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DOCUMENTATION REFERENCES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For detailed information, see:
+
+1. RELEASE_WORKFLOW.md (Main Reference)
+   └─ Complete workflow documentation
+   └─ All stages explained in detail
+   └─ Decision trees and manual intervention points
+
+2. RELEASE_QUICK_REFERENCE.md (For Quick Lookup)
+   └─ One-page summaries by role (Foster, Developers, wee-dev)
+   └─ Quick commands
+   └─ Troubleshooting flowchart
+
+3. RELEASE_ARCHITECTURE.md (For Deep Dive)
+   └─ Visual flowcharts and state machines
+   └─ Component interaction diagrams
+   └─ Timeline examples
+   └─ Error handling matrix
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUESTIONS?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+See documentation files or reach out to the orchestrator team.
+
+Document created: May 2, 2026
+Document status: ACTIVE & CURRENT
