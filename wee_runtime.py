@@ -40,6 +40,124 @@ PROVIDER_PRESETS = {
     "lmstudio": (f"http://{_LMSTUDIO_HOST}:{_LMSTUDIO_PORT}/v1", "lm-studio"),
 }
 
+MAX_TOOL_ROUNDS = 10
+
+_WEE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a bash shell command and return its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute",
+                    }
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "python",
+            "description": "Execute Python 3 code and return the output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "The Python code to execute",
+                    }
+                },
+                "required": ["code"],
+            },
+        },
+    },
+]
+
+
+def execute_tool(func_name: str, func_args: dict) -> str:
+    """Execute a tool call in the wee standalone runtime.
+
+    Supports bash and python tools via subprocess.
+    """
+    import subprocess
+    try:
+        if func_name == "bash":
+            command = func_args.get("command", "")
+            if not command:
+                return "Error: No command provided"
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=120
+            )
+            output = result.stdout
+            if result.stderr:
+                output += ("\n" if output else "") + result.stderr
+            return output.strip() if output.strip() else f"exit code: {result.returncode}"
+        elif func_name == "python":
+            code = func_args.get("code", "")
+            if not code:
+                return "Error: No code provided"
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True, text=True, timeout=120
+            )
+            output = result.stdout
+            if result.stderr:
+                output += ("\n" if output else "") + result.stderr
+            return output.strip() if output.strip() else f"exit code: {result.returncode}"
+        else:
+            return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+    except subprocess.TimeoutExpired:
+        return f"Error: Tool '{func_name}' timed out"
+    except Exception as e:
+        return f"Error executing {func_name}: {e}"
+
+
+# Default free model config (used when wee_free_models.json is missing)
+_DEFAULT_FREE_CONFIG = {
+    "free_model_fallback_chain": [
+        "openrouter/free",
+        "openrouter/google/gemma-4-31b-it:free",
+        "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+        "openrouter/google/gemma-3-27b-it:free",
+        "openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+        "openrouter/openai/gpt-oss-120b:free",
+        "openrouter/google/gemma-3-12b-it:free",
+        "openrouter/meta-llama/llama-3.2-3b-instruct:free",
+        "openrouter/google/gemma-3-4b-it:free",
+    ],
+    "max_retries_per_model": 3,
+    "retry_backoff_seconds": [2, 5, 10],
+}
+
+
+def load_free_model_config(config_path: str = None) -> dict:
+    """Load wee_free_models.json; fall back to hardcoded defaults."""
+    if config_path is None:
+        config_path = Path(__file__).parent / "wee_free_models.json"
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+        # Merge with defaults to fill missing keys
+        result = dict(_DEFAULT_FREE_CONFIG)
+        result.update(data)
+        return result
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return dict(_DEFAULT_FREE_CONFIG)
+
+
+def is_free_openrouter_model(model: str) -> bool:
+    """Return True if model is an OpenRouter free model (ends with :free or is openrouter/free)."""
+    m = model.lower()
+    return m == "openrouter/free" or (m.startswith("openrouter/") and m.endswith(":free"))
+
 
 # ---------------------------------------------------------------------------
 # Model context window registry (Issue #273)

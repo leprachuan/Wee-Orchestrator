@@ -8396,6 +8396,17 @@ User Request:
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
 
+        # -- Issue #125: Free model 429 retry + fallback chain --
+        _free_cfg = self._wee_load_free_config()
+        _max_retries_429 = _free_cfg.get("max_retries_per_model", 3)
+        _backoff_429 = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
+        _is_free_model_req = self._wee_is_free_model(model)
+        if _is_free_model_req:
+            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
+            _attempt_chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
+        else:
+            _attempt_chain = [model]
+
         # -- Create OpenAI client and call API --
         import httpx as _httpx_wee
         client = OpenAI(
@@ -8429,6 +8440,44 @@ User Request:
         )
 
         # -- Tool definitions for agentic loop (Issue #107) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
+
+        # -- Tool definitions for agentic loop (Issue #123) --
         _WEE_TOOLS = [
             {
                 "type": "function",
@@ -8686,6 +8735,34 @@ User Request:
             return output
 
         except Exception as e:
+            _e_str = str(e)
+            _is_429 = "429" in _e_str or "rate limit" in _e_str.lower() or "429 exhausted" in _e_str
+            if _is_free_model_req and _is_429:
+                # Try next model in fallback chain
+                _cur_idx = _attempt_chain.index(model) if model in _attempt_chain else 0
+                for _fi, _fallback_model in enumerate(_attempt_chain):
+                    if _fallback_model.lower() == model.lower():
+                        _cur_idx = _fi
+                        break
+                if _cur_idx + 1 < len(_attempt_chain):
+                    _next_model = _attempt_chain[_cur_idx + 1]
+                    _fb_msg = f"\n⚠️ Still rate limited, falling back to {_next_model.split('/')[-1]}...\n"
+                    print(f"[Wee Native] {_fb_msg.strip()}", file=sys.stderr)
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": _fb_msg})
+                    # Recurse with next model (single fallback step)
+                    return self.run_wee_native(
+                        prompt=prompt, model=_next_model, agent=agent,
+                        session_id=session_id, resume=resume,
+                        n8n_session_id=n8n_session_id, timeout=timeout,
+                        render_type=render_type,
+                    )
+                else:
+                    _done_msg = "\n❌ All free model fallbacks exhausted. Please try again later or switch to a paid model."
+                    if stream_buffer:
+                        stream_buffer.push("done", _done_msg)
+                    return _done_msg
+
             error_msg = f"Error: Wee native runtime failed: {e}"
             print(f"[Wee Native] {error_msg}", file=sys.stderr)
 
