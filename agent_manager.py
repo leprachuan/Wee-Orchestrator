@@ -3088,6 +3088,14 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 bg_prompt_parts.append(word)
         bg_prompt = " ".join(bg_prompt_parts)
+        # Resolve runtime, model, permission_mode from dispatch_config
+        agent_config = self.AGENTS.get(bg_agent, {})
+        dispatch_config = agent_config.get("dispatch_config", {})
+        if not any(word.startswith("runtime=") for word in sub.split()):
+            bg_runtime = dispatch_config.get("runtime", bg_runtime)
+        if not any(word.startswith("model=") for word in sub.split()):
+            bg_model = dispatch_config.get("model", bg_model)
+        bg_permission_mode = dispatch_config.get("permission_mode", "restricted")
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -3099,11 +3107,19 @@ You can mention an agent in your prompt and it will auto-delegate:
         if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
             return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
 
-        bg_timeout = (
-            bg_timeout_override
-            if bg_timeout_override is not None
-            else get_bg_command_timeout()
-        )
+        # Priority: explicit timeout= > dispatch_config.timeout > default
+
+        if bg_timeout_override is not None:
+
+            bg_timeout = bg_timeout_override
+
+        else:
+
+            agent_config = self.AGENTS.get(bg_agent, {})
+
+            dispatch_config = agent_config.get("dispatch_config", {})
+
+            bg_timeout = dispatch_config.get("timeout", get_bg_command_timeout())
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
         self._bg_task_mgr.create_task(
@@ -3116,6 +3132,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             model=bg_model,
             prompt=bg_prompt,
             origin_session_id=n8n_session_id,
+            permission_mode=bg_permission_mode,
         )
         # Launch in background thread
         import concurrent.futures as _cf
@@ -3247,6 +3264,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "fallback_model": agent.get("fallback_model"),
                         "permission_mode": agent.get("permission_mode"),
                         "yolo": agent.get("yolo", False),
+                        "dispatch_config": agent.get("dispatch_config", {}),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3333,6 +3351,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "fallback_model": agent.get("fallback_model"),
                 "permission_mode": agent.get("permission_mode"),
                 "yolo": agent.get("yolo", False),
+                "dispatch_config": agent.get("dispatch_config", {}),
             }
 
         if not fresh and self.AGENTS:
@@ -6540,6 +6559,7 @@ User Request:
                                     "copilot-sdk",
                                     "claude-sdk",
                                     "wee",
+                                    "openai",
                                 ):
                                     # Copilot shows tool calls as "● Description" and shell cmds as "  $ cmd"
                                     import re as _re_tc
@@ -10535,7 +10555,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     )
     SCHEDULER_ENABLED = os.environ.get(
         "SCHEDULER_ENABLED", "true"
-    ).strip().lower() not in ("false", "0", "no")
+    ).strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
 
     # ---- shared instances ----
     auth_mgr = AuthManager(
@@ -13189,24 +13213,28 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 agent, session_mgr.AGENTS.get("orchestrator", {})
             ).get("path", os.getcwd())
 
-            def _build_bg_cmd(eff_runtime, eff_model):
+            def _build_bg_cmd(runtime, model):
                 """Build the CLI command list for the given runtime and model."""
-                if eff_runtime == "gemini":
+                # Ensure "openai" is treated as "wee"
+                if runtime in ("wee", "openai"):
+                    runtime = "wee"
+
+                if runtime == "gemini":
                     _gemini_bin = _which_bin("gemini") or "gemini"
                     _cmd = [_gemini_bin]
                     if permission_mode == "elevated":
                         _cmd.append("--yolo")
                     _cmd.extend(["-o", "stream-json", "-p", context_prompt])
-                    if eff_model:
-                        _cmd.extend(["--model", eff_model])
-                elif eff_runtime == "opencode":
+                    if model:
+                        _cmd.extend(["--model", model])
+                elif runtime == "opencode":
                     _oc_bin = (
                         str(session_mgr.opencode_bin)
                         if session_mgr.opencode_bin
                         else (_which_bin("opencode") or "opencode")
                     )
-                    _cmd = [_oc_bin, "run", "--model", eff_model, context_prompt]
-                elif eff_runtime == "codex":
+                    _cmd = [_oc_bin, "run", "--model", model, context_prompt]
+                elif runtime == "codex":
                     _codex_bin = _which_bin("codex") or "codex"
                     _cmd = [
                         _codex_bin,
@@ -13224,10 +13252,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         )
                     else:
                         _cmd.append("--full-auto")
-                    if eff_model:
-                        _cmd.extend(["-m", eff_model])
+                    if model:
+                        _cmd.extend(["-m", model])
                     _cmd.append(context_prompt)
-                elif eff_runtime == "claude":
+                elif runtime == "claude":
                     _claude_bin = (
                         session_mgr.claude_bin or _which_bin("claude") or "claude"
                     )
@@ -13243,11 +13271,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "stream-json",
                         "--verbose",
                         "--model",
-                        eff_model,
+                        model,
                         "--permission-mode",
                         _claude_perm,
                     ]
-                elif eff_runtime == "devin":
+                elif runtime == "devin":
                     _devin_bin = (
                         session_mgr.devin_bin
                         if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
@@ -13257,16 +13285,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "dangerous" if permission_mode == "elevated" else "auto"
                     )
                     _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
-                    if eff_model:
-                        _cmd.extend(["--model", eff_model])
+                    if model:
+                        _cmd.extend(["--model", model])
                     _cmd.extend(["--", context_prompt])
-                elif eff_runtime == "cursor":
+                elif runtime == "cursor":
                     _cursor_bin = (
                         session_mgr.cursor_bin
                         if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
                         else (_which_bin("agent") or "agent")
                     )
-                    _cursor_model = eff_model
+                    _cursor_model = model
                     if not _cursor_model or not session_mgr.get_model_from_name(
                         _cursor_model, "cursor"
                     ):
@@ -13277,7 +13305,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _cmd.extend(["--model", _cursor_model])
                     _cmd.extend(["--workspace", agent_dir])
                     _cmd.extend(["--", context_prompt])
-                elif eff_runtime in ("wee", "openai"):
+                elif runtime in ("wee", "openai"):
                     _wee_script = os.path.join(
                         os.path.dirname(os.path.abspath(__file__)),
                         "wee_runtime.py",
@@ -13286,7 +13314,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         sys.executable,
                         _wee_script,
                         "--model",
-                        eff_model,
+                        model,
                         "--timeout",
                         str(timeout or 300),
                     ]
@@ -13311,14 +13339,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         context_prompt,
                         "--no-color",
                         "--model",
-                        eff_model,
+                        model,
                         "--allow-all-tools",
                     ]
                     if permission_mode == "elevated":
                         _cmd.extend(["--allow-all-paths", "--yolo"])
                 return _cmd
 
-            cmd = _build_bg_cmd(runtime, model)
+            # Route "openai" to "wee" runtime (issue #295)
+            if runtime in ("wee", "openai"):
+                effective_runtime = "wee"
+            else:
+                effective_runtime = runtime
+
+            cmd = _build_bg_cmd(effective_runtime, model)
 
             proc_timeout = (timeout or 900) + 30
             env = {
@@ -13795,6 +13829,13 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # Check concurrent limit — queue instead of rejecting
         running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
+        dispatch_config = agent_config.get("dispatch_config", {})
+        if not body.runtime and dispatch_config.get("runtime"):
+            runtime = dispatch_config["runtime"]
+        if not body.model and dispatch_config.get("model"):
+            model = dispatch_config["model"]
+        if body.timeout is None and dispatch_config.get("timeout"):
+            bg_timeout = dispatch_config["timeout"]
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
@@ -13808,10 +13849,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             elif body.yolo is False:
                 # Explicit False overrides agent yolo:true
                 perm_mode = "restricted"
+            elif dispatch_config.get("yolo", False):
+                # Check dispatch_config.yolo next
+                perm_mode = "elevated"
             elif agent_config.get("yolo", False):
                 perm_mode = "elevated"
             else:
-                perm_mode = agent_config.get("permission_mode", "restricted")
+                perm_mode = dispatch_config.get(
+                    "permission_mode", agent_config.get("permission_mode", "restricted")
+                )
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
         if running >= max_concurrent:

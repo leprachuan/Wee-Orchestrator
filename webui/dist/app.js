@@ -6353,7 +6353,7 @@ if (document.readyState !== 'loading') {
     if (!agent.name) errs.push('Name is required');
     else if (!/^[a-z0-9_-]+$/.test(agent.name)) errs.push('Name must be lowercase with hyphens/underscores only');
     if (!agent.path) errs.push('Working path is required');
-    else if (!agent.path.startsWith('/')) errs.push('Working path must start with /');
+    else if (!agent.path.startsWith('/') && !agent.path.startsWith('~')) errs.push('Working path must start with / or ~');
     if (agent.max_concurrent !== undefined && agent.max_concurrent !== null) {
       if (!Number.isInteger(agent.max_concurrent) || agent.max_concurrent < 1) {
         errs.push('Max concurrent must be an integer ≥ 1');
