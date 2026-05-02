@@ -1681,3 +1681,51 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+# --- Added by wee-dev: resolve context window via model discovery ---
+def resolve_context_window(model: str, api_base: str = None) -> int:
+    """Resolve the context window size for a model by querying discovery APIs.
+
+    Attempts:
+    1. Resolve model and endpoint using wee_runtime.resolve_model_and_endpoint
+    2. Query WeeModelDiscovery.discover_all_enriched() for the resolved host and look
+       for a matching model entry with a numeric size field (Ollama returns this).
+    3. Fall back to wee_runtime.get_context_window() registry.
+    4. Final fallback to 4096 if all else fails.
+    """
+    try:
+        from wee_model_discovery import WeeModelDiscovery
+        from wee_runtime import get_context_window, resolve_model_and_endpoint
+    except Exception:
+        try:
+            from wee_runtime import get_context_window
+            return get_context_window(model)
+        except Exception:
+            return 4096
+
+    try:
+        resolved_model, resolved_base, _ = resolve_model_and_endpoint(model, api_base)
+        discovery = WeeModelDiscovery(ttl=300)
+        # If we have a resolved base, try an enriched discovery to get sizes
+        try:
+            enriched = discovery.discover_all_enriched(force=True)
+            for group, models in enriched.items():
+                for m in models:
+                    mid = m.get(id) or m.get(name)
+                    if not mid:
+                        continue
+                    # Match by substring both ways to be robust
+                    if resolved_model and (resolved_model in mid or mid in resolved_model):
+                        size = m.get(size)
+                        if isinstance(size, int) and size > 0:
+                            return int(size)
+        except Exception:
+            pass
+
+        # No discovered size — fall back to registry
+        return get_context_window(model)
+    except Exception:
+        try:
+            return get_context_window(model)
+        except Exception:
+            return 4096
