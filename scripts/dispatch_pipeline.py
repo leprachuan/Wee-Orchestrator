@@ -544,7 +544,7 @@ def run_pipeline(items: list[dict], state: dict) -> None:
                 except Exception as exc:
                     log(f"ERROR: Failed to re-dispatch wee-dev: {exc}")
 
-    elif qa_failed:
+    if not wee_dev_dispatched and qa_failed:
         item = qa_failed[0]
         log(f"QA-failed: re-dispatching wee-dev for {item['id']}")
         current_label = "wee-dev:qa-failed"
@@ -567,7 +567,7 @@ def run_pipeline(items: list[dict], state: dict) -> None:
                 "⚠️ Dispatcher failed to re-dispatch wee-dev; reverted to qa-failed.",
             )
 
-    elif queued:
+    if not wee_dev_dispatched and queued:
         # Pick next queued issue (FIFO, safety gate)
         for candidate in queued:
             if not passes_safety_gate(candidate):
