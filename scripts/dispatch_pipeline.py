@@ -557,11 +557,27 @@ def run_pipeline(items: list[dict], state: dict) -> None:
     in_progress = [i for i in items if i["status"] == "in-progress"]
     qa_failed = [i for i in items if i["status"] == "qa-failed"]
     queued = [i for i in items if i["status"] == "queued"]
+    approved = [i for i in items if i["status"] == "approved"]
 
 
     wee_dev_dispatched = False
 
-    if in_progress:
+    # Priority: Approved items first (merge and close)
+    if approved:
+        item = approved[0]
+        log(f"Dispatching wee-dev to merge+close approved {item['id']}: {item['title']}")
+        transition(item["number"], "wee-dev:approved", "wee-dev:in-progress",
+                   f"✅ QA approved; wee-dev merging PR and closing issue ({now_iso()}).")
+        try:
+            dispatch_wee_dev(item, state)
+            wee_dev_dispatched = True
+        except Exception as exc:
+            log(f"ERROR: Failed to dispatch wee-dev to merge approved: {exc}")
+            # Roll back label
+            transition(item["number"], "wee-dev:in-progress", "wee-dev:approved",
+                       "⚠️ Dispatcher failed to dispatch merge; reverted to approved.")
+
+    elif in_progress:
         item = in_progress[0]
         issue_state = get_issue_state(state, item["number"])
         task_id = issue_state.get("wee_dev_task_id")
