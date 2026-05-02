@@ -3233,6 +3233,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "fallback_model": agent.get("fallback_model"),
                         "permission_mode": agent.get("permission_mode"),
                         "yolo": agent.get("yolo", False),
+                        "dispatch_config": agent.get("dispatch_config", {}),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3289,6 +3290,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "fallback_model": agent.get("fallback_model"),
                 "permission_mode": agent.get("permission_mode"),
                 "yolo": agent.get("yolo", False),
+                        "dispatch_config": agent.get("dispatch_config", {}),
             }
 
         if not fresh and self.AGENTS:
