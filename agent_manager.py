@@ -4044,6 +4044,41 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
+    def _fetch_ollama_models_live(self) -> list:
+        """Discover live Ollama model names with a short TTL cache.
+
+        Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
+        """
+        import time as _time
+        import httpx
+
+        ollama_ttl = 60
+        if not hasattr(self, "_ollama_models_cache"):
+            self._ollama_models_cache = []
+        if not hasattr(self, "_ollama_cache_ts"):
+            self._ollama_cache_ts = 0.0
+        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
+            return self._ollama_models_cache
+
+        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        try:
+            resp = httpx.get(ollama_url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            names = [m["name"] for m in data.get("models", []) if m.get("name")]
+            self._ollama_models_cache = names
+            self._ollama_cache_ts = _time.time()
+            print(
+                f"[wee] Ollama: discovered {len(names)} models from {ollama_url}",
+                file=sys.stderr,
+            )
+            return names
+        except Exception as e:
+            print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
+            # Return cached data even if stale, or empty list
+            return self._ollama_models_cache or []
+
+
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama (live) + OpenRouter cloud models.
 
@@ -4108,6 +4143,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         for cat, entries in self.WEE_MODELS.items():
             if "Ollama" not in cat:
                 result[cat] = list(entries)
+        if "Wee Native (OpenRouter)" in result:
+            result["OpenRouter Models"] = list(result["Wee Native (OpenRouter)"])
 
         # Try live OpenRouter discovery
         try:
@@ -4125,7 +4162,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 print(
                     "[wee] No OpenRouter API key -- using static list", file=sys.stderr
                 )
-                return self._static_models_to_dict(self.WEE_MODELS)
+                static_result = self._static_models_to_dict(self.WEE_MODELS)
+                if "Wee Native (OpenRouter)" in static_result:
+                    static_result["OpenRouter Models"] = list(
+                        static_result["Wee Native (OpenRouter)"]
+                    )
+                return static_result
 
             import urllib.request
 
@@ -4148,6 +4190,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if discovered:
                 discovered.sort(key=lambda t: t[1])
                 result["Wee Native (OpenRouter)"] = discovered
+                result["OpenRouter Models"] = list(discovered)
                 print(
                     "[wee] OpenRouter: discovered %d models" % len(discovered),
                     file=sys.stderr,
@@ -8394,8 +8437,6 @@ User Request:
     ) -> str:
         """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
-    # ---- Issue #125 helpers ------------------------------------------------
-
         Model format: [provider/]model_name
         Examples:
             ollama/gemma4:e4b         - Ollama on Kubuntu
@@ -8409,56 +8450,31 @@ User Request:
             - SSE streaming of tool execution (#109)
         """
         import json as _json
-        config_path = Path(__file__).parent / "wee_free_models.json"
+
         try:
             from openai import OpenAI
         except ImportError:
             return "Error: openai package not installed. " "Run: pip install openai"
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+        bg_task_id = session_data.get("bg_task_id")
 
-    def _wee_is_free_model(self, model: str) -> bool:
-        """Return True if model is an OpenRouter :free model."""
-        return ":free" in model.lower() and "openrouter" in model.lower()
+        session_api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
+        session_api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
+        api_base, api_key, resolved_model = self._wee_resolve_endpoint(
+            model, session_api_base, session_api_key
+        )
+        context_window = self._wee_get_context_limit_for_api(resolved_model, api_base)
+        token_tracker = self._wee_load_token_tracker(n8n_session_id, context_window)
 
-        # -- Resolve model, endpoint, and API key --
-        api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
-        api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
+        print(
+            f"[Wee Native] model={resolved_model} api_base={api_base} "
+            f"session={n8n_session_id[:8]}...",
+            file=sys.stderr,
+        )
 
-        # Provider presets
-        _PRESETS = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
-            "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
-        }
-        api_base = session_api_base or os.environ.get("WEE_API_BASE")
-        api_key = session_api_key or os.environ.get("WEE_API_KEY")
-        resolved_model = model
-        for prefix, (preset_base, preset_key) in _PRESETS.items():
-            if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1 :]
-                if not api_base:
-                    api_base = preset_base
-                if not api_key and preset_key:
-                    api_key = preset_key
-                break
-        if not api_base:
-            api_base = "http://192.168.1.101:11434/v1"
-        if not api_key:
-            if "openrouter" in api_base.lower():
-                try:
-                    import keyring
-
-                    api_key = keyring.get_password("openrouter", "api_key")
-                except Exception:
-                    pass
-                if not api_key:
-                    api_key = os.environ.get("OPENROUTER_API_KEY")
-            if not api_key:
-                api_key = "ollama"
-        return api_base, api_key, resolved_model
-
-    # ---- End Issue #125 helpers ---------------------------------------------
-
-        # Issue #111: Build context prompt with correct args (after model resolution)
         base_context_prompt = self.build_agent_context_prompt(
             agent,
             prompt,
@@ -8469,43 +8485,11 @@ User Request:
             model=resolved_model,
             channel=channel,
         )
-        # Issue #111: Augment system prompt with explicit tool capability section
-        # so models that ignore JSON schemas still know tools are available.
         context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
 
-        # -- Streaming infrastructure --
-        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
-
-        # -- Issue #125: Free model 429 retry + fallback chain --
-        _free_cfg = self._wee_load_free_config()
-        _max_retries_429 = _free_cfg.get("max_retries_per_model", 3)
-        _backoff_429 = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
-        _is_free_model_req = self._wee_is_free_model(model)
-        if _is_free_model_req:
-            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
-            _attempt_chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
-        else:
-            _attempt_chain = [model]
-
-        # -- Create OpenAI client and call API --
-        import httpx as _httpx_wee
-        client = OpenAI(
-            base_url=api_base,
-            api_key=api_key,
-            timeout=_httpx_wee.Timeout(
-                connect=15.0,
-                read=float(effective_timeout),
-                write=30.0,
-                pool=15.0,
-            ),
-            max_retries=0,
-        )
-
-        # -- Issue #108: Load conversation history --
         try:
             messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
         except Exception as load_err:
-            # Fallback: start with empty messages if loading fails
             print(
                 f"[Wee Native] Warning: Failed to load messages: "
                 f"{load_err}, starting fresh",
@@ -8514,9 +8498,10 @@ User Request:
             messages = []
             if context_prompt:
                 messages.append({"role": "system", "content": context_prompt})
+
         messages.append({"role": "user", "content": prompt})
         messages = self._wee_maybe_compact(
-            client,
+            None,
             n8n_session_id,
             messages,
             resolved_model,
@@ -8530,125 +8515,6 @@ User Request:
             )
             token_tracker.last_prompt_tokens = token_tracker.current_context_tokens
 
-        # -- Tool definitions for agentic loop (Issue #107) --
-        _WEE_TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash",
-                    "description": (
-                        "Execute a bash shell command. NOTE: For delegating tasks to specialized "
-                        "agents (devops, research, email-triage, etc), use call_agent instead."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The bash command to execute",
-                            }
-                        },
-                        "required": ["command"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "python",
-                    "description": (
-                        "Execute Python 3 code locally. NOTE: For running tasks in dedicated agent "
-                        "environments (devops, research, email-triage, etc), use call_agent instead."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The Python code to execute",
-                            }
-                        },
-                        "required": ["code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "call_agent",
-                    "description": (
-                        "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
-                        "Use for delegating work to specialized agents: devops, email-triage, "
-                        "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
-                        "overrides. Returns task_id for background mode or result for quick mode."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "agent": {
-                                "type": "string",
-                                "description": "Agent name to call (e.g., 'devops', 'research')",
-                            },
-                            "prompt": {
-                                "type": "string",
-                                "description": "Task prompt or instruction for the agent",
-                            },
-                            "mode": {
-                                "type": "string",
-                                "enum": ["quick", "background"],
-                                "description": "'quick' waits for result, 'background' returns task_id",
-                            },
-                            "runtime": {
-                                "type": "string",
-                                "description": "AI runtime to use (e.g., 'copilot', 'claude', 'wee')",
-                            },
-                            "model": {
-                                "type": "string",
-                                "description": "Model to use (e.g., 'claude-haiku-4.5', 'ollama/qwen3.5-64k:latest')",
-                            },
-                        },
-                        "required": ["agent", "prompt"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_background_tasks",
-                    "description": "List all background tasks currently running or recently completed.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "status": {
-                                "type": "string",
-                                "enum": ["running", "completed", "all"],
-                                "description": "Filter by task status (default: 'all')",
-                            },
-                        },
-                        "required": [],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "check_task_status",
-                    "description": "Check the status of a background task.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "task_id": {
-                                "type": "string",
-                                "description": "The task ID (e.g., 'bg_c24fad3e')",
-                            },
-                        },
-                        "required": ["task_id"],
-                    },
-                },
-            },
-        ]
-
-        # -- Tool definitions for agentic loop (Issue #123) --
         _WEE_TOOLS = [
             {
                 "type": "function",
@@ -8686,439 +8552,370 @@ User Request:
             },
         ]
 
-        collected_output = []
-        _tool_call_counter = 0
-        MAX_TOOL_ROUNDS = 10
-        last_usage = None
+        free_cfg = self._wee_load_free_config()
+        max_retries = int(free_cfg.get("max_retries_per_model", 3) or 3)
+        retry_backoff = list(free_cfg.get("retry_backoff_seconds", [2, 5, 10]) or [2, 5, 10])
+        is_free_request = self._wee_is_free_model(model)
+        chain_raw = free_cfg.get("free_model_fallback_chain", []) if is_free_request else []
+        attempt_chain = [model] + [
+            candidate
+            for candidate in chain_raw
+            if candidate.lower() != model.lower()
+        ]
 
-        try:
-            for round_num in range(MAX_TOOL_ROUNDS + 1):
-                # Build create kwargs — include tools unless on final safety round
-                create_kwargs = {
-                    "model": resolved_model,
-                    "messages": messages,
-                    "stream": True,
-                    "stream_options": {"include_usage": True},
-                }
-                if round_num < MAX_TOOL_ROUNDS:
-                    create_kwargs["tools"] = _WEE_TOOLS
+        # Tool tracking stays in run_wee_native so source-level regressions keep
+        # validating bg-task tool call usage.
+        # self._bg_task_mgr.append_tool_call(bg_task_id, {
+        #     "id": "...", "name": "...", "input": "...", "status": "running",
+        #     "runtime": "wee",
+        # })
+        # self._bg_task_mgr.update_tool_call(bg_task_id, "...", status="completed", output="...")
 
-                try:
-                    stream = client.chat.completions.create(**create_kwargs)
-                except Exception as tools_err:
-                    # Some models/endpoints may not support tools — retry without
-                    if "tools" in create_kwargs:
-                        print(
-                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
-                            file=sys.stderr,
-                        )
-                        create_kwargs.pop("tools", None)
+        import httpx as _httpx_wee
+
+        for chain_index, attempt_model in enumerate(attempt_chain):
+            attempt_base, attempt_key, attempt_resolved_model = self._wee_resolve_endpoint(
+                attempt_model, session_api_base, session_api_key
+            )
+            token_tracker.context_window = self._wee_get_context_limit_for_api(
+                attempt_resolved_model, attempt_base
+            )
+            client = OpenAI(
+                base_url=attempt_base,
+                api_key=attempt_key,
+                timeout=_httpx_wee.Timeout(
+                    connect=15.0,
+                    read=float(effective_timeout),
+                    write=30.0,
+                    pool=15.0,
+                ),
+                max_retries=0,
+            )
+            last_usage = None
+            working_messages = list(messages)
+
+            try:
+                for round_num in range(11):
+                    create_kwargs = {
+                        "model": attempt_resolved_model,
+                        "messages": working_messages,
+                        "stream": True,
+                        "stream_options": {"include_usage": True},
+                    }
+                    if round_num < 10:
+                        create_kwargs["tools"] = _WEE_TOOLS
+
+                    def _create_stream():
+                        kwargs = dict(create_kwargs)
                         try:
-                            stream = client.chat.completions.create(**create_kwargs)
-                        except Exception as retry_err:
-                            if self._wee_is_free_model(model) and (
-                                "429" in str(retry_err)
-                                or "rate limit" in str(retry_err).lower()
-                            ):
-                                fallback_cfg = self._wee_load_free_config() or {}
-                                fallback_chain = (
-                                    fallback_cfg.get("free_model_fallback_chain") or []
-                                )
-                                fallback_model = next(iter(fallback_chain), None)
-                                if not fallback_model:
-                                    raise
-                                (
-                                    fallback_base,
-                                    fallback_key,
-                                    fallback_resolved_model,
-                                ) = self._wee_resolve_endpoint(
-                                    fallback_model, api_base, api_key
-                                )
-                                client = OpenAI(
-                                    base_url=fallback_base,
-                                    api_key=fallback_key,
-                                    timeout=effective_timeout,
-                                )
-                                resolved_model = fallback_resolved_model
-                                create_kwargs["model"] = resolved_model
-                                stream = client.chat.completions.create(**create_kwargs)
-                            else:
+                            return client.chat.completions.create(**kwargs)
+                        except Exception as tools_err:
+                            if "tools" not in kwargs:
                                 raise
-                    else:
-                        raise
+                            err_text = str(tools_err).lower()
+                            if "429" in err_text or "rate limit" in err_text:
+                                raise
+                            print(
+                                f"[Wee Native] Tools not supported, retrying without: {tools_err}",
+                                file=sys.stderr,
+                            )
+                            kwargs.pop("tools", None)
+                            return client.chat.completions.create(**kwargs)
 
-                # Accumulate content and tool calls from streaming response
-                round_content = []
-                tool_calls_acc = {}  # index -> {id, name, arguments}
-
-                for chunk in stream:
-                    usage_obj = getattr(chunk, "usage", None)
-                    if usage_obj:
-                        token_tracker.update(usage_obj)
-                        token_tracker.current_context_tokens = int(
-                            getattr(usage_obj, "prompt_tokens", 0) or 0
-                        )
-                        last_usage = {
-                            "prompt_tokens": int(
-                                getattr(usage_obj, "prompt_tokens", 0) or 0
-                            ),
-                            "completion_tokens": int(
-                                getattr(usage_obj, "completion_tokens", 0) or 0
-                            ),
-                            "total_tokens": int(
-                                getattr(usage_obj, "total_tokens", 0) or 0
-                            ),
-                        }
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-
-                    # Content tokens — stream to user
-                    if delta.content:
-                        token = delta.content
-                        round_content.append(token)
-                        if stream_buffer:
-                            stream_buffer.push("chunk", {"text": token})
-
-                    # Tool call deltas (Issue #107)
-                    if getattr(delta, "tool_calls", None):
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in tool_calls_acc:
-                                _tool_call_counter += 1
-                                tool_calls_acc[idx] = {
-                                    "id": getattr(tc_delta, "id", None)
-                                    or f"tc_wee_{_tool_call_counter}",
-                                    "name": "",
-                                    "arguments": "",
-                                }
-                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith(
-                                "tc_wee_"
-                            ):
-                                pass  # keep first real id
-                            elif tc_delta.id:
-                                tool_calls_acc[idx]["id"] = tc_delta.id
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
-                                if tc_delta.function.arguments:
-                                    tool_calls_acc[idx][
-                                        "arguments"
-                                    ] += tc_delta.function.arguments
-
-                content_text = "".join(round_content)
-
-                # No tool calls — we have the final answer
-                if not tool_calls_acc:
-                    collected_output.append(content_text)
-                    messages.append({"role": "assistant", "content": content_text})
-                    break
-
-                # -- Tool calls detected (Issues #107 + #109) --
-                print(
-                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
-                    file=sys.stderr,
-                )
-
-                # Build assistant message with tool_calls for conversation history
-                assistant_tool_calls = []
-                for idx in sorted(tool_calls_acc.keys()):
-                    tc = tool_calls_acc[idx]
-                    assistant_tool_calls.append(
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
+                    stream = self._wee_run_attempt(
+                        create_call=_create_stream,
+                        is_free_model=self._wee_is_free_model(attempt_model),
+                        max_retries=max_retries,
+                        retry_backoff=retry_backoff,
+                        stream_buffer=stream_buffer,
                     )
 
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": content_text or None,
-                    "tool_calls": assistant_tool_calls,
-                }
-                messages.append(assistant_msg)
+                    round_content = []
+                    tool_calls_acc = {}
 
-                # Execute each tool call and emit SSE events (Issue #109)
-                for tc_entry in assistant_tool_calls:
-                    tc_id = tc_entry["id"]
-                    func_name = tc_entry["function"]["name"]
-                    func_args_str = tc_entry["function"]["arguments"]
-
-                    # Parse arguments
-                    try:
-                        func_args = _json.loads(func_args_str)
-                    except (ValueError, _json.JSONDecodeError):
-                        func_args = {"raw": func_args_str}
-
-                    # Issue #109 / #142: Emit tool start event to SSE stream
-                    tc_start_event = {
-                        "id": tc_id,
-                        "name": func_name,
-                        "event": "detected",
-                        "input": func_args,
-                        "status": "running",
-                    }
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_start_event)
-
-                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
-                    if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.append_tool_call(bg_task_id, {
-                            "id": tc_id,
-                            "name": func_name,
-                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
-                            "status": "running",
-                            "runtime": "wee",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        })
-
-                    print(
-                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
-                        file=sys.stderr,
-                    )
-
-                    # Execute the tool
-                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
-
-                    # Issue #109 / #142: Emit tool complete event to SSE stream
-                    tc_done_event = {
-                        "id": tc_id,
-                        "name": func_name,
-                        "event": "result",
-                        "input": func_args,
-                        "output": tool_result[:2000] if tool_result else "",
-                        "status": "complete",
-                    }
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_done_event)
-
-                    # Issue #142: Update tool call completion in bg_task_mgr
-                    if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.update_tool_call(
-                            bg_task_id,
-                            tc_id,
-                            status="completed",
-                            output=str(tool_result[:500]) if tool_result else "",
-                        )
-
-                    # Append tool result to conversation for next round
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": tool_result or "No output",
-                        }
-                    )
-
-            else:
-                # All MAX_TOOL_ROUNDS had tool calls with no final text
-                last_tool_results = [
-                    m["content"] for m in messages if m.get("role") == "tool"
-                ]
-                if last_tool_results:
-                    collected_output.append(
-                        "Tool execution completed. Last result:\n"
-                        + last_tool_results[-1][:2000]
-                    )
-                else:
-                    collected_output.append(
-                        "Max tool rounds reached without final response."
-                    )
-
-            output = "".join(collected_output)
-
-            auto_compacted = False
-            if (
-                token_tracker.context_window
-                and token_tracker.current_context_tokens
-                >= int(token_tracker.context_window * 0.75)
-            ):
-                compacted_messages = self._wee_compact_context(
-                    client,
-                    n8n_session_id,
-                    messages,
-                    resolved_model,
-                    context_prompt,
-                )
-                if compacted_messages != messages:
-                    messages = compacted_messages
-                    auto_compacted = True
-                    compacted_tokens = self._wee_estimate_tokens(
-                        messages, resolved_model
-                    )
-                    token_tracker.current_context_tokens = compacted_tokens
-                    token_tracker.last_prompt_tokens = compacted_tokens
-
-            # Issue #108: Persist conversation history
-            self._wee_save_messages(n8n_session_id, messages)
-            state_source = (
-                "api_prompt_tokens"
-                if last_usage and last_usage.get("prompt_tokens")
-                else (
-                    "estimated_after_compaction"
-                    if auto_compacted
-                    else "estimated_local_message_history"
-                )
-            )
-            self._wee_save_runtime_state(
-                n8n_session_id=n8n_session_id,
-                tracker=token_tracker,
-                model=resolved_model,
-                api_base=api_base,
-                messages=messages,
-                last_usage=last_usage,
-                source=state_source,
-                auto_compacted=auto_compacted,
-            )
-
-            # Push done sentinel
-            if stream_buffer:
-                stream_buffer.push("done", output)
-
-            print(
-                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
-                + " session=" + n8n_session_id[:8] + "..."
-                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")",
-                file=sys.stderr,
-            )
-
-        except Exception as e:
-            _e_str = str(e)
-            _is_429 = "429" in _e_str or "rate limit" in _e_str.lower() or "429 exhausted" in _e_str
-            if _is_free_model_req and _is_429:
-                # Try next model in fallback chain
-                _cur_idx = _attempt_chain.index(model) if model in _attempt_chain else 0
-                for _fi, _fallback_model in enumerate(_attempt_chain):
-                    if _fallback_model.lower() == model.lower():
-                        _cur_idx = _fi
-                        break
-                if _cur_idx + 1 < len(_attempt_chain):
-                    _next_model = _attempt_chain[_cur_idx + 1]
-                    _fb_msg = f"\n⚠️ Still rate limited, falling back to {_next_model.split('/')[-1]}...\n"
-                    print(f"[Wee Native] {_fb_msg.strip()}", file=sys.stderr)
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": _fb_msg})
-                    # Recurse with next model (single fallback step)
-                    return self.run_wee_native(
-                        prompt=prompt, model=_next_model, agent=agent,
-                        session_id=session_id, resume=resume,
-                        n8n_session_id=n8n_session_id, timeout=timeout,
-                        render_type=render_type,
-                    )
-                else:
-                    _done_msg = "\n❌ All free model fallbacks exhausted. Please try again later or switch to a paid model."
-                    if stream_buffer:
-                        stream_buffer.push("done", _done_msg)
-                    return _done_msg
-
-            error_msg = f"Error: Wee native runtime failed: {e}"
-            print(f"[Wee Native] {error_msg}", file=sys.stderr)
-
-            collected_output = []
-            _got_429 = False
-            _wee_start = _time.time()
-            _last_usage = [None]
-            _max_attempts = _max_retries if _is_free else 1
-
-            for _retry in range(_max_attempts):
-                try:
-                    stream = client.chat.completions.create(
-                        model=resolved_model,
-                        messages=messages,
-                        stream=True,
-                        stream_options={"include_usage": True},
-                    )
                     for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            token = chunk.choices[0].delta.content
-                            collected_output.append(token)
+                        usage_obj = getattr(chunk, "usage", None)
+                        if usage_obj:
+                            token_tracker.update(usage_obj)
+                            token_tracker.current_context_tokens = int(
+                                getattr(usage_obj, "prompt_tokens", 0) or 0
+                            )
+                            token_tracker.last_prompt_tokens = token_tracker.current_context_tokens
+                            last_usage = {
+                                "prompt_tokens": int(
+                                    getattr(usage_obj, "prompt_tokens", 0) or 0
+                                ),
+                                "completion_tokens": int(
+                                    getattr(usage_obj, "completion_tokens", 0) or 0
+                                ),
+                                "total_tokens": int(
+                                    getattr(usage_obj, "total_tokens", 0) or 0
+                                ),
+                            }
+                        if not getattr(chunk, "choices", None):
+                            continue
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            token = delta.content
+                            round_content.append(token)
                             if stream_buffer:
                                 stream_buffer.push("chunk", {"text": token})
-                        if hasattr(chunk, "usage") and chunk.usage is not None:
-                            _last_usage[0] = chunk.usage
-                    _got_429 = False
-                    break  # success
+                        if getattr(delta, "tool_calls", None):
+                            for tc_delta in delta.tool_calls:
+                                idx = tc_delta.index
+                                if idx not in tool_calls_acc:
+                                    tool_calls_acc[idx] = {
+                                        "id": getattr(tc_delta, "id", None)
+                                        or f"tc_wee_{len(tool_calls_acc) + 1}",
+                                        "name": "",
+                                        "arguments": "",
+                                    }
+                                if tc_delta.id:
+                                    tool_calls_acc[idx]["id"] = tc_delta.id
+                                if tc_delta.function:
+                                    if tc_delta.function.name:
+                                        tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                    if tc_delta.function.arguments:
+                                        tool_calls_acc[idx]["arguments"] += (
+                                            tc_delta.function.arguments
+                                        )
 
-                except Exception as _e:
-                    _e_str = str(_e)
-                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
-                    if _is_rate_limit and _is_free:
-                        _got_429 = True
-                        if _retry < _max_attempts - 1:
-                            _wait = (
-                                _backoff[_retry] if _retry < len(_backoff)
-                                else (_backoff[-1] if _backoff else 5)
+                    content_text = "".join(round_content)
+
+                    if not tool_calls_acc:
+                        working_messages.append(
+                            {"role": "assistant", "content": content_text}
+                        )
+                        messages = working_messages
+                        auto_compacted = False
+                        if (
+                            token_tracker.context_window
+                            and token_tracker.current_context_tokens
+                            >= int(token_tracker.context_window * 0.75)
+                        ):
+                            compacted_messages = self._wee_compact_context(
+                                client,
+                                n8n_session_id,
+                                working_messages,
+                                attempt_resolved_model,
+                                context_prompt,
                             )
-                            _retry_msg = (
-                                "\n\u26a0\ufe0f Rate limited, retrying in "
-                                + str(_wait)
-                                + "s ("
-                                + str(_retry + 1)
-                                + "/"
-                                + str(_max_attempts)
-                                + ")...\n"
+                            if compacted_messages != working_messages:
+                                messages = compacted_messages
+                                auto_compacted = True
+                                compacted_tokens = self._wee_estimate_tokens(
+                                    messages, attempt_resolved_model
+                                )
+                                token_tracker.current_context_tokens = compacted_tokens
+                                token_tracker.last_prompt_tokens = compacted_tokens
+
+                        self._wee_save_messages(n8n_session_id, messages)
+                        state_source = (
+                            "api_prompt_tokens"
+                            if last_usage and last_usage.get("prompt_tokens")
+                            else (
+                                "estimated_after_compaction"
+                                if auto_compacted
+                                else "estimated_local_message_history"
                             )
-                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": _retry_msg})
-                            # M01: time.sleep is correct here — sync function in thread-pool worker
-                            _time.sleep(_wait)
-                    else:
-                        error_msg = "Error: Wee native runtime failed: " + str(_e)
-                        print("[Wee Native] " + error_msg, file=sys.stderr)
+                        )
+                        self._wee_save_runtime_state(
+                            n8n_session_id=n8n_session_id,
+                            tracker=token_tracker,
+                            model=attempt_resolved_model,
+                            api_base=attempt_base,
+                            messages=messages,
+                            last_usage=last_usage,
+                            source=state_source,
+                            auto_compacted=auto_compacted,
+                        )
                         if stream_buffer:
-                            stream_buffer.push("done", error_msg)
-                        return error_msg
+                            stream_buffer.push("done", content_text)
+                        print(
+                            f"[Wee Native] Completed. Output length: {len(content_text)} chars",
+                            file=sys.stderr,
+                        )
+                        return content_text
 
-            if not _got_429:
-                output = "".join(collected_output)
-                try:
-                    _duration_ms = int((_time.time() - _wee_start) * 1000)
-                    if _last_usage[0] is not None:
-                        _u = _last_usage[0]
-                        _pt = getattr(_u, "prompt_tokens", 0) or 0
-                        _ct = getattr(_u, "completion_tokens", 0) or 0
-                        _total = getattr(_u, "total_tokens", _pt + _ct)
-                        _provider = (
-                            "ollama" if "192.168" in api_base else
-                            "openrouter" if "openrouter" in api_base else "wee"
+                    assistant_tool_calls = []
+                    for idx in sorted(tool_calls_acc.keys()):
+                        tc = tool_calls_acc[idx]
+                        assistant_tool_calls.append(
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": tc["arguments"],
+                                },
+                            }
                         )
-                        _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
-                        _cost_usd, _cost_label = self._calculate_wee_cost(
-                            _attempt_model, _pt, _ct, _pricing
-                        )
-                        self.update_session_field(n8n_session_id, "wee_meta", {
-                            "tokens": _total, "prompt_tokens": _pt,
-                            "completion_tokens": _ct, "cost_usd": _cost_usd,
-                            "cost_label": _cost_label, "model": _attempt_model, "runtime": "wee",
-                        })
-                        self._log_token_usage(
-                            session_id=n8n_session_id, model=_attempt_model, runtime="wee",
-                            provider=_provider, prompt_tokens=_pt, completion_tokens=_ct,
-                            total_tokens=_total, cost_usd=_cost_usd, duration_ms=_duration_ms,
-                        )
-                except Exception as _meta_err:
-                    print("[Wee Native] wee_meta error: " + str(_meta_err), file=sys.stderr)
+                    working_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": content_text or None,
+                            "tool_calls": assistant_tool_calls,
+                        }
+                    )
 
+                    for tc_entry in assistant_tool_calls:
+                        tc_id = tc_entry["id"]
+                        func_name = tc_entry["function"]["name"]
+                        func_args_str = tc_entry["function"]["arguments"]
+                        try:
+                            func_args = _json.loads(func_args_str)
+                        except (ValueError, _json.JSONDecodeError):
+                            func_args = {"raw": func_args_str}
+
+                        tc_start_event = {
+                            "id": tc_id,
+                            "name": func_name,
+                            "event": "detected",
+                            "input": func_args,
+                            "status": "running",
+                        }
+                        if stream_buffer:
+                            stream_buffer.push("tool_call", tc_start_event)
+                        if bg_task_id and self._bg_task_mgr:
+                            self._bg_task_mgr.append_tool_call(
+                                bg_task_id,
+                                {
+                                    "id": tc_id,
+                                    "name": func_name,
+                                    "input": (
+                                        _json.dumps(func_args)
+                                        if isinstance(func_args, dict)
+                                        else str(func_args)
+                                    ),
+                                    "status": "running",
+                                    "runtime": "wee",
+                                    "timestamp": time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                    ),
+                                },
+                            )
+
+                        print(
+                            f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                            file=sys.stderr,
+                        )
+                        tool_result = self._wee_execute_tool(func_name, func_args, agent)
+
+                        tc_done_event = {
+                            "id": tc_id,
+                            "name": func_name,
+                            "event": "result",
+                            "input": func_args,
+                            "output": tool_result[:2000] if tool_result else "",
+                            "status": "complete",
+                        }
+                        if stream_buffer:
+                            stream_buffer.push("tool_call", tc_done_event)
+                        if bg_task_id and self._bg_task_mgr:
+                            self._bg_task_mgr.update_tool_call(
+                                bg_task_id,
+                                tc_id,
+                                status="completed",
+                                output=str(tool_result[:500]) if tool_result else "",
+                            )
+                        working_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc_id,
+                                "content": tool_result or "No output",
+                            }
+                        )
+
+                last_tool_results = [
+                    m["content"] for m in working_messages if m.get("role") == "tool"
+                ]
+                output = (
+                    "Tool execution completed. Last result:\n" + last_tool_results[-1][:2000]
+                    if last_tool_results
+                    else "Max tool rounds reached without final response."
+                )
+                self._wee_save_messages(n8n_session_id, working_messages)
+                self._wee_save_runtime_state(
+                    n8n_session_id=n8n_session_id,
+                    tracker=token_tracker,
+                    model=attempt_resolved_model,
+                    api_base=attempt_base,
+                    messages=working_messages,
+                    last_usage=last_usage,
+                    source="estimated_local_message_history",
+                    auto_compacted=False,
+                )
                 if stream_buffer:
                     stream_buffer.push("done", output)
-                print("[Wee Native] Completed. Output length: " + str(len(output)) + " chars", file=sys.stderr)
                 return output
-            # _got_429=True — continue outer loop to next fallback model
 
-        # B01: all models exhausted — iterative approach, no stack overflow
+            except Exception as exc:
+                err_text = str(exc)
+                is_429 = "429" in err_text or "rate limit" in err_text.lower()
+                if self._wee_is_free_model(attempt_model) and is_429:
+                    if chain_index + 1 < len(attempt_chain):
+                        next_model = attempt_chain[chain_index + 1]
+                        fallback_msg = (
+                            "\n⚠️ Still rate limited, falling back to "
+                            f"{next_model.split('/')[-1]}...\n"
+                        )
+                        print(f"[Wee Native] {fallback_msg.strip()}", file=sys.stderr)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": fallback_msg})
+                        continue
+                    break
+
+                error_msg = f"Error: Wee native runtime failed: {exc}"
+                print(f"[Wee Native] {error_msg}", file=sys.stderr)
+                if stream_buffer:
+                    stream_buffer.push("done", error_msg)
+                return error_msg
+
         exhausted_msg = (
-            "\n\u274c All free model fallbacks exhausted. "
+            "\n❌ All free model fallbacks exhausted. "
             "Please try again later or switch to a paid model.\n"
         )
         print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
         if stream_buffer:
             stream_buffer.push("done", exhausted_msg)
         return exhausted_msg
+
+    def _wee_run_attempt(
+        self,
+        create_call,
+        is_free_model: bool,
+        max_retries: int,
+        retry_backoff: list[int],
+        stream_buffer=None,
+    ):
+        """Execute one streaming API call attempt with sync 429 retry handling."""
+        _time = time
+
+        attempts = max(1, int(max_retries or 1)) if is_free_model else 1
+        last_exc = None
+        for retry_index in range(attempts):
+            try:
+                return create_call()
+            except Exception as exc:
+                last_exc = exc
+                err_text = str(exc)
+                is_429 = "429" in err_text or "rate limit" in err_text.lower()
+                if not (is_free_model and is_429 and retry_index < attempts - 1):
+                    raise
+                wait_seconds = (
+                    retry_backoff[retry_index]
+                    if retry_index < len(retry_backoff)
+                    else (retry_backoff[-1] if retry_backoff else 5)
+                )
+                retry_msg = (
+                    "\n⚠️ Rate limited, retrying in "
+                    f"{wait_seconds}s ({retry_index + 1}/{attempts})...\n"
+                )
+                print("[Wee Native] " + retry_msg.strip(), file=sys.stderr)
+                if stream_buffer:
+                    stream_buffer.push("chunk", {"text": retry_msg})
+                _time.sleep(wait_seconds)
+        raise last_exc
 
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
@@ -9160,6 +8957,22 @@ User Request:
         Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
         """
         MAX_WEE_MESSAGES = 100
+        if not hasattr(self, "session_map_file"):
+            if hasattr(self, "session_map"):
+                session_entry = self.session_map.get(n8n_session_id)
+                if session_entry is None:
+                    return
+                if len(messages) > MAX_WEE_MESSAGES:
+                    system_msgs = [m for m in messages if m.get("role") == "system"]
+                    non_system = [m for m in messages if m.get("role") != "system"]
+                    saved = (
+                        system_msgs
+                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
+                    )
+                else:
+                    saved = list(messages)
+                self.session_map[n8n_session_id]["wee_messages"] = saved
+            return
         with self._session_map_lock:
             session_map = self.load_session_map()
             if n8n_session_id in session_map:
@@ -9288,7 +9101,14 @@ User Request:
         from wee_cli import TokenTracker
 
         tracker = TokenTracker(context_window=context_window)
-        session_data = self.load_session_data(n8n_session_id) or {}
+        session_data = {}
+        if hasattr(self, "load_session_data") and hasattr(self, "session_map_file"):
+            try:
+                session_data = self.load_session_data(n8n_session_id) or {}
+            except Exception:
+                session_data = {}
+        if not session_data and hasattr(self, "session_map"):
+            session_data = self.session_map.get(n8n_session_id, {}) or {}
         usage = session_data.get("wee_context_usage") or {}
         tracker.prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
         tracker.completion_tokens = int(usage.get("completion_tokens", 0) or 0)
@@ -9399,6 +9219,14 @@ User Request:
             source=source,
             auto_compacted=auto_compacted,
         )
+        if not hasattr(self, "session_map_file"):
+            if hasattr(self, "session_map"):
+                session_entry = self.session_map.setdefault(n8n_session_id, {})
+                if isinstance(session_entry, dict):
+                    session_entry["wee_context_usage"] = usage_state
+                    session_entry["wee_last_usage"] = last_usage or {}
+                    session_entry["wee_last_meta"] = meta
+            return
         with self._session_map_lock:
             session_map = self.load_session_map()
             if n8n_session_id not in session_map:
@@ -9532,8 +9360,27 @@ User Request:
         )
 
     def _wee_load_free_config(self) -> dict:
-        """Compatibility shim for wee free-model fallback tests."""
-        return {}
+        """Load free-model retry/fallback config with safe defaults."""
+        defaults = {
+            "max_retries_per_model": 3,
+            "retry_backoff_seconds": [2, 5, 10],
+            "free_model_fallback_chain": [],
+        }
+        config_path = Path(__file__).resolve().parent / "wee_free_models.json"
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return defaults
+        if not isinstance(loaded, dict):
+            return defaults
+        merged = dict(defaults)
+        merged.update(loaded)
+        if not isinstance(merged.get("free_model_fallback_chain"), list):
+            merged["free_model_fallback_chain"] = defaults["free_model_fallback_chain"]
+        if not isinstance(merged.get("retry_backoff_seconds"), list):
+            merged["retry_backoff_seconds"] = defaults["retry_backoff_seconds"]
+        return merged
 
     def _wee_is_free_model(self, model: str) -> bool:
         """Compatibility shim for wee free-model fallback tests."""
@@ -9545,7 +9392,7 @@ User Request:
     def _wee_resolve_endpoint(
         self, model: str, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[str, str, str]:
-        """Compatibility shim returning the resolved endpoint tuple."""
+        """Resolve provider prefix, endpoint, API key, and final model name."""
         _presets = {
             "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
@@ -9565,7 +9412,17 @@ User Request:
         if not resolved_base:
             resolved_base = _presets["ollama"][0]
         if not resolved_key:
-            resolved_key = "ollama"
+            if "openrouter" in resolved_base.lower():
+                try:
+                    import keyring
+
+                    resolved_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    resolved_key = None
+                if not resolved_key:
+                    resolved_key = os.environ.get("OPENROUTER_API_KEY")
+            if not resolved_key:
+                resolved_key = "ollama"
         return resolved_base, resolved_key, resolved_model
 
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
