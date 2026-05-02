@@ -3236,7 +3236,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         )
                         continue
                     agents[name] = {
-                        "path": agent.get("path", ""),
+                        "path": os.path.expanduser(agent.get("path", "")),
                         "description": agent.get("description", ""),
                         "max_concurrent": agent.get("max_concurrent", 1),
                         "runtime": agent.get("runtime", "copilot"),
@@ -3245,6 +3245,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                         "primary_model": agent.get("primary_model"),
                         "fallback_runtime": agent.get("fallback_runtime"),
                         "fallback_model": agent.get("fallback_model"),
+                        "permission_mode": agent.get("permission_mode"),
+                        "yolo": agent.get("yolo", False),
                     }
                 return agents
         except json.JSONDecodeError as e:
@@ -3290,11 +3292,17 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not name:
                 continue
             fresh[name] = {
-                "path": agent.get("path", ""),
+                "path": os.path.expanduser(agent.get("path", "")),
                 "description": agent.get("description", ""),
                 "max_concurrent": agent.get("max_concurrent", 1),
                 "runtime": agent.get("runtime", "copilot"),
                 "model": agent.get("model", ""),
+                "primary_runtime": agent.get("primary_runtime"),
+                "primary_model": agent.get("primary_model"),
+                "fallback_runtime": agent.get("fallback_runtime"),
+                "fallback_model": agent.get("fallback_model"),
+                "permission_mode": agent.get("permission_mode"),
+                "yolo": agent.get("yolo", False),
             }
 
         if not fresh and self.AGENTS:
@@ -12532,6 +12540,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         permission_mode: Optional[str] = (
             None  # elevated, restricted (default), sandboxed
         )
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
         description: Optional[str] = (
             None  # human-readable task name shown in Agents panel
         )
@@ -13757,6 +13768,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         max_concurrent = agent_config.get(
             "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
         )
+
+        # Resolve permission mode: body permission_mode > body yolo > agent yolo > agent permission_mode > default
+        perm_mode = body.permission_mode
+        if not perm_mode:
+            # body.yolo can explicitly override agent yolo
+            if body.yolo is True:
+                perm_mode = "elevated"
+            elif body.yolo is False:
+                # Explicit False overrides agent yolo:true
+                perm_mode = "restricted"
+            elif agent_config.get("yolo", False):
+                perm_mode = "elevated"
+            else:
+                perm_mode = agent_config.get("permission_mode", "restricted")
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
         if running >= max_concurrent:
             # Queue the task — it will be promoted when a running task finishes
             task = bg_task_mgr.create_task(
@@ -13774,6 +13801,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 origin_session_id=body.origin_session_id,
                 fallback_runtime=body.fallback_runtime,
                 fallback_model=body.fallback_model,
+                permission_mode=perm_mode,
             )
             queue_pos = bg_task_mgr.count_queued(channel, identity)
             print(
@@ -13785,16 +13813,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "agent": agent,
                 "runtime": runtime,
                 "model": model,
-                "permission_mode": body.permission_mode or "restricted",
+                "permission_mode": perm_mode,
                 "status": "queued",
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
-
-        # Resolve permission mode (default: restricted)
-        perm_mode = body.permission_mode or "restricted"
-        if perm_mode not in ("elevated", "restricted", "sandboxed"):
-            perm_mode = "restricted"
 
         # Create task record (running immediately)
         task = bg_task_mgr.create_task(
@@ -14334,6 +14357,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 None  # elevated, restricted (default), sandboxed
             )
 
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
+
         class UpdateJobRequest(BaseModel):
             name: Optional[str] = None
             schedule: Optional[str] = None
@@ -14349,6 +14376,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             permission_mode: Optional[str] = (
                 None  # elevated, restricted (default), sandboxed
             )
+
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
 
         class ValidateScheduleRequest(BaseModel):
             schedule: str

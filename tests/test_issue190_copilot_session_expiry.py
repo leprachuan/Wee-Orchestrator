@@ -9,6 +9,7 @@ Tests:
   B05 - Proactive: session age <= 25 min keeps --resume flag
   B06 - Happy path: no token error → normal output returned unchanged
 """
+
 import os
 import sys
 import threading
@@ -71,7 +72,9 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
         )
         recovery_output = "Task completed successfully after session recovery."
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             if call_count[0] == 1:
                 return session_expiry_output
@@ -89,8 +92,14 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-session-xyz",
             )
 
-        self.assertEqual(call_count[0], 2, "B01: must launch exactly 2 subprocesses (original + retry)")
-        self.assertEqual(result, recovery_output, "B01: final result must be from retry subprocess")
+        self.assertEqual(
+            call_count[0],
+            2,
+            "B01: must launch exactly 2 subprocesses (original + retry)",
+        )
+        self.assertEqual(
+            result, recovery_output, "B01: final result must be from retry subprocess"
+        )
 
     def test_issue_190_b02_prior_work_injected_into_recovery(self):
         """B02: Context from work done before expiry is injected into the recovery prompt."""
@@ -102,7 +111,9 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
 
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             if call_count[0] == 2:
                 # Capture the prompt arg sent to the recovery session
@@ -121,23 +132,41 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-b02",
             )
 
-        self.assertTrue(captured_recovery_prompt, "B02: recovery subprocess must be launched")
+        self.assertTrue(
+            captured_recovery_prompt, "B02: recovery subprocess must be launched"
+        )
         recovery_prompt_text = captured_recovery_prompt[0]
         # Recovery prompt must reference prior work
-        self.assertIn("Installed dependencies", recovery_prompt_text, "B02: prior work must appear in recovery prompt")
-        self.assertIn("Ran tests", recovery_prompt_text, "B02: prior work must appear in recovery prompt")
+        self.assertIn(
+            "Installed dependencies",
+            recovery_prompt_text,
+            "B02: prior work must appear in recovery prompt",
+        )
+        self.assertIn(
+            "Ran tests",
+            recovery_prompt_text,
+            "B02: prior work must appear in recovery prompt",
+        )
         # Recovery prompt must include original task
-        self.assertIn("implement feature X", recovery_prompt_text, "B02: original task must appear in recovery prompt")
+        self.assertIn(
+            "implement feature X",
+            recovery_prompt_text,
+            "B02: original task must appear in recovery prompt",
+        )
 
     def test_issue_190_b03_recovery_uses_fresh_session_no_resume(self):
         """B03: Recovery subprocess must NOT use --resume (fresh session only)."""
         captured_cmds = []
 
-        session_expiry_output = "partial work\nSession token expired. Please resend your message.\n"
+        session_expiry_output = (
+            "partial work\nSession token expired. Please resend your message.\n"
+        )
 
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             captured_cmds.append(list(cmd))
             return "recovered" if call_count[0] == 2 else session_expiry_output
@@ -154,15 +183,21 @@ class TestIssue190ReactiveRecovery(unittest.TestCase):
                 n8n_session_id="n8n-b03",
             )
 
-        self.assertEqual(len(captured_cmds), 2, "B03: exactly 2 subprocess launches expected")
+        self.assertEqual(
+            len(captured_cmds), 2, "B03: exactly 2 subprocess launches expected"
+        )
         recovery_cmd = captured_cmds[1]
-        self.assertNotIn("--resume", recovery_cmd, "B03: recovery cmd must NOT use --resume")
+        self.assertNotIn(
+            "--resume", recovery_cmd, "B03: recovery cmd must NOT use --resume"
+        )
 
     def test_issue_190_b06_happy_path_no_retry(self):
         """B06: Normal output (no expiry marker) must be returned as-is without retry."""
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             return "Task completed successfully."
 
@@ -204,7 +239,9 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         captured_cmds = []
         captured_stdin = []
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             captured_cmds.append(list(cmd))
             captured_stdin.append(stdin_text)
             return "completed"
@@ -224,11 +261,14 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
         self.assertEqual(len(captured_cmds), 1, "B04: exactly one subprocess")
         cmd = captured_cmds[0]
         self.assertNotIn("--resume", cmd, "B04: stale session must NOT use --resume")
-        self.assertNotIn("stale-copilot-session", cmd, "B04: stale session ID must not appear in cmd")
+        self.assertNotIn(
+            "stale-copilot-session", cmd, "B04: stale session ID must not appear in cmd"
+        )
         # Context is now passed via stdin (not -p), verify it is the rebuilt full_ctx
         self.assertEqual(
-            captured_stdin[0], full_ctx,
-            "B04: rebuilt context_prompt must be passed as stdin_text for proactive restart"
+            captured_stdin[0],
+            full_ctx,
+            "B04: rebuilt context_prompt must be passed as stdin_text for proactive restart",
         )
 
     def test_issue_190_b05_young_session_keeps_resume(self):
@@ -238,7 +278,9 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
         captured_cmds = []
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             captured_cmds.append(list(cmd))
             return "completed"
 
@@ -256,14 +298,18 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
         self.assertEqual(len(captured_cmds), 1)
         cmd = captured_cmds[0]
-        self.assertTrue(any("--resume=" in str(arg) for arg in cmd), "B05: young session must use --resume=<session-id>")
-        
+        self.assertTrue(
+            any("--resume=" in str(arg) for arg in cmd),
+            "B05: young session must use --resume=<session-id>",
+        )
 
     def test_issue_190_session_start_recorded_on_new_session(self):
         """Session start time is recorded when launching a new (non-resume) session."""
         before = time.time()
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             return "done"
 
         self.mgr._execute_subprocess_with_tracking = fake_execute
@@ -286,10 +332,14 @@ class TestIssue190ProactiveRestart(unittest.TestCase):
 
     def test_issue_190_session_start_recorded_on_recovery(self):
         """Session start time is refreshed when a recovery session is launched."""
-        session_expiry_output = "work\nSession token expired. Please resend your message.\n"
+        session_expiry_output = (
+            "work\nSession token expired. Please resend your message.\n"
+        )
         call_count = [0]
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             return "done" if call_count[0] == 2 else session_expiry_output
 
@@ -320,6 +370,7 @@ class TestIssue190SourceInspection(unittest.TestCase):
     def test_issue_190_session_expiry_detection_in_source(self):
         """run_copilot source must contain 'Session token expired' detection."""
         import inspect
+
         src = inspect.getsource(SessionManager.run_copilot)
         self.assertIn(
             "Session token expired",
@@ -339,6 +390,7 @@ class TestIssue190SourceInspection(unittest.TestCase):
     def test_issue_190_proactive_restart_in_source(self):
         """run_copilot must check session age for proactive restart."""
         import inspect
+
         src = inspect.getsource(SessionManager.run_copilot)
         self.assertIn(
             "_copilot_session_start",
@@ -367,7 +419,9 @@ class TestIssue190DoubleExpiryRecovery(unittest.TestCase):
             "(Request ID: 2222:bbbb:DDDDDDDD:EEEEEEEE:FFFFFFFF)\n"
         )
 
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             if call_count[0] == 1:
                 return session_expiry_output
@@ -386,8 +440,7 @@ class TestIssue190DoubleExpiryRecovery(unittest.TestCase):
             )
 
         self.assertEqual(
-            call_count[0], 2,
-            "B07: must attempt recovery exactly once on double expiry"
+            call_count[0], 2, "B07: must attempt recovery exactly once on double expiry"
         )
         # Must return the recovery output (best-effort) rather than crashing or looping
         self.assertIn(
@@ -418,9 +471,13 @@ class TestCopilotContextRetentionFix(unittest.TestCase):
 
     def _run(self, **kwargs):
         captured = []
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             captured.append({"cmd": list(cmd), "stdin_text": stdin_text})
             return "done"
+
         self.mgr._execute_subprocess_with_tracking = fake_execute
         with patch("sys.stderr"):
             result = self.mgr.run_copilot(**kwargs)
@@ -429,80 +486,142 @@ class TestCopilotContextRetentionFix(unittest.TestCase):
     def test_c01_name_flag_on_new_session(self):
         """C01: New session must include --name=<n8n_session_id> in the copilot command."""
         _, captured = self._run(
-            prompt="hello", model="gpt-4o", agent="wee-dev",
-            session_id=None, resume=False, n8n_session_id="n8n-c01",
+            prompt="hello",
+            model="gpt-4o",
+            agent="wee-dev",
+            session_id=None,
+            resume=False,
+            n8n_session_id="n8n-c01",
         )
         cmd = captured[0]["cmd"]
         name_flags = [a for a in cmd if a.startswith("--name=")]
-        self.assertTrue(name_flags, "C01: --name flag must be present in new session cmd")
-        self.assertIn("n8n-c01", name_flags[0], "C01: --name must include the n8n_session_id")
+        self.assertTrue(
+            name_flags, "C01: --name flag must be present in new session cmd"
+        )
+        self.assertIn(
+            "n8n-c01", name_flags[0], "C01: --name must include the n8n_session_id"
+        )
 
     def test_c02_session_id_stored_in_session_map_immediately(self):
         """C02: session_id is written to session_map right after --name, not after mtime scan."""
         self._run(
-            prompt="hello", model="gpt-4o", agent="wee-dev",
-            session_id=None, resume=False, n8n_session_id="n8n-c02",
+            prompt="hello",
+            model="gpt-4o",
+            agent="wee-dev",
+            session_id=None,
+            resume=False,
+            n8n_session_id="n8n-c02",
         )
-        calls = [c for c in self.mgr.update_session_field.call_args_list if len(c.args) > 1 and c.args[1] == "session_id"]
-        self.assertTrue(calls, "C02: update_session_field must be called with session_id for new session")
+        calls = [
+            c
+            for c in self.mgr.update_session_field.call_args_list
+            if len(c.args) > 1 and c.args[1] == "session_id"
+        ]
+        self.assertTrue(
+            calls,
+            "C02: update_session_field must be called with session_id for new session",
+        )
 
     def test_c03_unknown_session_age_defaults_to_zero(self):
         """C03: When _copilot_session_start has no entry, age defaults to 0 (not ~1.7B sec)."""
         captured = []
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             captured.append(list(cmd))
             return "done"
+
         self.mgr._execute_subprocess_with_tracking = fake_execute
         with patch("sys.stderr"):
             self.mgr.run_copilot(
-                prompt="continue", model="gpt-4o", agent="wee-dev",
-                session_id="some-session", resume=True, n8n_session_id="n8n-c03-no-start",
+                prompt="continue",
+                model="gpt-4o",
+                agent="wee-dev",
+                session_id="some-session",
+                resume=True,
+                n8n_session_id="n8n-c03-no-start",
             )
         self.assertEqual(len(captured), 1, "C03: must launch exactly one session")
-        self.assertTrue(any("--resume=" in a for a in captured[0]),
-            "C03: unknown start time must NOT force fresh start; must use --resume")
+        self.assertTrue(
+            any("--resume=" in a for a in captured[0]),
+            "C03: unknown start time must NOT force fresh start; must use --resume",
+        )
 
     def test_c04_context_passed_via_stdin_not_p_flag(self):
         """C04: context_prompt is passed as stdin_text, NOT via -p flag."""
         _, captured = self._run(
-            prompt="do work", model="gpt-4o", agent="wee-dev",
-            session_id=None, resume=False, n8n_session_id="n8n-c04",
+            prompt="do work",
+            model="gpt-4o",
+            agent="wee-dev",
+            session_id=None,
+            resume=False,
+            n8n_session_id="n8n-c04",
         )
         cmd = captured[0]["cmd"]
         self.assertNotIn("-p", cmd, "C04: -p flag must be removed from copilot command")
-        self.assertIn("<ctx>mock context</ctx>", captured[0]["stdin_text"],
-            "C04: context_prompt must be passed as stdin_text, not via -p")
+        self.assertIn(
+            "<ctx>mock context</ctx>",
+            captured[0]["stdin_text"],
+            "C04: context_prompt must be passed as stdin_text, not via -p",
+        )
 
     def test_c05_recovery_path_passes_name_and_stores_session_id(self):
         """C05: Recovery session after token expiry also uses --name and updates session_map."""
-        session_expiry_output = "partial\nSession token expired. Please resend your message.\n"
+        session_expiry_output = (
+            "partial\nSession token expired. Please resend your message.\n"
+        )
         call_count = [0]
         captured = []
-        def fake_execute(cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""):
+
+        def fake_execute(
+            cmd, cwd, timeout, runtime, agent, prompt, session_id, stdin_text=""
+        ):
             call_count[0] += 1
             captured.append({"cmd": list(cmd), "stdin_text": stdin_text})
             return "recovered" if call_count[0] == 2 else session_expiry_output
+
         self.mgr._execute_subprocess_with_tracking = fake_execute
         with patch("sys.stderr"):
             self.mgr.run_copilot(
-                prompt="long task", model="gpt-4o", agent="wee-dev",
-                session_id=None, resume=False, n8n_session_id="n8n-c05",
+                prompt="long task",
+                model="gpt-4o",
+                agent="wee-dev",
+                session_id=None,
+                resume=False,
+                n8n_session_id="n8n-c05",
             )
         recovery_cmd = captured[1]["cmd"]
         name_flags = [a for a in recovery_cmd if a.startswith("--name=")]
         self.assertTrue(name_flags, "C05: recovery cmd must include --name flag")
-        session_id_calls = [c for c in self.mgr.update_session_field.call_args_list if len(c.args) > 1 and c.args[1] == "session_id"]
-        self.assertGreaterEqual(len(session_id_calls), 1, "C05: session_id must be updated after recovery starts")
+        session_id_calls = [
+            c
+            for c in self.mgr.update_session_field.call_args_list
+            if len(c.args) > 1 and c.args[1] == "session_id"
+        ]
+        self.assertGreaterEqual(
+            len(session_id_calls),
+            1,
+            "C05: session_id must be updated after recovery starts",
+        )
 
     def test_c06_session_name_sanitized(self):
         """C06: n8n_session_id with special chars is sanitized to [A-Za-z0-9-]."""
         _, captured = self._run(
-            prompt="work", model="gpt-4o", agent="wee-dev",
-            session_id=None, resume=False, n8n_session_id="session_uuid:123/foo",
+            prompt="work",
+            model="gpt-4o",
+            agent="wee-dev",
+            session_id=None,
+            resume=False,
+            n8n_session_id="session_uuid:123/foo",
         )
         name_flags = [a for a in captured[0]["cmd"] if a.startswith("--name=")]
         self.assertTrue(name_flags)
         import re
-        name_val = name_flags[0][len("--name="):]
-        self.assertRegex(name_val, r'^[A-Za-z0-9\-]+$', "C06: --name must only have alphanumeric + hyphens")
 
+        name_val = name_flags[0][len("--name=") :]
+        self.assertRegex(
+            name_val,
+            r"^[A-Za-z0-9\-]+$",
+            "C06: --name must only have alphanumeric + hyphens",
+        )

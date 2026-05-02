@@ -585,8 +585,13 @@ class TestREPLCommands(unittest.TestCase):
         mock_client,
         mock_context_window,
     ):
-        with patch("wee_cli.resolve_model_and_endpoint", return_value=("new-model", "http://localhost/v1", "test")):
-            with patch("builtins.input", side_effect=["/model new-model", "/tokens", "exit"]):
+        with patch(
+            "wee_cli.resolve_model_and_endpoint",
+            return_value=("new-model", "http://localhost/v1", "test"),
+        ):
+            with patch(
+                "builtins.input", side_effect=["/model new-model", "/tokens", "exit"]
+            ):
                 with patch("sys.stderr", new_callable=StringIO) as fake_err:
                     from wee_cli import run_interactive
 
@@ -769,9 +774,7 @@ class TestMainEntryPoint(unittest.TestCase):
             main(["--model", "ollama/test", "Hello"])
         mock_chat.assert_called_once()
         messages = mock_chat.call_args[1]["messages"]
-        self.assertIn(
-            "Immediately before each tool call", messages[0]["content"]
-        )
+        self.assertIn("Immediately before each tool call", messages[0]["content"])
 
     @patch("wee_cli._make_client")
     @patch("wee_cli.chat_stream", return_value="response")
@@ -897,8 +900,7 @@ class TestExecSubprocess(unittest.TestCase):
     def _fake_openai_module(self, directory):
         path = os.path.join(directory, "openai.py")
         with open(path, "w", encoding="utf-8") as f:
-            f.write(
-                """
+            f.write("""
 import json
 import os
 
@@ -962,8 +964,7 @@ class _Chat:
 class OpenAI:
     def __init__(self, *args, **kwargs):
         self.chat = _Chat()
-"""
-            )
+""")
 
     def _run_exec(self, args, stdin_text=None, mode="echo", home_dir=None):
         home_dir = home_dir or tempfile.mkdtemp()

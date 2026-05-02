@@ -92,8 +92,8 @@ export function validateConfig(agent: Partial<Agent>): ValidationResult {
 
   if (!agent.path || typeof agent.path !== 'string' || agent.path.trim() === '') {
     errors.push({ field: 'path', message: 'Working path is required' });
-  } else if (!agent.path.startsWith('/')) {
-    errors.push({ field: 'path', message: 'Working path must be an absolute path starting with /' });
+  } else if (!agent.path.startsWith('/') && !agent.path.startsWith('~')) {
+    errors.push({ field: 'path', message: 'Working path must be an absolute path starting with / or ~' });
   }
 
   // Validate primary runtime config
