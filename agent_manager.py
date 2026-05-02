@@ -3256,6 +3256,36 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"[Error] Failed to load agents config: {e}", file=sys.stderr)
             return {}
 
+        try:
+            from pydantic import ValidationError as _ValidationError
+
+            from config_schemas import validate_agents_config
+
+            validate_agents_config(config)
+        except ImportError:
+            pass
+        except _ValidationError as _schema_exc:
+            logger.critical(
+                "[config] agents.json schema validation failed: %s",
+                _schema_exc,
+            )
+            raise
+
+        agents = {}
+        for agent in config.get("agents", []):
+            name = agent.get("name")
+            if not name:
+                logger.warning("[Warning] Agent entry missing 'name' field")
+                continue
+            agents[name] = {
+                "path": agent.get("path", ""),
+                "description": agent.get("description", ""),
+                "max_concurrent": agent.get("max_concurrent", 1),
+                "runtime": agent.get("runtime", "copilot"),
+                "model": agent.get("model", ""),
+            }
+        return agents
+
     def reload_agents_from_disk(self) -> tuple:
         """Hot-reload agents.json with validation and safe fallback.
 
