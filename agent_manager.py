@@ -3276,11 +3276,15 @@ You can mention an agent in your prompt and it will auto-delegate:
             if not name:
                 continue
             fresh[name] = {
-                "path": agent.get("path", ""),
+                "path": os.path.expanduser(agent.get("path", "")),
                 "description": agent.get("description", ""),
                 "max_concurrent": agent.get("max_concurrent", 1),
                 "runtime": agent.get("runtime", "copilot"),
                 "model": agent.get("model", ""),
+                "primary_runtime": agent.get("primary_runtime"),
+                "primary_model": agent.get("primary_model"),
+                "fallback_runtime": agent.get("fallback_runtime"),
+                "fallback_model": agent.get("fallback_model"),
             }
 
         if not fresh and self.AGENTS:
