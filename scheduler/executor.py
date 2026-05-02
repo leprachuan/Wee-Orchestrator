@@ -33,19 +33,8 @@ except ImportError:
         parse_schedule_to_next_run,
     )
 
-# Gate check support (Issue #148)
-try:
-    from scheduler.qa_gate import is_wee_dev_gated
-except ImportError:
-    try:
-        from qa_gate import is_wee_dev_gated
-    except ImportError:
-        is_wee_dev_gated = None  # type: ignore[assignment]
-
-# Registry of gate_check names to callables
+# Gate check registry (deprecated - qa_gate removed as of May 2026)
 _GATE_REGISTRY: Dict[str, object] = {}
-if is_wee_dev_gated is not None:
-    _GATE_REGISTRY["wee_dev_qa"] = is_wee_dev_gated
 
 # Repo root is parent of scheduler/ directory (e.g. /opt/n8n-copilot-shim-dev)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
