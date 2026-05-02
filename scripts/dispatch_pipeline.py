@@ -95,11 +95,12 @@ def _load_agents_config() -> dict:
 def get_agent_dispatch_config(agent_name: str) -> dict:
     agents = _load_agents_config()
     agent = agents.get(agent_name, {})
+    permissions = agent.get("permissions", {})
     return {
         "runtime": agent.get("primary_runtime", "copilot"),
         "model": agent.get("primary_model", "auto"),
         "timeout": agent.get("timeout", 3600),
-        "permission_mode": agent.get("permission_mode", "restricted"),
+        "permission_mode": agent.get("permission_mode") or permissions.get("mode", "restricted"),
         "yolo": agent.get("yolo", False),
         "fallback_runtime": agent.get("fallback_runtime"),
         "fallback_model": agent.get("fallback_model"),
