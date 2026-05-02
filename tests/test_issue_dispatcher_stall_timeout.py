@@ -7,12 +7,13 @@ re-dispatch it, wasting resources and blocking new items.
 This test ensures the timeout mechanism properly detects and escalates
 stalled qa-review items after STALL_TIMEOUT_MINUTES.
 """
+
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, '/opt/n8n-copilot-shim-dev/scripts')
-from dispatch_wee_dev_work_queue import (
+sys.path.insert(0, "/opt/n8n-copilot-shim-dev/scripts")
+from dispatch_pipeline import (
     check_stall_timeout,
     parse_iso_datetime,
     STALL_TIMEOUT_MINUTES,
@@ -64,8 +65,7 @@ def test_check_stall_timeout_recent_qa_review():
 def test_check_stall_timeout_stale_qa_review():
     """check_stall_timeout should return True if qa-review exceeds timeout."""
     old_time = (
-        datetime.now(timezone.utc)
-        - timedelta(minutes=STALL_TIMEOUT_MINUTES + 5)
+        datetime.now(timezone.utc) - timedelta(minutes=STALL_TIMEOUT_MINUTES + 5)
     ).isoformat()
     lock = {
         "state": "qa-review",
@@ -77,8 +77,7 @@ def test_check_stall_timeout_stale_qa_review():
 def test_check_stall_timeout_in_progress():
     """check_stall_timeout should apply to in-progress state too."""
     old_time = (
-        datetime.now(timezone.utc)
-        - timedelta(minutes=STALL_TIMEOUT_MINUTES + 10)
+        datetime.now(timezone.utc) - timedelta(minutes=STALL_TIMEOUT_MINUTES + 10)
     ).isoformat()
     lock = {
         "state": "in-progress",
@@ -90,8 +89,7 @@ def test_check_stall_timeout_in_progress():
 def test_check_stall_timeout_qa_failed():
     """check_stall_timeout should apply to qa-failed state too."""
     old_time = (
-        datetime.now(timezone.utc)
-        - timedelta(minutes=STALL_TIMEOUT_MINUTES + 10)
+        datetime.now(timezone.utc) - timedelta(minutes=STALL_TIMEOUT_MINUTES + 10)
     ).isoformat()
     lock = {
         "state": "qa-failed",
@@ -103,8 +101,7 @@ def test_check_stall_timeout_qa_failed():
 def test_check_stall_timeout_not_applicable_to_wee_dev_running():
     """check_stall_timeout should NOT apply to wee-dev-running state."""
     old_time = (
-        datetime.now(timezone.utc)
-        - timedelta(minutes=STALL_TIMEOUT_MINUTES + 20)
+        datetime.now(timezone.utc) - timedelta(minutes=STALL_TIMEOUT_MINUTES + 20)
     ).isoformat()
     lock = {
         "state": "wee-dev-running",
@@ -116,8 +113,7 @@ def test_check_stall_timeout_not_applicable_to_wee_dev_running():
 def test_check_stall_timeout_not_applicable_to_dispatching():
     """check_stall_timeout should NOT apply to dispatching state."""
     old_time = (
-        datetime.now(timezone.utc)
-        - timedelta(minutes=STALL_TIMEOUT_MINUTES + 20)
+        datetime.now(timezone.utc) - timedelta(minutes=STALL_TIMEOUT_MINUTES + 20)
     ).isoformat()
     lock = {
         "state": "dispatching",

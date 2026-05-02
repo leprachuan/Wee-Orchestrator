@@ -491,7 +491,10 @@ _WEE_TOOLS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "Execute a bash shell command and return its output.",
+            "description": (
+                "Execute a bash shell command. NOTE: For delegating tasks to specialized "
+                "agents (devops, research, email-triage, etc), use call_agent instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -508,7 +511,10 @@ _WEE_TOOLS = [
         "type": "function",
         "function": {
             "name": "python",
-            "description": "Execute Python 3 code and return the output.",
+            "description": (
+                "Execute Python 3 code locally. NOTE: For running tasks in dedicated agent "
+                "environments (devops, research, email-triage, etc), use call_agent instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -569,9 +575,7 @@ _WEE_TOOLS = [
                     },
                     "content": {
                         "type": "string",
-                        "description": (
-                            "New content to write, replace, or insert."
-                        ),
+                        "description": ("New content to write, replace, or insert."),
                     },
                     "create_if_missing": {
                         "type": "boolean",
@@ -581,9 +585,7 @@ _WEE_TOOLS = [
                     },
                     "new_text": {
                         "type": "string",
-                        "description": (
-                            "Legacy alias for content. Prefer 'content'."
-                        ),
+                        "description": ("Legacy alias for content. Prefer 'content'."),
                     },
                     "old_text": {
                         "type": "string",
@@ -601,9 +603,10 @@ _WEE_TOOLS = [
         "function": {
             "name": "call_agent",
             "description": (
-                "Call a Wee Orchestrator agent to execute a task. Use for delegating"
-                " work to specialized agents (devops, email-triage, family-knowledge,"
-                " research, smarthome, wee-dev, wee-qa, wee-doc)."
+                "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
+                "Use for delegating work to specialized agents: devops, email-triage, "
+                "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
+                "overrides. Returns task_id for background mode or result for quick mode."
             ),
             "parameters": {
                 "type": "object",
@@ -625,6 +628,20 @@ _WEE_TOOLS = [
                         "description": (
                             "Execution mode: 'quick' waits for result (sync),"
                             " 'background' returns task_id immediately (async)"
+                        ),
+                    },
+                    "runtime": {
+                        "type": "string",
+                        "description": (
+                            "AI runtime to use (e.g., 'copilot', 'claude', 'wee'). "
+                            "Overrides agent's default runtime if specified."
+                        ),
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "Model to use (e.g., 'claude-haiku-4.5', 'ollama/qwen3.5-64k:latest'). "
+                            "Overrides agent's default model if specified."
                         ),
                     },
                 },
@@ -662,6 +679,50 @@ _WEE_TOOLS = [
                     },
                 },
                 "required": ["q"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_background_tasks",
+            "description": (
+                "List all background tasks currently running or recently completed. "
+                "Shows task IDs, status, agents, and progress."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "completed", "all"],
+                        "description": (
+                            "Filter by task status: 'running' for active tasks, "
+                            "'completed' for finished tasks, 'all' for both (default: 'all')"
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_task_status",
+            "description": (
+                "Check the status of a background task scheduled via call_agent with "
+                "mode='background'. Returns task status, progress, and results if available."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The task ID returned from call_agent (e.g., 'bg_c24fad3e')",
+                    },
+                },
+                "required": ["task_id"],
             },
         },
     },
@@ -745,7 +806,10 @@ def _updated_text_from_line_operation(
         if start_line < 0:
             return None, "Error: start_line must be >= 0 for insert_after"
         if start_line > total_lines:
-            return None, f"Error: start_line {start_line} exceeds file length {total_lines}"
+            return (
+                None,
+                f"Error: start_line {start_line} exceeds file length {total_lines}",
+            )
         if not isinstance(content, str):
             return None, "Error: edit_file requires string 'content' for insert_after"
         insert_at = start_line
@@ -760,7 +824,10 @@ def _updated_text_from_line_operation(
         action = "deleted"
         if operation == "replace_lines":
             if not isinstance(content, str):
-                return None, "Error: edit_file requires string 'content' for replace_lines"
+                return (
+                    None,
+                    "Error: edit_file requires string 'content' for replace_lines",
+                )
             replacement = [content]
             action = "replaced"
         updated_lines = lines[: start_line - 1] + replacement + lines[end_line:]
@@ -839,9 +906,7 @@ def _execute_edit_file(func_args: dict) -> str:
             action = "created"
 
     try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".wee-edit-", dir=parent_dir, text=True
-        )
+        fd, tmp_path = tempfile.mkstemp(prefix=".wee-edit-", dir=parent_dir, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(updated)
@@ -970,6 +1035,10 @@ def execute_tool(func_name: str, func_args: dict, permission: str = "auto") -> s
             return _execute_search(func_args)
         elif func_name == "call_agent":
             return _call_agent_handler(func_args)
+        elif func_name == "list_background_tasks":
+            return _list_background_tasks_handler(func_args)
+        elif func_name == "check_task_status":
+            return _check_task_status_handler(func_args)
         else:
             return f"Error: Unknown tool {func_name}"
     except subprocess.TimeoutExpired:
@@ -1041,6 +1110,135 @@ def _get_agent_config(agent_name: str) -> dict:
     return {}
 
 
+def _list_background_tasks_handler(func_args: dict) -> str:
+    """List background tasks from the Wee Orchestrator API."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    status_filter = func_args.get("status", "all").strip().lower()
+    if status_filter not in ("running", "completed", "all"):
+        return "Error: status must be 'running', 'completed', or 'all'"
+
+    # Get API URL and token (same as _call_agent_handler)
+    if "WEE_ORCHESTRATOR_API" in os.environ:
+        api_url = os.environ.get("WEE_ORCHESTRATOR_API")
+    else:
+        api_host = os.environ.get("WEE_ORCHESTRATOR_HOST", "127.0.0.1")
+        api_port = os.environ.get("WEE_ORCHESTRATOR_PORT", "8001")
+        if "WEE_ORCHESTRATOR_PROTOCOL" in os.environ:
+            protocol = os.environ.get("WEE_ORCHESTRATOR_PROTOCOL")
+        else:
+            protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
+        api_url = f"{protocol}://{api_host}:{api_port}"
+
+    token = os.environ.get(
+        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
+    )
+
+    try:
+        endpoint = "/api/v1/background-tasks"
+        if status_filter != "all":
+            endpoint += f"?status={status_filter}"
+
+        url = f"{api_url}{endpoint}"
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Authorization", f"Bearer {token}")
+
+        import ssl
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
+            result = json.loads(response.read().decode())
+            tasks = result.get("tasks", [])
+
+            if not tasks:
+                return f"No {status_filter} background tasks found."
+
+            output = f"Background Tasks ({status_filter}):\n"
+            for task in tasks:
+                task_id = task.get("task_id", task.get("id", "unknown"))
+                agent = task.get("agent", "unknown")
+                status = task.get("status", "unknown")
+                progress = task.get("progress", 0)
+                output += f"  {task_id}: {agent} ({status}, {progress}%)\n"
+
+            return output
+
+    except urllib.error.HTTPError as e:
+        return f"Error fetching tasks (HTTP {e.code}): {e.reason}"
+    except urllib.error.URLError as e:
+        return f"Error connecting to Wee Orchestrator: {e.reason}"
+    except Exception as e:
+        return f"Error listing background tasks: {e}"
+
+
+def _check_task_status_handler(func_args: dict) -> str:
+    """Check the status of a background task."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    task_id = func_args.get("task_id", "").strip()
+    if not task_id:
+        return "Error: task_id parameter required"
+
+    # Get API URL and token (same as _call_agent_handler)
+    if "WEE_ORCHESTRATOR_API" in os.environ:
+        api_url = os.environ.get("WEE_ORCHESTRATOR_API")
+    else:
+        api_host = os.environ.get("WEE_ORCHESTRATOR_HOST", "127.0.0.1")
+        api_port = os.environ.get("WEE_ORCHESTRATOR_PORT", "8001")
+        if "WEE_ORCHESTRATOR_PROTOCOL" in os.environ:
+            protocol = os.environ.get("WEE_ORCHESTRATOR_PROTOCOL")
+        else:
+            protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
+        api_url = f"{protocol}://{api_host}:{api_port}"
+
+    token = os.environ.get(
+        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
+    )
+
+    try:
+        endpoint = f"/api/v1/background-tasks/{task_id}"
+        url = f"{api_url}{endpoint}"
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Authorization", f"Bearer {token}")
+
+        import ssl
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
+            result = json.loads(response.read().decode())
+
+            output = f"Task Status: {task_id}\n"
+            output += f"  Agent: {result.get('agent', 'unknown')}\n"
+            output += f"  Status: {result.get('status', 'unknown')}\n"
+            output += f"  Progress: {result.get('progress', 0)}%\n"
+
+            if "result" in result:
+                output += f"  Result: {result['result']}\n"
+            if "error" in result:
+                output += f"  Error: {result['error']}\n"
+
+            return output
+
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return f"Error: Task {task_id} not found"
+        return f"Error fetching task status (HTTP {e.code}): {e.reason}"
+    except urllib.error.URLError as e:
+        return f"Error connecting to Wee Orchestrator: {e.reason}"
+    except Exception as e:
+        return f"Error checking task status: {e}"
+
+
 def _call_agent_handler(func_args: dict) -> str:
     """Handle call_agent tool calls to invoke Wee Orchestrator agents.
 
@@ -1062,6 +1260,8 @@ def _call_agent_handler(func_args: dict) -> str:
     prompt = func_args.get("prompt", "").strip()
     mode = func_args.get("mode", "quick").strip().lower()
     timeout = func_args.get("timeout")  # Optional: override default timeout
+    override_runtime = func_args.get("runtime")  # Optional: override runtime
+    override_model = func_args.get("model")  # Optional: override model
 
     if not agent:
         return "Error: agent parameter required"
@@ -1086,7 +1286,26 @@ def _call_agent_handler(func_args: dict) -> str:
     # Get agent config for fallback info
     agent_config = _get_agent_config(agent)
 
-    api_url = os.environ.get("WEE_ORCHESTRATOR_API", "https://127.0.0.1:8000")
+    # Override runtime and model if provided as parameters
+    if override_runtime:
+        agent_config["primary_runtime"] = override_runtime
+    if override_model:
+        agent_config["primary_model"] = override_model
+
+    # Use full URL from env if set, otherwise build from host/port
+    if "WEE_ORCHESTRATOR_API" in os.environ:
+        api_url = os.environ.get("WEE_ORCHESTRATOR_API")
+    else:
+        api_host = os.environ.get("WEE_ORCHESTRATOR_HOST", "127.0.0.1")
+        api_port = os.environ.get("WEE_ORCHESTRATOR_PORT", "8001")
+        # Allow explicit protocol override, else auto-detect based on host
+        if "WEE_ORCHESTRATOR_PROTOCOL" in os.environ:
+            protocol = os.environ.get("WEE_ORCHESTRATOR_PROTOCOL")
+        else:
+            # Use http for localhost/127.0.0.1, https for remote
+            protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
+        api_url = f"{protocol}://{api_host}:{api_port}"
+
     token = os.environ.get(
         "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
     )

@@ -64,6 +64,9 @@
     "gemini": [
       "gemini-1.5",
       "gemini-1.5-pro"
+    ],
+    "ollama": [
+      "qwen3.5-64k:latest"
     ]
   },
   "notes": "This file centralizes runtime->model lists. Services and UI should read this file instead of hard-coded lists. Update and PR from /opt/n8n-copilot-shim/model-manifest.json."

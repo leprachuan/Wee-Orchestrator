@@ -3691,6 +3691,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
             ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
             (
+                "ollama/qwen3.5-64k:latest",
+                "Ollama Qwen 3.5 64K (local)",
+                ["qwen3.5-64k", "qwen3.5"],
+            ),
+            (
                 "ollama/granite3.3-tuned",
                 "Ollama Granite 3.3 Tuned (local)",
                 ["granite", "granite3.3"],
@@ -4136,6 +4141,21 @@ You can mention an agent in your prompt and it will auto-delegate:
             self._openrouter_cache_ts = _time.time()
             return self._static_models_to_dict(result)
 
+    def fetch_ollama_models(self) -> Dict:
+        """Fetch available ollama models from the model manifest."""
+        try:
+            with open(MODEL_MANIFEST_PATH, "r") as f:
+                manifest = json.load(f)
+                ollama_models = manifest.get("runtimes", {}).get("ollama", [])
+                if ollama_models:
+                    return {"Ollama": ollama_models}
+        except Exception as e:
+            print(
+                f"[Warning] Failed to read ollama models from manifest: {e}",
+                file=sys.stderr,
+            )
+        return {}
+
     def get_models_for_runtime(self, runtime: str) -> Dict:
         """Fetch available models for a runtime, using CLI discovery where possible.
 
@@ -4154,6 +4174,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "devin": self.fetch_devin_models,
             "cursor": self.fetch_cursor_models,
             "wee": self.fetch_wee_models,
+            "ollama": self.fetch_ollama_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -6599,11 +6620,15 @@ User Request:
                                             _cx_type = _cx_obj.get("type", "")
                                             if (
                                                 _cx_type == "item.completed"
-                                                and isinstance(_cx_obj.get("item"), dict)
+                                                and isinstance(
+                                                    _cx_obj.get("item"), dict
+                                                )
                                                 and _cx_obj["item"].get("type")
                                                 == "agent_message"
                                             ):
-                                                _cx_text = _cx_obj["item"].get("text", "")
+                                                _cx_text = _cx_obj["item"].get(
+                                                    "text", ""
+                                                )
                                                 if _cx_text:
                                                     if stream_buffer:
                                                         stream_buffer.push(
@@ -7005,8 +7030,14 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "copilot", agent, prompt, n8n_session_id,
-            stdin_text=context_prompt
+            cmd,
+            agent_dir,
+            effective_timeout,
+            "copilot",
+            agent,
+            prompt,
+            n8n_session_id,
+            stdin_text=context_prompt,
         )
         result = self.strip_metadata(output, "copilot")
 
@@ -7068,7 +7099,9 @@ User Request:
             getattr(self, "_copilot_session_start", {}).update(
                 {n8n_session_id: time.time()}
             )
-            self.update_session_field(n8n_session_id, "session_id", _recovery_copilot_name)
+            self.update_session_field(
+                n8n_session_id, "session_id", _recovery_copilot_name
+            )
             _recovery_output = self._execute_subprocess_with_tracking(
                 _recovery_cmd,
                 agent_dir,
@@ -8456,8 +8489,19 @@ User Request:
                 messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
         messages = self._wee_maybe_compact(
-            client, n8n_session_id, messages, resolved_model, context_prompt
+            client,
+            n8n_session_id,
+            messages,
+            resolved_model,
+            context_prompt,
+            token_tracker=token_tracker,
+            context_window=context_window,
         )
+        if not token_tracker.current_context_tokens:
+            token_tracker.current_context_tokens = self._wee_estimate_tokens(
+                messages, resolved_model
+            )
+            token_tracker.last_prompt_tokens = token_tracker.current_context_tokens
 
         # -- Tool definitions for agentic loop (Issue #107) --
         _WEE_TOOLS = [
@@ -8465,7 +8509,10 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": "Execute a bash shell command and return its output.",
+                    "description": (
+                        "Execute a bash shell command. NOTE: For delegating tasks to specialized "
+                        "agents (devops, research, email-triage, etc), use call_agent instead."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8482,7 +8529,10 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "python",
-                    "description": "Execute Python 3 code and return the output.",
+                    "description": (
+                        "Execute Python 3 code locally. NOTE: For running tasks in dedicated agent "
+                        "environments (devops, research, email-triage, etc), use call_agent instead."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8492,6 +8542,80 @@ User Request:
                             }
                         },
                         "required": ["code"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_agent",
+                    "description": (
+                        "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
+                        "Use for delegating work to specialized agents: devops, email-triage, "
+                        "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
+                        "overrides. Returns task_id for background mode or result for quick mode."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent": {
+                                "type": "string",
+                                "description": "Agent name to call (e.g., 'devops', 'research')",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Task prompt or instruction for the agent",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["quick", "background"],
+                                "description": "'quick' waits for result, 'background' returns task_id",
+                            },
+                            "runtime": {
+                                "type": "string",
+                                "description": "AI runtime to use (e.g., 'copilot', 'claude', 'wee')",
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Model to use (e.g., 'claude-haiku-4.5', 'ollama/qwen3.5-64k:latest')",
+                            },
+                        },
+                        "required": ["agent", "prompt"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_background_tasks",
+                    "description": "List all background tasks currently running or recently completed.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": ["running", "completed", "all"],
+                                "description": "Filter by task status (default: 'all')",
+                            },
+                        },
+                        "required": [],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "check_task_status",
+                    "description": "Check the status of a background task.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "The task ID (e.g., 'bg_c24fad3e')",
+                            },
+                        },
+                        "required": ["task_id"],
                     },
                 },
             },
@@ -8538,6 +8662,7 @@ User Request:
         collected_output = []
         _tool_call_counter = 0
         MAX_TOOL_ROUNDS = 10
+        last_usage = None
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
@@ -8546,6 +8671,7 @@ User Request:
                     "model": resolved_model,
                     "messages": messages,
                     "stream": True,
+                    "stream_options": {"include_usage": True},
                 }
                 if round_num < MAX_TOOL_ROUNDS:
                     create_kwargs["tools"] = _WEE_TOOLS
@@ -8588,9 +8714,7 @@ User Request:
                                 )
                                 resolved_model = fallback_resolved_model
                                 create_kwargs["model"] = resolved_model
-                                stream = client.chat.completions.create(
-                                    **create_kwargs
-                                )
+                                stream = client.chat.completions.create(**create_kwargs)
                             else:
                                 raise
                     else:
@@ -8601,6 +8725,23 @@ User Request:
                 tool_calls_acc = {}  # index -> {id, name, arguments}
 
                 for chunk in stream:
+                    usage_obj = getattr(chunk, "usage", None)
+                    if usage_obj:
+                        token_tracker.update(usage_obj)
+                        token_tracker.current_context_tokens = int(
+                            getattr(usage_obj, "prompt_tokens", 0) or 0
+                        )
+                        last_usage = {
+                            "prompt_tokens": int(
+                                getattr(usage_obj, "prompt_tokens", 0) or 0
+                            ),
+                            "completion_tokens": int(
+                                getattr(usage_obj, "completion_tokens", 0) or 0
+                            ),
+                            "total_tokens": int(
+                                getattr(usage_obj, "total_tokens", 0) or 0
+                            ),
+                        }
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -8763,8 +8904,49 @@ User Request:
 
             output = "".join(collected_output)
 
+            auto_compacted = False
+            if (
+                token_tracker.context_window
+                and token_tracker.current_context_tokens
+                >= int(token_tracker.context_window * 0.75)
+            ):
+                compacted_messages = self._wee_compact_context(
+                    client,
+                    n8n_session_id,
+                    messages,
+                    resolved_model,
+                    context_prompt,
+                )
+                if compacted_messages != messages:
+                    messages = compacted_messages
+                    auto_compacted = True
+                    compacted_tokens = self._wee_estimate_tokens(
+                        messages, resolved_model
+                    )
+                    token_tracker.current_context_tokens = compacted_tokens
+                    token_tracker.last_prompt_tokens = compacted_tokens
+
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
+            state_source = (
+                "api_prompt_tokens"
+                if last_usage and last_usage.get("prompt_tokens")
+                else (
+                    "estimated_after_compaction"
+                    if auto_compacted
+                    else "estimated_local_message_history"
+                )
+            )
+            self._wee_save_runtime_state(
+                n8n_session_id=n8n_session_id,
+                tracker=token_tracker,
+                model=resolved_model,
+                api_base=api_base,
+                messages=messages,
+                last_usage=last_usage,
+                source=state_source,
+                auto_compacted=auto_compacted,
+            )
 
             # Push done sentinel
             if stream_buffer:
@@ -9039,18 +9221,175 @@ User Request:
 
     def _wee_get_context_limit(self, model: str) -> int:
         """Resolve the context window size for a wee model."""
+        return self._wee_get_context_limit_for_api(model, "")
+
+    def _wee_get_context_limit_for_api(self, model: str, api_base: str) -> int:
+        """Resolve the context window size for a wee model and endpoint."""
         normalized = (model or "").lower()
         known_windows = [
             ("gemma4", 128000),
             ("llama-4-scout", 131072),
             ("llama-3.1", 131072),
+            ("64k", 65536),
             ("128k", 128000),
             ("32k", 32768),
         ]
         for needle, limit in known_windows:
             if needle in normalized:
-                return limit
-        return self._WEE_DEFAULT_CONTEXT_LIMIT
+                heuristic_limit = limit
+                break
+        else:
+            heuristic_limit = self._WEE_DEFAULT_CONTEXT_LIMIT
+
+        if not api_base:
+            return heuristic_limit
+
+        try:
+            from wee_cli import resolve_context_window
+            from wee_runtime import get_context_window
+
+            resolved = resolve_context_window(model, api_base)
+            if resolved and resolved > 0 and resolved != get_context_window(model):
+                return resolved
+        except Exception:
+            pass
+
+        return heuristic_limit
+
+    def _wee_load_token_tracker(self, n8n_session_id: str, context_window: int):
+        """Restore wee token tracking from session state."""
+        from wee_cli import TokenTracker
+
+        tracker = TokenTracker(context_window=context_window)
+        session_data = self.load_session_data(n8n_session_id) or {}
+        usage = session_data.get("wee_context_usage") or {}
+        tracker.prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        tracker.completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        tracker.total_tokens = int(usage.get("total_tokens", 0) or 0)
+        tracker.turns = int(usage.get("turns", 0) or 0)
+        tracker.session_total = int(usage.get("session_total", 0) or 0)
+        tracker.last_prompt_tokens = int(usage.get("last_prompt_tokens", 0) or 0)
+        tracker.current_context_tokens = int(
+            usage.get("current_context_tokens", 0) or tracker.last_prompt_tokens or 0
+        )
+        tracker.context_window = int(usage.get("context_window", context_window) or 0)
+        return tracker
+
+    def _wee_build_meta(
+        self,
+        api_base: str,
+        model: str,
+        tracker,
+        last_usage: Optional[dict],
+        messages: list,
+        source: str,
+        auto_compacted: bool = False,
+    ) -> tuple[dict, dict]:
+        """Build persisted wee context state and WebUI metadata."""
+        context_window = int(getattr(tracker, "context_window", 0) or 0)
+        estimated_tokens = self._wee_estimate_tokens(messages, model)
+        current_tokens = int(
+            getattr(tracker, "current_context_tokens", 0)
+            or getattr(tracker, "last_prompt_tokens", 0)
+            or estimated_tokens
+            or 0
+        )
+        compact_trigger = int(context_window * 0.75) if context_window else 0
+        remaining_before_compaction = max(0, compact_trigger - current_tokens)
+        remaining_before_limit = max(0, context_window - current_tokens)
+        percent_used = (
+            min(100.0, current_tokens / context_window * 100.0)
+            if context_window
+            else 0.0
+        )
+
+        usage_state = {
+            "prompt_tokens": int(getattr(tracker, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(tracker, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(tracker, "total_tokens", 0) or 0),
+            "turns": int(getattr(tracker, "turns", 0) or 0),
+            "session_total": int(getattr(tracker, "session_total", 0) or 0),
+            "current_context_tokens": current_tokens,
+            "last_prompt_tokens": int(
+                getattr(tracker, "last_prompt_tokens", 0) or current_tokens
+            ),
+            "context_window": context_window,
+            "estimated_tokens": estimated_tokens,
+            "compaction_trigger_tokens": compact_trigger,
+            "remaining_before_compaction": remaining_before_compaction,
+            "remaining_before_limit": remaining_before_limit,
+            "percent_used": percent_used,
+            "source": source,
+            "auto_compacted": auto_compacted,
+        }
+
+        meta = {
+            "runtime": "wee",
+            "context_window": context_window,
+            "current_context_tokens": current_tokens,
+            "context_percent": percent_used,
+            "compaction_trigger_tokens": compact_trigger,
+            "remaining_before_compaction": remaining_before_compaction,
+            "remaining_before_limit": remaining_before_limit,
+            "source": source,
+            "auto_compacted": auto_compacted,
+        }
+        if last_usage:
+            meta["tokens"] = int(last_usage.get("total_tokens", 0) or 0)
+            meta["prompt_tokens"] = int(last_usage.get("prompt_tokens", 0) or 0)
+            meta["completion_tokens"] = int(last_usage.get("completion_tokens", 0) or 0)
+
+        api_base_lower = (api_base or "").lower()
+        if "11434" in api_base_lower or api_base_lower.startswith(
+            "http://192.168.1.101"
+        ):
+            meta["cost_label"] = "local"
+        elif "1234" in api_base_lower:
+            meta["cost_label"] = "local"
+        elif "openrouter" in api_base_lower and ":free" in (model or "").lower():
+            meta["cost_label"] = "free"
+
+        return usage_state, meta
+
+    def _wee_save_runtime_state(
+        self,
+        n8n_session_id: str,
+        tracker,
+        model: str,
+        api_base: str,
+        messages: list,
+        last_usage: Optional[dict],
+        source: str,
+        auto_compacted: bool = False,
+    ) -> None:
+        """Persist wee token usage and context tracking for WebUI sessions."""
+        usage_state, meta = self._wee_build_meta(
+            api_base=api_base,
+            model=model,
+            tracker=tracker,
+            last_usage=last_usage,
+            messages=messages,
+            source=source,
+            auto_compacted=auto_compacted,
+        )
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id not in session_map:
+                self._get_or_create_session_data_unlocked(n8n_session_id)
+                session_map = self.load_session_map()
+            if n8n_session_id not in session_map:
+                return
+            if isinstance(session_map[n8n_session_id], str):
+                session_map[n8n_session_id] = {
+                    "session_id": session_map[n8n_session_id],
+                    "model": model,
+                    "agent": get_default_agent(),
+                    "runtime": "wee",
+                }
+            session_map[n8n_session_id]["wee_context_usage"] = usage_state
+            session_map[n8n_session_id]["wee_last_usage"] = last_usage or {}
+            session_map[n8n_session_id]["wee_last_meta"] = meta
+            self.save_session_map(session_map)
 
     def _wee_save_transcript(self, n8n_session_id: str, messages: list) -> str:
         """Persist a transcript snapshot used by compaction summaries."""
@@ -9111,8 +9450,7 @@ User Request:
         summary_prompt = (
             "Summarize the following conversation history concisely. Preserve all "
             "key facts, decisions, file paths, and errors so the conversation can "
-            "continue coherently.\n\nConversation:\n"
-            + "\n".join(transcript_lines)
+            "continue coherently.\n\nConversation:\n" + "\n".join(transcript_lines)
         )
         try:
             response = client.chat.completions.create(
@@ -9142,15 +9480,25 @@ User Request:
         model: str,
         system_prompt: str,
         threshold: float = 0.75,
+        token_tracker=None,
+        context_window: int = 0,
     ) -> list:
         """Compact wee context when estimated token usage crosses threshold."""
         if threshold >= 1.0:
             return messages
-        context_limit = self._wee_get_context_limit(model)
+        context_limit = context_window or self._wee_get_context_limit(model)
         if context_limit <= 0:
             return messages
-        estimated_tokens = self._wee_estimate_tokens(messages, model)
-        if estimated_tokens < int(context_limit * threshold):
+        current_tokens = 0
+        if token_tracker is not None:
+            current_tokens = int(
+                getattr(token_tracker, "current_context_tokens", 0)
+                or getattr(token_tracker, "last_prompt_tokens", 0)
+                or 0
+            )
+        if not current_tokens:
+            current_tokens = self._wee_estimate_tokens(messages, model)
+        if current_tokens < int(context_limit * threshold):
             return messages
         return self._wee_compact_context(
             client, n8n_session_id, messages, model, system_prompt
@@ -9162,9 +9510,10 @@ User Request:
 
     def _wee_is_free_model(self, model: str) -> bool:
         """Compatibility shim for wee free-model fallback tests."""
-        return ":free" in (model or "").lower() or "openrouter/free" in (
-            model or ""
-        ).lower()
+        return (
+            ":free" in (model or "").lower()
+            or "openrouter/free" in (model or "").lower()
+        )
 
     def _wee_resolve_endpoint(
         self, model: str, api_base: Optional[str], api_key: Optional[str]
@@ -10767,6 +11116,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "devin",
             "cursor",
             "wee",
+            "ollama",
         }
         if runtime not in known_runtimes:
             return {
@@ -11346,15 +11696,17 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         user["channel"], user["identity"], session_id, current_agent
                     )
                 runtime = session_data.get("runtime", "copilot")
-                done_payload = _json.dumps(
-                    {
-                        "type": "done",
-                        "response": result,
-                        "runtime": runtime,
-                        "model": session_data.get("model"),
-                        "agent": current_agent,
-                    }
-                )
+                done_event = {
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                    "agent": current_agent,
+                }
+                _wm = session_data.get("wee_last_meta")
+                if _wm:
+                    done_event["wee_meta"] = _wm
+                done_payload = _json.dumps(done_event)
                 yield f"data: {done_payload}\n\n"
                 done_delivered = True
             finally:
@@ -11457,6 +11809,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                                 ),
                                 "runtime": runtime,
                                 "model": session_data.get("model"),
+                                **(
+                                    {"wee_meta": session_data.get("wee_last_meta")}
+                                    if session_data.get("wee_last_meta")
+                                    else {}
+                                ),
                             }
                         )
                         yield f"data: {done_payload}\n\n"
@@ -11473,6 +11830,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             "response": result,
                             "runtime": runtime,
                             "model": session_data.get("model"),
+                            **(
+                                {"wee_meta": session_data.get("wee_last_meta")}
+                                if session_data.get("wee_last_meta")
+                                else {}
+                            ),
                         }
                     )
                     yield f"data: {done_payload}\n\n"
@@ -11511,6 +11873,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "response": result,
                         "runtime": runtime,
                         "model": session_data.get("model"),
+                        **(
+                            {"wee_meta": session_data.get("wee_last_meta")}
+                            if session_data.get("wee_last_meta")
+                            else {}
+                        ),
                     }
                 )
                 yield f"data: {done_payload}\n\n"
@@ -11565,6 +11932,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "permissions": data.get("permissions"),
             "silent_mode": data.get("silent_mode", False),  # F027
         }
+        if data.get("wee_context_usage"):
+            result["wee_context_usage"] = data.get("wee_context_usage")
+        if data.get("wee_last_meta"):
+            result["wee_last_meta"] = data.get("wee_last_meta")
 
         # Include running query info so the frontend can reconnect streams
         query_info = session_mgr.get_running_query(session_id)
@@ -12731,6 +13102,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return _cmd, _env, _proc_timeout, _agent_dir
 
         try:
+            # Update task record with fallback params (for retry logic)
+            if fallback_runtime or fallback_model:
+                bg_task_mgr.update_task(
+                    task_id,
+                    fallback_runtime=fallback_runtime,
+                    fallback_model=fallback_model,
+                )
+
             # Build full context prompt with agent/runtime/channel metadata
             # Pass user_identity explicitly so the system prompt curl command
             # gets the correct X-User-Identity (avoids telegram_unknown race).
@@ -13330,7 +13709,20 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
         agent = body.agent or defaults.get("agent", get_default_agent())
         runtime = body.runtime or defaults.get("runtime", get_default_runtime())
-        model = body.model or defaults.get("model", get_default_model())
+        raw_model = body.model or defaults.get("model", get_default_model())
+        resolved_model = session_mgr.get_model_from_name(raw_model, runtime)
+        # Reject explicit "auto" (placeholder, not a real model ID) and
+        # any model name that cannot be resolved to a known model.
+        if body.model and (body.model.lower() == "auto" or not resolved_model):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Invalid model '{body.model}' for runtime '{runtime}'. "
+                    f"Use GET /api/v1/models?runtime={runtime}"
+                    " to list available models."
+                ),
+            )
+        model = resolved_model or raw_model
 
         task_id = f"bg_{str(uuid4())[:8]}"
         session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
