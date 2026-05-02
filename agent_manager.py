@@ -1823,7 +1823,7 @@ class SessionManager:
         # Per-session stream buffers for multi-session streaming support.
         # Buffers all chunks so disconnected clients can reconnect and replay.
         # session_id -> _StreamBuffer
-        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}
+        self._stream_buffers: Dict[str, "_StreamBuffer"] = {}  # noqa: F821
 
         # Last subprocess exit code per n8n_session_id (for debugging/monitoring)
         self._last_exit_codes: Dict[str, int] = {}
@@ -2797,11 +2797,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not SCHEDULER_ENABLED:
+        if not self.SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = _get_scheduler()
+            scheduler = self._get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
@@ -12174,17 +12174,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         notify: bool = True,
         agent: Optional[str] = None,
     ):
-        """Emit a background task completion notification via notification_mgr."""
+        """Emit a background task completion notification via notification_mgr.
+
+        When ``is_critical`` is True the notification bypasses the global
+        suppression toggle (used for heartbeat alerts and system crashes).
+        """
         if notification_mgr is None:
             return
         try:
-            # Re-check per-identity AND global mute preference at emit time
-            # (user may have muted after the task was created, or muted from
-            # a different channel whose identity doesn't match).
-            if notify:
-                if notification_mgr.is_muted(
-                    user_identity
-                ) or notification_mgr.is_muted("_global"):
+            # Re-check per-identity mute preference at emit time
+            # (user may have muted after the task was created).
+            if notify and not is_critical:
+                if notification_mgr.is_muted(user_identity):
                     notify = False
                 elif agent and notification_mgr.is_agent_muted(user_identity, agent):
                     notify = False
@@ -13174,12 +13175,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         # Determine notification preference:
-        #   body override > global mute > per-identity store > session default > True
+        #   body override > global toggle > per-identity store > session default > True
         notify_pref = body.notify
         if notify_pref is None:
             if notification_mgr:
-                # Global mute takes priority (covers cross-channel identity mismatch)
-                if notification_mgr.is_muted("_global"):
+                # Global toggle takes priority (Issue #146)
+                if not notification_mgr.is_global_enabled():
                     notify_pref = False
                 # Per-identity store is authoritative
                 elif notification_mgr.is_muted(identity):
@@ -13635,6 +13636,51 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
         deleted = notification_mgr.delete_all_read(user_key)
         return {"deleted": deleted}
+
+    # --- Global Notification Settings (Issue #146) ---
+
+    class NotificationSettingsRequest(BaseModel):
+        notifications_enabled: bool
+
+    @app.get("/api/v1/settings/notifications")
+    async def get_notification_settings(request: Request):
+        """Return the global notification toggle state."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications_enabled": True, "available": False}
+        settings = notification_mgr.get_global_settings()
+        settings["available"] = True
+        return settings
+
+    @app.put("/api/v1/settings/notifications")
+    async def set_notification_settings(
+        body: NotificationSettingsRequest, request: Request
+    ):
+        """Set the global notification toggle."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        notification_mgr.set_global_enabled(body.notifications_enabled)
+        return {
+            "notifications_enabled": body.notifications_enabled,
+            "message": (
+                "Notifications enabled for all channels"
+                if body.notifications_enabled
+                else "Notifications suppressed globally (critical alerts still delivered)"
+            ),
+        }
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
