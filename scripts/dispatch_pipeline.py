@@ -42,14 +42,14 @@ AUTH_CHANNEL = "telegram"
 RUNNING_STATUSES = {"created", "queued", "pending", "running", "in_progress"}
 
 # Labels required in the repository (name → colour hex without #)
+# NEW WORKFLOW: wee-dev commits directly to dev branch, no QA labels.
+# Labels are: wee-dev (queued) → wee-dev:in-progress (working) → removed (complete)
+# QA and release to prod are manual/controlled separately.
 REQUIRED_LABELS = {
     "wee-dev": "0075ca",
     "wee-dev:in-progress": "e4e669",
-    "wee-dev:qa-review": "d93f0b",
-    "wee-dev:qa-failed": "e11d48",
-    "wee-dev:approved": "0e8a16",
+    "wee-dev:qa-failed": "e11d48",  # For manual QA rejections if needed
     "wee-dev:needs-approval": "f9a825",
-    "wee-dev:queued": "cccccc",
 }
 
 # Stall timeout: if in-progress/qa-review with no running task for this long, re-dispatch
@@ -212,41 +212,41 @@ def fetch_issues() -> list[dict]:
 
 
 def _resolve_status(labels: set[str]) -> str:
-    # Check in order of advancement — later pipeline stages win over earlier ones
-    # so that a task with both in-progress + qa-review is treated as qa-review.
+    # NEW WORKFLOW: Simple two-state system
+    # - wee-dev:in-progress = currently working
+    # - wee-dev label alone = queued (waiting to be worked)
+    # - wee-dev:qa-failed = manual QA rejection (returned to development)
+    # - (no label) = done (was manually removed by wee-dev on completion)
     for label, status in [
-        ("wee-dev:approved", "approved"),
-        ("wee-dev:qa-review", "qa-review"),
         ("wee-dev:qa-failed", "qa-failed"),
         ("wee-dev:in-progress", "in-progress"),
-        ("wee-dev:queued", "queued"),
     ]:
         if label in labels:
             return status
-    return "queued"
+    # If only "wee-dev" label exists (no sub-labels), it's queued
+    if "wee-dev" in labels:
+        return "queued"
+    return "done"
 
 
 def _cleanup_stale_labels(issue: int, labels: set[str]) -> None:
     """Remove stale state labels when an issue has conflicting states.
     
-    This handles race conditions where wee-dev/wee-qa add a new state label
-    but forget to remove the old one (e.g., both in-progress + qa-review).
-    The rule: keep only the most advanced state label, remove earlier ones.
+    NEW WORKFLOW: State labels are now: wee-dev (queued), wee-dev:in-progress (working),
+    wee-dev:qa-failed (QA reject). No more qa-review or approved labels.
     """
     state_labels = [
-        "wee-dev:approved",
-        "wee-dev:qa-review",
         "wee-dev:qa-failed",
         "wee-dev:in-progress",
-        "wee-dev:queued",
     ]
     found_labels = [l for l in state_labels if l in labels]
     
-    # If more than one state label exists, keep the first (most advanced) and remove others
+    # If both in-progress and qa-failed exist, keep qa-failed (more recent state)
     if len(found_labels) > 1:
         for stale_label in found_labels[1:]:
             log(f"Cleaning up stale label {stale_label!r} from #{issue} (keeping {found_labels[0]!r})")
             remove_label(issue, stale_label)
+
 
 
 def add_label(issue: int, label: str) -> None:
@@ -491,12 +491,15 @@ def build_wee_dev_prompt(item: dict) -> str:
         "## Task:\n"
         "1. Read the issue on GitHub to understand all requirements and context.\n"
         "2. Implement the fix/feature on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/.\n"
-        "3. Follow /opt/wee-dev/AGENTS.md for all git workflow rules.\n"
-        "4. Leave clear notes on this GitHub issue as you work.\n"
+        "3. **Commit directly to the dev branch** — no feature branches. Do NOT create issue/NNN branches.\n"
+        "4. Follow standard git workflow: pull dev, make changes, test, commit, push to origin dev.\n"
+        "5. Leave clear notes on this GitHub issue as you work.\n"
         "   - **IMPORTANT: Never put secrets, API keys, passwords, or credentials in GitHub issues.**\n"
         "   - Do leave implementation notes, decisions made, test results, and commit SHAs.\n"
-        "5. When implementation is complete and tests pass, add the label 'wee-dev:qa-review' to the issue.\n"
-        "6. The dispatcher will pick it up for wee-qa. Do not dispatch wee-qa yourself.\n"
+        "6. When implementation is complete, tested, and committed to dev branch:\n"
+        "   - Remove the 'wee-dev' label (marks task complete).\n"
+        "   - Leave a final comment with summary of changes and commit SHA.\n"
+        "   - Do NOT add any QA labels; that happens only at release time.\n"
         "7. Do not work on more than one issue at a time."
     )
 
@@ -727,33 +730,13 @@ def run_pipeline(items: list[dict], state: dict) -> None:
     if not wee_dev_dispatched and not in_progress and not qa_failed and not queued:
         log("No wee-dev work to do.")
 
+
     # -----------------------------------------------------------------------
-    # wee-qa slot: only runs if wee-dev did NOT dispatch this cycle (serial)
+    # QA is now MANUAL/RELEASE-TRIGGERED ONLY
     # -----------------------------------------------------------------------
-    if wee_dev_dispatched:
-        log("wee-dev dispatched this cycle — skipping wee-qa (serial enforcement)")
-        return
-
-    qa_review = [i for i in items if i["status"] == "qa-review"]
-
-    if not qa_review:
-        log("No issues awaiting QA review.")
-        return
-
-    for item in qa_review:
-        issue_state = get_issue_state(state, item["number"])
-        task_id = issue_state.get("wee_qa_task_id")
-
-        if task_id and is_task_running(task_id):
-            log(f"wee-qa already running task={task_id} for {item['id']} — skipping")
-            return  # Only one wee-qa at a time
-
-        log(f"Dispatching wee-qa for {item['id']}: {item['title']}")
-        try:
-            dispatch_wee_qa(item, state)
-        except Exception as exc:
-            log(f"ERROR: Failed to dispatch wee-qa for {item['id']}: {exc}")
-        return  # Only dispatch one wee-qa per cycle
+    # No automatic wee-qa dispatch. QA and release to prod are controlled
+    # separately via a release command/label, not by the pipeline.
+    log("(QA dispatch is manual/release-triggered only)")
 
 
 # ---------------------------------------------------------------------------
