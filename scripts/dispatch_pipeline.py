@@ -1,34 +1,14 @@
 #!/usr/bin/env python3
-"""Unified wee-dev/wee-qa pipeline dispatcher.
+"""Wee-Dev autonomous dispatcher — no QA, no PRs.
 
-Manages the full GitHub Issues → wee-dev → wee-qa pipeline:
-- GitHub labels are the sole state machine (no lock file)
-- pipeline_state.json tracks running background task IDs to prevent double-dispatch
-- wee-dev and wee-qa can run in parallel (for different issues)
-- Dispatcher owns all label transitions
-
-Label state machine:
-  (no status label)      = queued, ready for wee-dev
-  wee-dev:in-progress    = wee-dev working
-  wee-dev:qa-review      = wee-dev done, ready for wee-qa
-  wee-dev:qa-failed      = QA rejected, needs wee-dev fix
-  wee-dev:approved       = QA passed (wee-dev merges + closes)
-  wee-dev:needs-approval = filed by non-owner, awaiting approval
+wee-dev picks up GitHub issues, works directly on dev branch,
+commits directly to dev, and closes the issue when done.
 """
 
-import argparse
-import json
-import os
-import ssl
-import subprocess
-import sys
+import argparse, json, os, ssl, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import request
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 REPO = "leprachuan/Wee-Orchestrator"
 OWNER_LOGIN = "leprachuan"
@@ -38,320 +18,106 @@ BACKGROUND_TASKS_URL = "https://127.0.0.1:8000/api/v1/background-tasks"
 AGENTS_CONFIG_PATH = Path("/opt/n8n-copilot-shim/agents.json")
 USER_IDENTITY = "8193231291"
 AUTH_CHANNEL = "telegram"
-
 RUNNING_STATUSES = {"created", "queued", "pending", "running", "in_progress"}
-
-# Labels required in the repository (name → colour hex without #)
-# NEW WORKFLOW: wee-dev commits directly to dev branch, no QA labels.
-# Labels are: wee-dev (queued) → wee-dev:in-progress (working) → removed (complete)
-# QA and release to prod are manual/controlled separately.
-REQUIRED_LABELS = {
-    "wee-dev": "0075ca",
-    "wee-dev:in-progress": "e4e669",
-    "wee-dev:qa-failed": "e11d48",  # For manual QA rejections if needed
-    "wee-dev:needs-approval": "f9a825",
-}
-
-# Stall timeout: if in-progress/qa-review with no running task for this long, re-dispatch
+REQUIRED_LABELS = {"wee-dev": "0075ca", "wee-dev:in-progress": "e4e669", "wee-dev:needs-approval": "f9a825"}
 STALL_TIMEOUT_MINUTES = 30
-
 DRY_RUN = False
-
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
 def log(msg: str) -> None:
-    print(f"[{now_iso()}] {msg}")
-
-
-def parse_iso(s: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except (ValueError, AttributeError, TypeError):
-        return None
-
-
-def minutes_since(iso_str: str) -> float | None:
-    t = parse_iso(iso_str)
-    if t is None:
-        return None
-    return (datetime.now(timezone.utc) - t).total_seconds() / 60
-
-
-# Alias retained for test imports that used the old dispatch_wee_dev_work_queue name.
-parse_iso_datetime = parse_iso
-
-# States where stall-timeout detection applies (waiting on an external agent).
-_STALL_STATES = {"qa-review", "in-progress", "qa-failed"}
-
-
-def check_stall_timeout(lock: dict | None) -> bool:
-    """Return True when a lock entry has been in a stall-eligible state longer
-    than STALL_TIMEOUT_MINUTES, indicating the responsible agent is stuck."""
-    if lock is None:
-        return False
-    if lock.get("state") not in _STALL_STATES:
-        return False
-    created_at = lock.get("created_at")
-    if not created_at:
-        return False
-    mins = minutes_since(created_at)
-    if mins is None:
-        return False
-    return mins >= STALL_TIMEOUT_MINUTES
-
-
-# ---------------------------------------------------------------------------
-# GitHub helpers
-# ---------------------------------------------------------------------------
-
-
-def gh(*args: str, check: bool = True) -> str:
-    cmd = ["gh"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if check and result.returncode != 0:
-        raise RuntimeError(
-            f"gh {' '.join(args)} failed ({result.returncode}): {result.stderr.strip()}"
-        )
-    return result.stdout.strip()
-
-
-def ensure_labels() -> None:
-    existing = {
-        lbl["name"]
-        for lbl in json.loads(
-            gh("label", "list", "--repo", REPO, "--limit", "200", "--json", "name")
-        )
-    }
-    for name, colour in REQUIRED_LABELS.items():
-        if name not in existing:
-            if DRY_RUN:
-                log(f"[dry-run] Would create label {name!r}")
-                continue
-            gh(
-                "label",
-                "create",
-                name,
-                "--repo",
-                REPO,
-                "--color",
-                colour,
-                "--description",
-                f"wee pipeline: {name}",
-                "--force",
-            )
-            log(f"Created label {name!r}")
-
-
-def fetch_issues() -> list[dict]:
-    """Fetch all open issues labelled wee-dev, sorted oldest first."""
-    raw = gh(
-        "issue",
-        "list",
-        "--repo",
-        REPO,
-        "--label",
-        "wee-dev",
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "number,title,labels,body,author,createdAt",
-    )
-    issues = json.loads(raw)
-    items = []
-    for issue in issues:
-        label_names = {lbl["name"] for lbl in issue.get("labels", [])}
-        status = _resolve_status(label_names)
-        items.append(
-            {
-                "number": issue["number"],
-                "id": f"#{issue['number']}",
-                "title": issue["title"],
-                "labels": label_names,
-                "status": status,
-                "body": (issue.get("body") or "")[:2000],
-                "author": (issue.get("author") or {}).get("login", ""),
-            }
-        )
-    items.sort(key=lambda x: x["number"])
-    return items
-
-
-def _resolve_status(labels: set[str]) -> str:
-    for label, status in [
-        ("wee-dev:in-progress", "in-progress"),
-        ("wee-dev:qa-review", "qa-review"),
-        ("wee-dev:qa-failed", "qa-failed"),
-        ("wee-dev:approved", "approved"),
-        ("wee-dev:queued", "queued"),
-    ]:
-        if label in labels:
-            return status
-    # If only "wee-dev" label exists (no sub-labels), it's queued
-    if "wee-dev" in labels:
-        return "queued"
-    return "done"
-
-
-def add_label(issue: int, label: str) -> None:
-    if DRY_RUN:
-        log(f"[dry-run] add label {label!r} to #{issue}")
-        return
-    gh("issue", "edit", str(issue), "--repo", REPO, "--add-label", label)
-
-
-def remove_label(issue: int, label: str) -> None:
-    if DRY_RUN:
-        log(f"[dry-run] remove label {label!r} from #{issue}")
-        return
-    gh(
-        "issue",
-        "edit",
-        str(issue),
-        "--repo",
-        REPO,
-        "--remove-label",
-        label,
-        check=False,
-    )
-
-
-def add_comment(issue: int, body: str) -> None:
-    if DRY_RUN:
-        log(f"[dry-run] comment on #{issue}: {body[:60]}...")
-        return
-    gh("issue", "comment", str(issue), "--repo", REPO, "--body", body)
-
-
-def transition(issue: int, from_label: str | None, to_label: str, comment: str) -> None:
-    if from_label:
-        remove_label(issue, from_label)
-    add_label(issue, to_label)
-    add_comment(issue, comment)
-
-
-# ---------------------------------------------------------------------------
-# Pipeline state
-# ---------------------------------------------------------------------------
-
+    ts = datetime.now(timezone.utc).isoformat()
+    print(f"[{ts}] {msg}")
 
 def load_state() -> dict:
     if PIPELINE_STATE_PATH.exists():
-        try:
-            return json.loads(PIPELINE_STATE_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
+        with open(PIPELINE_STATE_PATH) as f:
+            return json.load(f)
     return {}
-
 
 def save_state(state: dict) -> None:
     PIPELINE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PIPELINE_STATE_PATH.write_text(json.dumps(state, indent=2) + "\n")
+    with open(PIPELINE_STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
 
+def get_issue_state(state: dict, issue_number: int) -> dict:
+    key = str(issue_number)
+    if key not in state:
+        state[key] = {}
+    return state[key]
 
-def get_issue_state(state: dict, issue_num: int) -> dict:
-    return state.get(str(issue_num), {})
-
-
-def set_issue_field(state: dict, issue_num: int, key: str, value) -> None:
-    k = str(issue_num)
-    if k not in state:
-        state[k] = {}
-    state[k][key] = value
-    state[k]["last_updated"] = now_iso()
-
-
-def cleanup_closed_issues(state: dict, open_numbers: set[int]) -> dict:
-    """Remove entries for issues no longer open."""
-    closed = [k for k in state if int(k) not in open_numbers]
-    for k in closed:
-        log(f"Cleaning up state for closed/missing issue #{k}")
-        del state[k]
-    return state
-
-
-# ---------------------------------------------------------------------------
-# API helpers
-# ---------------------------------------------------------------------------
-
+def set_issue_field(state: dict, issue_number: int, field: str, value) -> None:
+    state[str(issue_number)][field] = value
+    save_state(state)
 
 def _load_api_key() -> str:
     if ENV_PATH.exists():
-        for line in ENV_PATH.read_text().splitlines():
-            if line.startswith("API_SHARED_KEY="):
-                return line.split("=", 1)[1].strip()
-    raise RuntimeError(f"API_SHARED_KEY not found in {ENV_PATH}")
+        with open(ENV_PATH) as f:
+            for line in f:
+                if line.startswith("API_KEY="):
+                    return line.split("=", 1)[1].strip()
+    raise RuntimeError("API_KEY not found in .env")
 
+def minutes_since(iso_time: str) -> float:
+    if not iso_time:
+        return None
+    try:
+        past = datetime.fromisoformat(iso_time)
+        now = datetime.now(timezone.utc) if past.tzinfo else datetime.now()
+        return (now - past).total_seconds() / 60
+    except:
+        return None
+
+def get_open_wee_dev_issues() -> list:
+    cmd = ["gh", "issue", "list", "--repo", REPO, "--label", "wee-dev", "--state", "open", "--json", "number,title,body,author,labels"]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return json.loads(result.stdout)
+
+def get_issue_status(item: dict) -> str:
+    labels = [l["name"] for l in item.get("labels", [])]
+    if "wee-dev:in-progress" in labels:
+        return "in-progress"
+    if "wee-dev:needs-approval" in labels:
+        return "needs-approval"
+    return "queued"
+
+def add_label(issue_number: int, label: str) -> None:
+    subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", label], check=True)
+
+def remove_label(issue_number: int, label: str) -> None:
+    subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", label], check=True)
+
+def add_comment(issue_number: int, body: str) -> None:
+    subprocess.run(["gh", "issue", "comment", str(issue_number), "--repo", REPO, "--body", body], check=True)
+
+def ensure_labels_exist() -> None:
+    for label, color in REQUIRED_LABELS.items():
+        subprocess.run(["gh", "label", "create", label, "--repo", REPO, "--color", color, "--force"], capture_output=True)
+
+def _load_agents_config() -> dict:
+    with open(AGENTS_CONFIG_PATH) as f:
+        return json.load(f)
 
 def get_agent_dispatch_config(agent_name: str) -> dict:
-    config = json.loads(AGENTS_CONFIG_PATH.read_text())
-    agent = next(
-        (a for a in config.get("agents", []) if a.get("name") == agent_name), None
-    )
-    if agent is None:
-        raise RuntimeError(f"Agent {agent_name!r} not found in agents.json")
-
-    # Legacy dispatch_config block
-    if agent.get("dispatch_config"):
-        cfg = dict(agent["dispatch_config"])
-        if "fallback_runtime" not in cfg:
-            cfg["fallback_runtime"] = agent.get("fallback_runtime")
-        if "fallback_model" not in cfg:
-            cfg["fallback_model"] = agent.get("fallback_model")
-        return cfg
-
-    # Canonical flat fields
-    default_perm = "elevated" if agent_name in ("wee-dev", "wee-qa") else "restricted"
-    permission_mode = (
-        agent.get("permission_mode")
-        or agent.get("permissions", {}).get("mode")
-        or default_perm
-    )
-    yolo = agent.get("yolo")
-    if yolo is None:
-        yolo = agent_name in ("wee-dev", "wee-qa")
+    agents = _load_agents_config()
+    agent = agents.get(agent_name, {})
     return {
         "runtime": agent.get("primary_runtime", "copilot"),
         "model": agent.get("primary_model", "auto"),
+        "timeout": agent.get("timeout", 3600),
+        "permission_mode": agent.get("permission_mode", "restricted"),
+        "yolo": agent.get("yolo", False),
         "fallback_runtime": agent.get("fallback_runtime"),
         "fallback_model": agent.get("fallback_model"),
-        "permission_mode": permission_mode,
-        "yolo": bool(yolo),
-        "timeout": 3600,
     }
-
 
 def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
-    """Dispatch a background task and return the task_id."""
-    import hashlib
-    import hmac
-
+    import hashlib, hmac
     api_key = _load_api_key()
-    # "auto" is a dispatcher placeholder meaning "no explicit model" — omit the
-    # field so the API resolves the runtime's default instead of rejecting it.
-    raw_model = cfg.get("model") or ""
-    resolved_model = None if raw_model.lower() in ("auto", "") else raw_model
-    raw_fallback_model = cfg.get("fallback_model") or ""
-    resolved_fallback_model = (
-        None if raw_fallback_model.lower() in ("auto", "") else raw_fallback_model
-    )
-
-    body = {
-        "prompt": prompt,
-        "agent": agent,
-        "runtime": cfg["runtime"],
-        "timeout": cfg.get("timeout", 3600),
-        "notify": False,
-    }
+    resolved_model = None if (cfg.get("model") or "").lower() in ("auto", "") else cfg.get("model")
+    resolved_fallback_model = None if (cfg.get("fallback_model") or "").lower() in ("auto", "") else cfg.get("fallback_model")
+    body = {"prompt": prompt, "agent": agent, "runtime": cfg["runtime"], "timeout": cfg.get("timeout", 3600), "notify": False}
     if resolved_model:
         body["model"] = resolved_model
     if cfg.get("permission_mode"):
@@ -362,12 +128,8 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
         body["fallback_runtime"] = cfg["fallback_runtime"]
     if resolved_fallback_model:
         body["fallback_model"] = resolved_fallback_model
-
     payload_json = json.dumps(body, sort_keys=True)
-    signature = hmac.new(
-        api_key.encode(), payload_json.encode(), hashlib.sha256
-    ).hexdigest()
-
+    signature = hmac.new(api_key.encode(), payload_json.encode(), hashlib.sha256).hexdigest()
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer shared_{api_key}",
@@ -378,13 +140,7 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
-
-    req = request.Request(
-        BACKGROUND_TASKS_URL,
-        data=json.dumps(body).encode(),
-        headers=headers,
-        method="POST",
-    )
+    req = request.Request(BACKGROUND_TASKS_URL, data=json.dumps(body).encode(), headers=headers, method="POST")
     with request.urlopen(req, context=ssl_ctx, timeout=30) as resp:
         result = json.loads(resp.read())
         task_id = result.get("task_id", "")
@@ -392,9 +148,7 @@ def dispatch_via_api(agent: str, prompt: str, cfg: dict) -> str:
             raise RuntimeError(f"No task_id in response: {result}")
         return task_id
 
-
 def is_task_running(task_id: str) -> bool:
-    """Return True if the background task is still active."""
     try:
         api_key = _load_api_key()
         url = f"{BACKGROUND_TASKS_URL}/{task_id}"
@@ -406,271 +160,107 @@ def is_task_running(task_id: str) -> bool:
         with request.urlopen(req, context=ssl_ctx, timeout=15) as resp:
             data = json.loads(resp.read())
             return data.get("status", "").lower() in RUNNING_STATUSES
-    except Exception:
-        return False  # API unreachable → assume not running (fail-open for re-dispatch)
-
-
-# ---------------------------------------------------------------------------
-# Safety gate
-# ---------------------------------------------------------------------------
-
+    except:
+        return False
 
 def passes_safety_gate(item: dict) -> bool:
-    if "wee-dev:approved" in item["labels"]:
+    author = item.get("author", {}).get("login", "")
+    if author == OWNER_LOGIN:
         return True
-    if item["author"] == OWNER_LOGIN:
-        return True
-    log(f"  {item['id']} filed by {item['author']!r} — needs approval")
-    if "wee-dev:needs-approval" not in item["labels"]:
+    labels = [l["name"] for l in item.get("labels", [])]
+    if "wee-dev:needs-approval" not in labels:
+        log(f"  Issue #{item['number']} filed by @{author} — needs approval")
         add_label(item["number"], "wee-dev:needs-approval")
-        add_comment(
-            item["number"],
-            f"⏳ Awaiting owner approval before wee-dev picks this up. "
-            f"Filed by @{item['author']}; only @{OWNER_LOGIN} issues are auto-dispatched.",
-        )
+        add_comment(item["number"], f"⏳ Awaiting owner approval before wee-dev picks this up. Filed by @{author}; only @{OWNER_LOGIN} issues are auto-dispatched.")
     return False
 
-
-# ---------------------------------------------------------------------------
-# wee-dev dispatch
-# ---------------------------------------------------------------------------
-
-
 def build_wee_dev_prompt(item: dict) -> str:
-    return (
-        f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
+    return (f"Work on GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
         f"Issue body:\n{item['body']}\n\n"
-        "Read the full issue on GitHub for complete details. Implement the fix/feature "
-        "on the dev host (192.168.1.100) in /opt/n8n-copilot-shim-dev/. "
-        "Follow /opt/wee-dev/AGENTS.md for all git workflow rules. "
-        "When implementation is complete and tests pass, add the label "
-        "'wee-dev:qa-review' to the issue — the dispatcher will pick it up for wee-qa. "
-        "Do not dispatch wee-qa yourself. Do not work on more than this one issue."
-    )
-
+        "## Task:\n"
+        "1. Read the full issue on GitHub to understand all requirements:\n"
+        f"   gh issue view {item['number']} --repo {REPO} --comments\n\n"
+        "2. Implement on dev host (192.168.1.100): ssh root@192.168.1.100\n"
+        "   Path: /opt/n8n-copilot-shim-dev/\n\n"
+        "3. Work directly on dev branch (no feature branches):\n"
+        "   git checkout dev && git pull origin dev\n"
+        "   (make changes, test locally)\n"
+        "   git commit -m 'message'\n"
+        "   git push origin dev\n\n"
+        "4. Leave clear notes on GitHub as you work:\n"
+        "   - Implementation decisions\n"
+        "   - Test results\n"
+        "   - Final commit SHA\n"
+        "   ⚠️ NEVER put secrets, API keys, or credentials in GitHub\n\n"
+        "5. When complete:\n"
+        "   - Remove the 'wee-dev' label\n"
+        "   - Close the issue\n"
+        "   - Leave final comment with summary\n\n"
+        "6. Work on only ONE issue at a time.")
 
 def dispatch_wee_dev(item: dict, state: dict) -> None:
     cfg = get_agent_dispatch_config("wee-dev")
     prompt = build_wee_dev_prompt(item)
-
     if DRY_RUN:
-        log(
-            f"[dry-run] Would dispatch wee-dev for {item['id']} (runtime={cfg['runtime']})"
-        )
+        log(f"[dry-run] Would dispatch wee-dev for #{item['number']}")
         return
-
     task_id = dispatch_via_api("wee-dev", prompt, cfg)
-    log(f"Dispatched wee-dev task_id={task_id} for {item['id']}")
+    log(f"Dispatched wee-dev task_id={task_id} for #{item['number']}: {item['title']}")
     set_issue_field(state, item["number"], "wee_dev_task_id", task_id)
     set_issue_field(state, item["number"], "wee_dev_dispatched_at", now_iso())
 
-
-# ---------------------------------------------------------------------------
-# wee-qa dispatch
-# ---------------------------------------------------------------------------
-
-
-def build_wee_qa_prompt(item: dict) -> str:
-    return (
-        f"QA review for GitHub issue #{item['number']} in {REPO}: {item['title']}.\n\n"
-        f"Issue body:\n{item['body']}\n\n"
-        "Read the full issue on GitHub. The implementation is on dev host 192.168.1.100 "
-        "in /opt/n8n-copilot-shim-dev/. Run the full test suite, check code quality "
-        "(flake8/black), verify the implementation matches issue requirements. "
-        "When done: if QA passes, add label 'wee-dev:approved' and post a comment "
-        "with 'VERDICT: APPROVE' and the passing test count. "
-        "If QA fails, add label 'wee-dev:qa-failed' and post a comment with "
-        "'VERDICT: REJECT' and specific failure details. "
-        "Remove the 'wee-dev:qa-review' label when you start reviewing."
-    )
-
-
-def dispatch_wee_qa(item: dict, state: dict) -> None:
-    cfg = get_agent_dispatch_config("wee-qa")
-    prompt = build_wee_qa_prompt(item)
-
-    if DRY_RUN:
-        log(
-            f"[dry-run] Would dispatch wee-qa for {item['id']} (runtime={cfg['runtime']})"
-        )
-        return
-
-    task_id = dispatch_via_api("wee-qa", prompt, cfg)
-    log(f"Dispatched wee-qa task_id={task_id} for {item['id']}")
-    set_issue_field(state, item["number"], "wee_qa_task_id", task_id)
-    set_issue_field(state, item["number"], "wee_qa_dispatched_at", now_iso())
-
-
-# ---------------------------------------------------------------------------
-# Main pipeline logic
-# ---------------------------------------------------------------------------
-
-
-def run_pipeline(items: list[dict], state: dict) -> None:
-    # -----------------------------------------------------------------------
-    # wee-dev slot: one in-progress wee-dev task at a time
-    # -----------------------------------------------------------------------
-    in_progress = [i for i in items if i["status"] == "in-progress"]
-    qa_failed = [i for i in items if i["status"] == "qa-failed"]
-    queued = [i for i in items if i["status"] == "queued"]
-
-    wee_dev_dispatched = False
-
+def run_pipeline() -> None:
+    state = load_state()
+    ensure_labels_exist()
+    items = get_open_wee_dev_issues()
+    log(f"Found {len(items)} open wee-dev issue(s)")
+    in_progress = [i for i in items if get_issue_status(i) == "in-progress"]
+    needs_approval = [i for i in items if get_issue_status(i) == "needs-approval"]
+    queued = [i for i in items if get_issue_status(i) == "queued"]
+    log(f"  in-progress: {', '.join(f'#{i['number']}' for i in in_progress) or '(none)'}")
+    log(f"  needs-approval: {', '.join(f'#{i['number']}' for i in needs_approval) or '(none)'}")
+    log(f"  queued: {', '.join(f'#{i['number']}' for i in queued) or '(none)'}")
     if in_progress:
         item = in_progress[0]
         issue_state = get_issue_state(state, item["number"])
         task_id = issue_state.get("wee_dev_task_id")
-
         if task_id and is_task_running(task_id):
-            log(f"wee-dev already running task={task_id} for {item['id']} — skipping")
-            wee_dev_dispatched = True
-        else:
-            # Not running — check stall timeout before re-dispatching
-            dispatched_at = issue_state.get("wee_dev_dispatched_at")
-            mins = minutes_since(dispatched_at) if dispatched_at else None
-            if mins is not None and mins < STALL_TIMEOUT_MINUTES:
-                log(
-                    f"wee-dev task for {item['id']} ended within {mins:.1f}min — "
-                    f"may have just finished; skipping re-dispatch"
-                )
-                wee_dev_dispatched = True
-            else:
-                log(
-                    f"Re-dispatching wee-dev for stalled {item['id']} (in-progress, no running task)"
-                )
-                try:
-                    dispatch_wee_dev(item, state)
-                    wee_dev_dispatched = True
-                except Exception as exc:
-                    log(f"ERROR: Failed to re-dispatch wee-dev: {exc}")
-
-    if not wee_dev_dispatched and qa_failed:
-        item = qa_failed[0]
-        log(f"QA-failed: re-dispatching wee-dev for {item['id']}")
-        current_label = "wee-dev:qa-failed"
-        transition(
-            item["number"],
-            current_label,
-            "wee-dev:in-progress",
-            f"🔄 wee-dev re-dispatched to address QA feedback ({now_iso()}).",
-        )
+            log(f"wee-dev still running task={task_id} for #{item['number']} — waiting")
+            return
+        dispatched_at = issue_state.get("wee_dev_dispatched_at")
+        mins = minutes_since(dispatched_at) if dispatched_at else None
+        if mins is not None and mins < STALL_TIMEOUT_MINUTES:
+            log(f"wee-dev task for #{item['number']} ended within {mins:.1f}min (< {STALL_TIMEOUT_MINUTES}min stall timeout) — may still be processing")
+            return
+        log(f"Re-dispatching stalled #{item['number']} (no running task after {mins:.1f}min)")
+        add_label(item["number"], "wee-dev:in-progress")
         try:
             dispatch_wee_dev(item, state)
-            wee_dev_dispatched = True
         except Exception as exc:
-            log(f"ERROR: Failed to dispatch wee-dev for qa-failed: {exc}")
-            # Roll back label
-            transition(
-                item["number"],
-                "wee-dev:in-progress",
-                current_label,
-                "⚠️ Dispatcher failed to re-dispatch wee-dev; reverted to qa-failed.",
-            )
-
-    if not wee_dev_dispatched and queued:
-        # Pick next queued issue (FIFO, safety gate)
+            log(f"ERROR: Failed to re-dispatch: {exc}")
+            remove_label(item["number"], "wee-dev:in-progress")
+        return
+    if queued:
         for candidate in queued:
             if not passes_safety_gate(candidate):
                 continue
-            log(
-                f"Dispatching wee-dev for queued {candidate['id']}: {candidate['title']}"
-            )
-            transition(
-                candidate["number"],
-                None,
-                "wee-dev:in-progress",
-                f"🚀 wee-dev picking up this issue ({now_iso()}).",
-            )
+            log(f"Dispatching wee-dev for #{candidate['number']}: {candidate['title']}")
+            add_label(candidate["number"], "wee-dev:in-progress")
             try:
                 dispatch_wee_dev(candidate, state)
-                wee_dev_dispatched = True
             except Exception as exc:
-                log(f"ERROR: Failed to dispatch wee-dev: {exc}")
-                # Roll back label
+                log(f"ERROR: Failed to dispatch: {exc}")
                 remove_label(candidate["number"], "wee-dev:in-progress")
-            break
-        else:
-            log("No approved queued issues to dispatch.")
+            return
+    log("No wee-dev work to do.")
 
-    if not wee_dev_dispatched and not in_progress and not qa_failed and not queued:
-        log("No wee-dev work to do.")
-
-
-    # -----------------------------------------------------------------------
-    # wee-qa slot: can run in parallel with wee-dev (different issue)
-    # -----------------------------------------------------------------------
-    qa_review = [i for i in items if i["status"] == "qa-review"]
-
-    if not qa_review:
-        log("No issues awaiting QA review.")
-        return
-
-    for item in qa_review:
-        issue_state = get_issue_state(state, item["number"])
-        task_id = issue_state.get("wee_qa_task_id")
-
-        if task_id and is_task_running(task_id):
-            log(f"wee-qa already running task={task_id} for {item['id']} — skipping")
-            return  # Only one wee-qa at a time
-
-        log(f"Dispatching wee-qa for {item['id']}: {item['title']}")
-        try:
-            dispatch_wee_qa(item, state)
-        except Exception as exc:
-            log(f"ERROR: Failed to dispatch wee-qa for {item['id']}: {exc}")
-        return  # Only dispatch one wee-qa per cycle
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Unified wee-dev/wee-qa pipeline dispatcher"
-    )
-    parser.add_argument("--dry-run", action="store_true")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Wee-Dev autonomous dispatcher")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate without dispatching")
     args = parser.parse_args()
-
     global DRY_RUN
     DRY_RUN = args.dry_run
-    if DRY_RUN:
-        log("=== DRY RUN MODE ===")
-
-    log("Ensuring GitHub labels exist...")
-    ensure_labels()
-
-    log(f"Fetching open wee-dev issues from {REPO}...")
-    items = fetch_issues()
-    log(f"Found {len(items)} open wee-dev issue(s)")
-
-    if not items:
-        log("Queue is empty — nothing to dispatch.")
-        return 0
-
-    # Log summary
-    by_status: dict[str, list] = {}
-    for item in items:
-        by_status.setdefault(item["status"], []).append(item["id"])
-    for status, ids in sorted(by_status.items()):
-        log(f"  {status}: {', '.join(ids)}")
-
-    state = load_state()
-    open_numbers = {i["number"] for i in items}
-    state = cleanup_closed_issues(state, open_numbers)
-
-    run_pipeline(items, state)
-
-    if not DRY_RUN:
-        save_state(state)
-
-    return 0
-
+    run_pipeline()
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:
-        log(f"dispatch_pipeline failed: {exc}")
-        raise
+    main()
