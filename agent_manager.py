@@ -13803,9 +13803,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             elif agent_config.get("yolo", False):
                 perm_mode = "elevated"
             else:
-                perm_mode = dispatch_config.get(
-                    "permission_mode", agent_config.get("permission_mode", "restricted")
-                )
+                agent_perm_mode = (agent_config.get("permissions") or {}).get("mode") or agent_config.get("permission_mode", "restricted")
+                perm_mode = dispatch_config.get("permission_mode", agent_perm_mode)
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
         if running >= max_concurrent:
