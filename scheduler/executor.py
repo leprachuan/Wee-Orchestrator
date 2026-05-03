@@ -633,8 +633,6 @@ class TaskSchedulerExecutor:
             "--model",
             model,
         ]
-        if perm_mode in ("elevated", "restricted", "sandboxed"):
-            cmd.extend(["--mode", perm_mode])
         cmd.extend([task, session_id])
 
         logger.info(
@@ -649,12 +647,22 @@ class TaskSchedulerExecutor:
 
         self._write_checkpoint(job_id)
         try:
+            # Prepare environment with permission mode
+            env = {**os.environ, "COMMAND_TIMEOUT": str(timeout)}
+            if perm_mode == "elevated":
+                env["WEE_ELEVATED"] = "true"
+            elif perm_mode == "sandboxed":
+                env["WEE_SANDBOXED"] = "true"
+            
+            # Remove --mode from cmd since agent_manager.py doesn't have a CLI parser for it
+            # (it's already in the environment now)
+            
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env={**os.environ, "COMMAND_TIMEOUT": str(timeout)},
+                env=env,
             )
 
             if result.returncode == 0:
