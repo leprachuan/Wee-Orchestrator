@@ -3889,6 +3889,11 @@ You can mention an agent in your prompt and it will auto-delegate:
     WEE_MODELS = {
         "Wee Native (Ollama)": [
             ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
+            (
+                "ollama/gemma4-e2b-128k:latest",
+                "Ollama Gemma 4 E2B 128K Context (local)",
+                ["gemma4-e2b-128k", "gemma4-128k"],
+            ),
             ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
             (
                 "ollama/qwen3.5-64k:latest",
