@@ -13,7 +13,7 @@ class TestWeeQAFallbackModel(unittest.TestCase):
 
     def test_weeqa_fallback_model_is_auto(self):
         """Verify wee-qa fallback_model is 'auto' not 'claude-sonnet-4.6'"""
-        with open('/opt/n8n-copilot-shim-dev/agents.json', 'r') as f:
+        with open('/opt/n8n-copilot-shim/agents.json', 'r') as f:
             agents = json.load(f)
         
         # Find wee-qa agent
@@ -32,7 +32,7 @@ class TestWeeQAFallbackModel(unittest.TestCase):
     
     def test_all_agents_copilot_fallback_use_compatible_models(self):
         """Verify all agents with copilot fallback use compatible model names"""
-        with open('/opt/n8n-copilot-shim-dev/agents.json', 'r') as f:
+        with open('/opt/n8n-copilot-shim/agents.json', 'r') as f:
             agents = json.load(f)
         
         for agent in agents['agents']:

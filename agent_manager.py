@@ -13495,7 +13495,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 if _is_infra_error and (_fb_runtime or _fb_model) and not _already_fb:
                     _eff_fb_runtime = _fb_runtime or runtime
-                    _eff_fb_model = _fb_model or model
+                    # Smart model selection: if switching runtimes, use fallback_model
+                    # If no fallback_model configured and runtime changed, use "auto"
+                    if _fb_model:
+                        _eff_fb_model = _fb_model
+                    elif _fb_runtime and _fb_runtime != runtime:
+                        _eff_fb_model = "auto"  # Safe default for new runtime
+                    else:
+                        _eff_fb_model = model
                     bg_task_mgr.append_output(
                         task_id,
                         f"[Fallback] Primary failed ({primary_error_msg[:120]}), retrying with runtime={_eff_fb_runtime}, model={_eff_fb_model}",
