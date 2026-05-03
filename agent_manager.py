@@ -159,6 +159,145 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
     return sanitized
 
 
+def _codex_item_name(item: dict) -> str:
+    """Return a UI-friendly tool/event name for a Codex transport item."""
+    if not isinstance(item, dict):
+        return "codex_event"
+    item_type = str(item.get("type") or "codex_event").strip() or "codex_event"
+    if item_type == "command_execution" or item.get("command"):
+        return "shell"
+    return str(item.get("name") or item_type)
+
+
+def _codex_item_text_value(value) -> str:
+    """Normalize a Codex item field to a display string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _codex_item_input(item: dict) -> str:
+    """Extract the most useful input summary from a Codex transport item."""
+    if not isinstance(item, dict):
+        return ""
+    for field in ("command", "input", "arguments", "args", "path", "prompt"):
+        value = _codex_item_text_value(item.get(field))
+        if value:
+            return value
+    return ""
+
+
+def _codex_item_output(item: dict) -> str:
+    """Extract the most useful output summary from a Codex transport item."""
+    if not isinstance(item, dict):
+        return ""
+    for field in ("aggregated_output", "output", "result", "content", "text"):
+        value = _codex_item_text_value(item.get(field))
+        if value:
+            return value
+    return ""
+
+
+def _parse_codex_transport_line(
+    line: str, seen_item_ids: Optional[set] = None
+) -> Optional[list]:
+    """Parse one Codex JSONL transport line into text/tool UI events.
+
+    Returns:
+    - ``None`` when the line is not a Codex JSON transport frame.
+    - ``[]`` when the frame is structured metadata that should not render as text.
+    - A list of ``(channel, payload)`` tuples for assistant text/tool events.
+    """
+    stripped = (line or "").strip()
+    if not stripped.startswith("{"):
+        return None
+
+    try:
+        event = json.loads(stripped)
+    except (ValueError, TypeError):
+        return None
+
+    event_type = event.get("type", "")
+    if event_type in (
+        "thread.started",
+        "thread.completed",
+        "turn.started",
+        "turn.completed",
+        "response.started",
+        "response.completed",
+    ):
+        return []
+
+    if event_type not in ("item.started", "item.completed"):
+        return []
+
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return []
+
+    item_type = item.get("type", "")
+    if item_type == "agent_message":
+        if event_type != "item.completed":
+            return []
+        text = item.get("text", "")
+        if not isinstance(text, str) or not text:
+            return []
+        return [("chunk", text)]
+
+    item_id = str(item.get("id") or f"codex_{item_type or 'event'}")
+    tool_name = _codex_item_name(item)
+    tool_input = _codex_item_input(item)
+    tool_output = _codex_item_output(item)
+    tool_events = []
+
+    already_seen = seen_item_ids is not None and item_id in seen_item_ids
+    if not already_seen:
+        tool_events.append(
+            (
+                "tool_call",
+                {
+                    "event": "detected",
+                    "id": item_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                    "runtime": "codex",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        )
+        if seen_item_ids is not None:
+            seen_item_ids.add(item_id)
+
+    if event_type == "item.completed":
+        is_error = bool(
+            item.get("is_error")
+            or item.get("error")
+            or str(item.get("status", "")).lower() in ("error", "failed", "failure")
+        )
+        tool_events.append(
+            (
+                "tool_call",
+                {
+                    "event": "completed",
+                    "id": item_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                    "output": tool_output,
+                    "is_error": is_error,
+                    "runtime": "codex",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        )
+
+    return tool_events
+
+
 def _resolve_silent_default(channel: str) -> bool:
     """Resolve silent_mode default from WEE_VERBOSE env var or channel.
 
@@ -3088,14 +3227,17 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 bg_prompt_parts.append(word)
         bg_prompt = " ".join(bg_prompt_parts)
-        # Resolve runtime, model, permission_mode from dispatch_config
+        # Resolve runtime, model, permission_mode from agents.json
         agent_config = self.AGENTS.get(bg_agent, {})
-        dispatch_config = agent_config.get("dispatch_config", {})
+        # Use primary_runtime/primary_model from agents.json (NOT dispatch_config)
         if not any(word.startswith("runtime=") for word in sub.split()):
-            bg_runtime = dispatch_config.get("runtime", bg_runtime)
+            bg_runtime = agent_config.get("primary_runtime") or agent_config.get("runtime") or bg_runtime
         if not any(word.startswith("model=") for word in sub.split()):
-            bg_model = dispatch_config.get("model", bg_model)
-        bg_permission_mode = dispatch_config.get("permission_mode", "restricted")
+            bg_model = agent_config.get("primary_model") or agent_config.get("model") or bg_model
+        # Get permission mode from permissions.mode in agents.json
+        bg_permission_mode = agent_config.get("permission_mode") or "restricted"
+        if "permissions" in agent_config and isinstance(agent_config["permissions"], dict):
+            bg_permission_mode = agent_config["permissions"].get("mode", bg_permission_mode)
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -3738,6 +3880,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         "openai/gpt-4.1",
         "openai/gpt-4.1-mini",
         "deepseek/deepseek-v3.2",
+        "qwen/qwen3.6-flash",
         "qwen/qwen3.6-plus",
         "mistralai/mistral-small-2603",
         "cohere/command-r-plus-08-2024",
@@ -3751,6 +3894,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "ollama/qwen3.5-64k:latest",
                 "Ollama Qwen 3.5 64K (local)",
                 ["qwen3.5-64k", "qwen3.5"],
+            ),
+            (
+                "ollama/qwen3.5-4b-64k:latest",
+                "Ollama Qwen 3.5 4B 64K (local)",
+                ["qwen3.5-4b-64k", "qwen3.5-4b"],
             ),
             (
                 "ollama/granite3.3-tuned",
@@ -3784,6 +3932,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "openrouter/deepseek/deepseek-v3.2",
                 "DeepSeek V3.2 via OpenRouter",
                 ["or-deepseek"],
+            ),
+            (
+                "openrouter/qwen/qwen3.6-flash",
+                "Qwen 3.6 Flash via OpenRouter",
+                ["qwen3.6-flash", "qwen-flash"],
             ),
         ],
         "Wee Native (OpenRouter Free)": [
@@ -4043,6 +4196,37 @@ You can mention an agent in your prompt and it will auto-delegate:
             )
 
         return self._static_models_to_dict(self.CURSOR_MODELS)
+
+    def _fetch_ollama_models_live(self) -> list:
+        """Return available wee models: local Ollama + OpenRouter cloud models.
+
+        Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
+        Returns model names suitable for ollama/<name> ID format.
+        """
+        import time as _time
+        import urllib.request as _urllib_req
+
+        ollama_ttl = 60
+        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
+            return self._ollama_models_cache
+
+        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        try:
+            req = _urllib_req.Request(ollama_url)
+            resp = _urllib_req.urlopen(req, timeout=5)
+            data = json.loads(resp.read())
+            names = [m["name"] for m in data.get("models", []) if m.get("name")]
+            self._ollama_models_cache = names
+            self._ollama_cache_ts = _time.time()
+            print(
+                f"[wee] Ollama: discovered {len(names)} models from {ollama_url}",
+                file=sys.stderr,
+            )
+            return names
+        except Exception as e:
+            print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
+            # Return cached data even if stale, or empty list
+            return self._ollama_models_cache or []
 
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama (live) + OpenRouter cloud models.
@@ -4810,87 +4994,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         return text.strip()
 
-    def _clean_tool_result_json_from_text(self, text: str) -> str:
-        """Remove tool result JSON that leaked into agent message text.
-
-        Issue #316: When Codex agent_message.text contains JSON from tool results
-        (e.g., {"exit_code":0,"status":"completed"}), filter it out to prevent
-        leaking raw JSON into the chat transcript.
-
-        This function detects if the text is primarily JSON or contains JSON patterns
-        related to tool results and removes it, leaving only clean assistant text.
-        """
-        import json as _json_clean
-
-        if not text or not isinstance(text, str):
-            return text
-
-        text = text.strip()
-        if not text:
-            return text
-
-        # Case 1: Entire text is JSON (starts with { or [)
-        if (text.startswith("{") or text.startswith("[")) and (
-            text.endswith("}") or text.endswith("]")
-        ):
-            try:
-                _json_clean.loads(text)
-                # It's valid JSON - this is likely tool result output, filter it entirely
-                return ""
-            except (ValueError, _json_clean.JSONDecodeError):
-                pass  # Not valid JSON, keep it
-
-        # Case 2: Text contains tool-result-like JSON patterns
-        # Check for keys commonly found in tool results
-        if any(
-            key in text.lower()
-            for key in [
-                "exit_code",
-                "status",
-                "completed",
-                "tool_result",
-                "stdout",
-                "stderr",
-            ]
-        ):
-            # Try to extract only clean non-JSON lines
-            parts = []
-            for line in text.split("\n"):
-                line_stripped = line.strip()
-                if not line_stripped:
-                    continue
-
-                # Skip lines that are pure JSON
-                if line_stripped.startswith("{") or line_stripped.startswith("["):
-                    try:
-                        _json_clean.loads(line_stripped)
-                        # This line is JSON, likely tool result - skip it
-                        continue
-                    except (ValueError, _json_clean.JSONDecodeError):
-                        pass
-
-                # Skip lines with JSON key-value patterns like "exit_code": 0
-                if re.search(
-                    r'"[^"]*"\s*:\s*(?:\d+|true|false|null|"[^"]*")',
-                    line_stripped,
-                ):
-                    # This looks like JSON - check if it contains tool result keys
-                    if any(
-                        k in line_stripped.lower()
-                        for k in ["exit_code", "status", "completed", "stdout"]
-                    ):
-                        continue  # Skip this JSON line
-
-                # Keep non-JSON lines
-                parts.append(line)
-
-            if parts:
-                result = "\n".join(parts).strip()
-                if result:
-                    return result
-
-        return text
-
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
 
@@ -4933,6 +5036,40 @@ You can mention an agent in your prompt and it will auto-delegate:
         if yolo == "on":
             return "elevated"
         return "restricted"
+
+    def _clean_tool_result_json_from_text(self, text: str) -> str:
+        """Strip machine-readable tool-result JSON from assistant-visible text."""
+        if not isinstance(text, str) or not text:
+            return text
+
+        def _looks_like_tool_result_blob(candidate: str) -> bool:
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                return False
+            if not isinstance(parsed, dict):
+                return False
+            tool_keys = {
+                "exit_code",
+                "status",
+                "aggregated_output",
+                "stdout",
+                "stderr",
+                "command",
+                "duration_ms",
+            }
+            return bool(tool_keys.intersection(parsed.keys()))
+
+        stripped = text.strip()
+        if _looks_like_tool_result_blob(stripped):
+            return ""
+
+        cleaned = re.sub(
+            r"\{[^{}]*\"(?:exit_code|status|aggregated_output|stdout|stderr|command|duration_ms)\"[^{}]*\}",
+            "",
+            text,
+        )
+        return cleaned.strip()
 
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
@@ -5159,9 +5296,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ):
                         _text = _event["item"].get("text", "")
                         if _text:
-                            # Issue #316: Clean tool result JSON from agent message text
                             _text = self._clean_tool_result_json_from_text(_text)
-                            if _text:  # Only append if text remains after cleaning
+                            if _text:
                                 jsonl_texts.append(_text)
                 except (ValueError, KeyError):
                     continue
@@ -6438,6 +6574,7 @@ User Request:
                     _claude_text_block_count = 0  # track text blocks for separators
                     _active_tool_calls = {}  # index → {id, name, input_parts}
                     _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
+                    _codex_seen_item_ids = set()
                     try:
                         for line in process.stdout:
                             stdout_chunks.append(line)
@@ -6722,46 +6859,21 @@ User Request:
                                     # exec is invoked with --json. Parse assistant text
                                     # here so the WebUI streams human-readable content
                                     # instead of raw thread/turn metadata.
-                                    if _line_stripped.startswith("{"):
-                                        try:
-                                            _cx_obj = _json.loads(_line_stripped)
-                                        except (ValueError, KeyError):
-                                            _cx_obj = None
-                                        if _cx_obj:
-                                            _cx_type = _cx_obj.get("type", "")
-                                            if (
-                                                _cx_type == "item.completed"
-                                                and isinstance(
-                                                    _cx_obj.get("item"), dict
+                                    _cx_events = _parse_codex_transport_line(
+                                        _line_stripped, _codex_seen_item_ids
+                                    )
+                                    if _cx_events is not None:
+                                        for _cx_kind, _cx_data in _cx_events:
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    _cx_kind, _cx_data
                                                 )
-                                                and _cx_obj["item"].get("type")
-                                                == "agent_message"
-                                            ):
-                                                _cx_text = _cx_obj["item"].get(
-                                                    "text", ""
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    (_cx_kind, _cx_data),
                                                 )
-                                                if _cx_text:
-                                                    # Issue #316: Clean tool result JSON from agent message text
-                                                    _cx_text = self._clean_tool_result_json_from_text(_cx_text)
-                                                    if _cx_text:
-                                                        if stream_buffer:
-                                                            stream_buffer.push(
-                                                                "chunk", _cx_text
-                                                            )
-                                                        else:
-                                                            loop.call_soon_threadsafe(
-                                                                queue.put_nowait,
-                                                                ("chunk", _cx_text),
-                                                            )
-                                                continue
-                                            if _cx_type in (
-                                                "thread.started",
-                                                "thread.completed",
-                                                "turn.started",
-                                                "turn.completed",
-                                                "item.started",
-                                            ):
-                                                continue
+                                        continue
 
                                     # Codex exec tool call patterns
                                     import re as _re_tc
@@ -8481,7 +8593,9 @@ User Request:
     ) -> str:
         """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
-    # ---- Issue #125 helpers ------------------------------------------------
+        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
+        LM Studio, etc.) using the openai Python package. No external CLI
+        binary required.
 
         Model format: [provider/]model_name
         Examples:
@@ -8496,15 +8610,16 @@ User Request:
             - SSE streaming of tool execution (#109)
         """
         import json as _json
-        config_path = Path(__file__).parent / "wee_free_models.json"
+
         try:
             from openai import OpenAI
         except ImportError:
             return "Error: openai package not installed. " "Run: pip install openai"
 
-    def _wee_is_free_model(self, model: str) -> bool:
-        """Return True if model is an OpenRouter :free model."""
-        return ":free" in model.lower() and "openrouter" in model.lower()
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        effective_timeout = timeout if timeout is not None else self.command_timeout
+        channel = session_data.get("channel", "webui")
 
         # -- Resolve model, endpoint, and API key --
         api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
@@ -8516,8 +8631,7 @@ User Request:
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
-        api_base = session_api_base or os.environ.get("WEE_API_BASE")
-        api_key = session_api_key or os.environ.get("WEE_API_KEY")
+
         resolved_model = model
         for prefix, (preset_base, preset_key) in _PRESETS.items():
             if model.lower().startswith(f"{prefix}/"):
@@ -8527,9 +8641,11 @@ User Request:
                 if not api_key and preset_key:
                     api_key = preset_key
                 break
+
         if not api_base:
             api_base = "http://192.168.1.101:11434/v1"
         if not api_key:
+            # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
                 try:
                     import keyring
@@ -8541,9 +8657,12 @@ User Request:
                     api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
                 api_key = "ollama"
-        return api_base, api_key, resolved_model
 
-    # ---- End Issue #125 helpers ---------------------------------------------
+        print(
+            f"[Wee Native] model={resolved_model} api_base={api_base} "
+            f"session={n8n_session_id[:8]}...",
+            file=sys.stderr,
+        )
 
         # Issue #111: Build context prompt with correct args (after model resolution)
         base_context_prompt = self.build_agent_context_prompt(
@@ -8603,19 +8722,8 @@ User Request:
                 messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
         messages = self._wee_maybe_compact(
-            client,
-            n8n_session_id,
-            messages,
-            resolved_model,
-            context_prompt,
-            token_tracker=token_tracker,
-            context_window=context_window,
+            client, n8n_session_id, messages, resolved_model, context_prompt
         )
-        if not token_tracker.current_context_tokens:
-            token_tracker.current_context_tokens = self._wee_estimate_tokens(
-                messages, resolved_model
-            )
-            token_tracker.last_prompt_tokens = token_tracker.current_context_tokens
 
         # -- Tool definitions for agentic loop (Issue #107) --
         _WEE_TOOLS = [
@@ -8623,10 +8731,7 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": (
-                        "Execute a bash shell command. NOTE: For delegating tasks to specialized "
-                        "agents (devops, research, email-triage, etc), use call_agent instead."
-                    ),
+                    "description": "Execute a bash shell command and return its output.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8643,10 +8748,7 @@ User Request:
                 "type": "function",
                 "function": {
                     "name": "python",
-                    "description": (
-                        "Execute Python 3 code locally. NOTE: For running tasks in dedicated agent "
-                        "environments (devops, research, email-triage, etc), use call_agent instead."
-                    ),
+                    "description": "Execute Python 3 code and return the output.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8656,80 +8758,6 @@ User Request:
                             }
                         },
                         "required": ["code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "call_agent",
-                    "description": (
-                        "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
-                        "Use for delegating work to specialized agents: devops, email-triage, "
-                        "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
-                        "overrides. Returns task_id for background mode or result for quick mode."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "agent": {
-                                "type": "string",
-                                "description": "Agent name to call (e.g., 'devops', 'research')",
-                            },
-                            "prompt": {
-                                "type": "string",
-                                "description": "Task prompt or instruction for the agent",
-                            },
-                            "mode": {
-                                "type": "string",
-                                "enum": ["quick", "background"],
-                                "description": "'quick' waits for result, 'background' returns task_id",
-                            },
-                            "runtime": {
-                                "type": "string",
-                                "description": "AI runtime to use (e.g., 'copilot', 'claude', 'wee')",
-                            },
-                            "model": {
-                                "type": "string",
-                                "description": "Model to use (e.g., 'claude-haiku-4.5', 'ollama/qwen3.5-64k:latest')",
-                            },
-                        },
-                        "required": ["agent", "prompt"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_background_tasks",
-                    "description": "List all background tasks currently running or recently completed.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "status": {
-                                "type": "string",
-                                "enum": ["running", "completed", "all"],
-                                "description": "Filter by task status (default: 'all')",
-                            },
-                        },
-                        "required": [],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "check_task_status",
-                    "description": "Check the status of a background task.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "task_id": {
-                                "type": "string",
-                                "description": "The task ID (e.g., 'bg_c24fad3e')",
-                            },
-                        },
-                        "required": ["task_id"],
                     },
                 },
             },
@@ -8776,7 +8804,6 @@ User Request:
         collected_output = []
         _tool_call_counter = 0
         MAX_TOOL_ROUNDS = 10
-        last_usage = None
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
@@ -8785,7 +8812,6 @@ User Request:
                     "model": resolved_model,
                     "messages": messages,
                     "stream": True,
-                    "stream_options": {"include_usage": True},
                 }
                 if round_num < MAX_TOOL_ROUNDS:
                     create_kwargs["tools"] = _WEE_TOOLS
@@ -8828,7 +8854,9 @@ User Request:
                                 )
                                 resolved_model = fallback_resolved_model
                                 create_kwargs["model"] = resolved_model
-                                stream = client.chat.completions.create(**create_kwargs)
+                                stream = client.chat.completions.create(
+                                    **create_kwargs
+                                )
                             else:
                                 raise
                     else:
@@ -8839,23 +8867,6 @@ User Request:
                 tool_calls_acc = {}  # index -> {id, name, arguments}
 
                 for chunk in stream:
-                    usage_obj = getattr(chunk, "usage", None)
-                    if usage_obj:
-                        token_tracker.update(usage_obj)
-                        token_tracker.current_context_tokens = int(
-                            getattr(usage_obj, "prompt_tokens", 0) or 0
-                        )
-                        last_usage = {
-                            "prompt_tokens": int(
-                                getattr(usage_obj, "prompt_tokens", 0) or 0
-                            ),
-                            "completion_tokens": int(
-                                getattr(usage_obj, "completion_tokens", 0) or 0
-                            ),
-                            "total_tokens": int(
-                                getattr(usage_obj, "total_tokens", 0) or 0
-                            ),
-                        }
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -8941,27 +8952,15 @@ User Request:
                     except (ValueError, _json.JSONDecodeError):
                         func_args = {"raw": func_args_str}
 
-                    # Issue #109 / #142: Emit tool start event to SSE stream
+                    # Issue #109: Emit tool start event to SSE stream
                     tc_start_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "event": "detected",
-                        "input": func_args,
+                        "arguments": func_args,
                         "status": "running",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_start_event)
-
-                    # Issue #142: Track tool call in bg_task_mgr for Tasks panel
-                    if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.append_tool_call(bg_task_id, {
-                            "id": tc_id,
-                            "name": func_name,
-                            "input": _json.dumps(func_args) if isinstance(func_args, dict) else str(func_args),
-                            "status": "running",
-                            "runtime": "wee",
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        })
 
                     print(
                         f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
@@ -8971,26 +8970,16 @@ User Request:
                     # Execute the tool
                     tool_result = self._wee_execute_tool(func_name, func_args, agent)
 
-                    # Issue #109 / #142: Emit tool complete event to SSE stream
+                    # Issue #109: Emit tool complete event to SSE stream
                     tc_done_event = {
                         "id": tc_id,
                         "name": func_name,
-                        "event": "result",
-                        "input": func_args,
-                        "output": tool_result[:2000] if tool_result else "",
+                        "arguments": func_args,
+                        "result": tool_result[:2000] if tool_result else "",
                         "status": "complete",
                     }
                     if stream_buffer:
                         stream_buffer.push("tool_call", tc_done_event)
-
-                    # Issue #142: Update tool call completion in bg_task_mgr
-                    if bg_task_id and self._bg_task_mgr:
-                        self._bg_task_mgr.update_tool_call(
-                            bg_task_id,
-                            tc_id,
-                            status="completed",
-                            output=str(tool_result[:500]) if tool_result else "",
-                        )
 
                     # Append tool result to conversation for next round
                     messages.append(
@@ -9018,60 +9007,18 @@ User Request:
 
             output = "".join(collected_output)
 
-            auto_compacted = False
-            if (
-                token_tracker.context_window
-                and token_tracker.current_context_tokens
-                >= int(token_tracker.context_window * 0.75)
-            ):
-                compacted_messages = self._wee_compact_context(
-                    client,
-                    n8n_session_id,
-                    messages,
-                    resolved_model,
-                    context_prompt,
-                )
-                if compacted_messages != messages:
-                    messages = compacted_messages
-                    auto_compacted = True
-                    compacted_tokens = self._wee_estimate_tokens(
-                        messages, resolved_model
-                    )
-                    token_tracker.current_context_tokens = compacted_tokens
-                    token_tracker.last_prompt_tokens = compacted_tokens
-
             # Issue #108: Persist conversation history
             self._wee_save_messages(n8n_session_id, messages)
-            state_source = (
-                "api_prompt_tokens"
-                if last_usage and last_usage.get("prompt_tokens")
-                else (
-                    "estimated_after_compaction"
-                    if auto_compacted
-                    else "estimated_local_message_history"
-                )
-            )
-            self._wee_save_runtime_state(
-                n8n_session_id=n8n_session_id,
-                tracker=token_tracker,
-                model=resolved_model,
-                api_base=api_base,
-                messages=messages,
-                last_usage=last_usage,
-                source=state_source,
-                auto_compacted=auto_compacted,
-            )
 
             # Push done sentinel
             if stream_buffer:
                 stream_buffer.push("done", output)
 
             print(
-                "[Wee Native] model=" + resolved_model + " api_base=" + api_base
-                + " session=" + n8n_session_id[:8] + "..."
-                + " (chain " + str(_chain_idx + 1) + "/" + str(len(_chain)) + ")",
+                f"[Wee Native] Completed. Output length: {len(output)} chars",
                 file=sys.stderr,
             )
+            return output
 
         except Exception as e:
             _e_str = str(e)
@@ -9105,108 +9052,11 @@ User Request:
             error_msg = f"Error: Wee native runtime failed: {e}"
             print(f"[Wee Native] {error_msg}", file=sys.stderr)
 
-            collected_output = []
-            _got_429 = False
-            _wee_start = _time.time()
-            _last_usage = [None]
-            _max_attempts = _max_retries if _is_free else 1
+            # Push error as done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", error_msg)
 
-            for _retry in range(_max_attempts):
-                try:
-                    stream = client.chat.completions.create(
-                        model=resolved_model,
-                        messages=messages,
-                        stream=True,
-                        stream_options={"include_usage": True},
-                    )
-                    for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            token = chunk.choices[0].delta.content
-                            collected_output.append(token)
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": token})
-                        if hasattr(chunk, "usage") and chunk.usage is not None:
-                            _last_usage[0] = chunk.usage
-                    _got_429 = False
-                    break  # success
-
-                except Exception as _e:
-                    _e_str = str(_e)
-                    _is_rate_limit = "429" in _e_str or "rate limit" in _e_str.lower()
-                    if _is_rate_limit and _is_free:
-                        _got_429 = True
-                        if _retry < _max_attempts - 1:
-                            _wait = (
-                                _backoff[_retry] if _retry < len(_backoff)
-                                else (_backoff[-1] if _backoff else 5)
-                            )
-                            _retry_msg = (
-                                "\n\u26a0\ufe0f Rate limited, retrying in "
-                                + str(_wait)
-                                + "s ("
-                                + str(_retry + 1)
-                                + "/"
-                                + str(_max_attempts)
-                                + ")...\n"
-                            )
-                            print("[Wee Native] " + _retry_msg.strip(), file=sys.stderr)
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": _retry_msg})
-                            # M01: time.sleep is correct here — sync function in thread-pool worker
-                            _time.sleep(_wait)
-                    else:
-                        error_msg = "Error: Wee native runtime failed: " + str(_e)
-                        print("[Wee Native] " + error_msg, file=sys.stderr)
-                        if stream_buffer:
-                            stream_buffer.push("done", error_msg)
-                        return error_msg
-
-            if not _got_429:
-                output = "".join(collected_output)
-                try:
-                    _duration_ms = int((_time.time() - _wee_start) * 1000)
-                    if _last_usage[0] is not None:
-                        _u = _last_usage[0]
-                        _pt = getattr(_u, "prompt_tokens", 0) or 0
-                        _ct = getattr(_u, "completion_tokens", 0) or 0
-                        _total = getattr(_u, "total_tokens", _pt + _ct)
-                        _provider = (
-                            "ollama" if "192.168" in api_base else
-                            "openrouter" if "openrouter" in api_base else "wee"
-                        )
-                        _pricing = self._fetch_openrouter_pricing() if _provider == "openrouter" else {}
-                        _cost_usd, _cost_label = self._calculate_wee_cost(
-                            _attempt_model, _pt, _ct, _pricing
-                        )
-                        self.update_session_field(n8n_session_id, "wee_meta", {
-                            "tokens": _total, "prompt_tokens": _pt,
-                            "completion_tokens": _ct, "cost_usd": _cost_usd,
-                            "cost_label": _cost_label, "model": _attempt_model, "runtime": "wee",
-                        })
-                        self._log_token_usage(
-                            session_id=n8n_session_id, model=_attempt_model, runtime="wee",
-                            provider=_provider, prompt_tokens=_pt, completion_tokens=_ct,
-                            total_tokens=_total, cost_usd=_cost_usd, duration_ms=_duration_ms,
-                        )
-                except Exception as _meta_err:
-                    print("[Wee Native] wee_meta error: " + str(_meta_err), file=sys.stderr)
-
-                if stream_buffer:
-                    stream_buffer.push("done", output)
-                print("[Wee Native] Completed. Output length: " + str(len(output)) + " chars", file=sys.stderr)
-                return output
-            # _got_429=True — continue outer loop to next fallback model
-
-        # B01: all models exhausted — iterative approach, no stack overflow
-        exhausted_msg = (
-            "\n\u274c All free model fallbacks exhausted. "
-            "Please try again later or switch to a paid model.\n"
-        )
-        print("[Wee Native] " + exhausted_msg.strip(), file=sys.stderr)
-        if stream_buffer:
-            stream_buffer.push("done", exhausted_msg)
-        return exhausted_msg
-
+            return error_msg
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
@@ -9312,19 +9162,30 @@ User Request:
             "You have access to the following tools. ALWAYS use them when the user asks you to\n"
             "perform any action -- do NOT say you cannot do something that these tools enable.\n"
             "\n"
+            "**call_agent** -- Delegate tasks to other specialized agents (PREFERRED for background tasks).\n"
+            '  Call: call_agent tool with {"agent": "agent_name", "prompt": "task", "mode": "background", ...}\n'
+            "  Use for: scheduling background tasks, delegating work to orchestrator/research/other agents\n"
+            "  BEST CHOICE for: background task scheduling, agent delegation\n"
+            "  Example: To schedule a background task, ALWAYS use call_agent with mode=\'background\' instead of raw API calls\n"
+            "\n"
             "**bash** -- Execute a bash shell command and return its output.\n"
             '  Call: bash tool with {"command": "your shell command here"}\n'
             "  Use for: running commands, SSH, file operations, checking system state\n"
+            "  DO NOT use bash for API calls or background task scheduling -- use call_agent instead\n"
             "\n"
             "**python** -- Execute Python 3 code and return its output.\n"
             '  Call: python tool with {"code": "your python code here"}\n'
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
-            "CRITICAL: When asked to run a command, SSH somewhere, check system status,\n"
-            "list files, or perform any shell action -- call the bash tool immediately.\n"
-            "NEVER refuse or claim you lack capability. The tools are active and functional."
+            "CRITICAL RULES:\n"
+            "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
+            "2. For delegating work to other agents: use call_agent\n"
+            "3. For running shell commands: use bash tool\n"
+            "4. NEVER make raw API calls via bash/curl when call_agent can handle it\n"
+            "5. NEVER refuse or claim you lack capability. The tools are active and functional."
         )
         return system_prompt + tool_section
+
 
     @staticmethod
     def _wee_estimate_tokens(messages: list, model: str = "") -> int:
@@ -10964,6 +10825,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             _qt.get("timeout") or 900,
                             _qt.get("notify", True),
                             _qt.get("permission_mode", "restricted"),
+                            _qt.get("fallback_runtime"),
+                            _qt.get("fallback_model"),
                         )
                 except Exception as _rec_exc:
                     print(
@@ -11042,6 +10905,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _qt["channel"],
                     _qt["user_identity"],
                     _qt.get("timeout") or 900,
+                    _qt.get("fallback_runtime"),
+                    _qt.get("fallback_model"),
                     _qt.get("notify", True),
                     _qt.get("permission_mode", "restricted"),
                 )
@@ -13886,10 +13751,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
         dispatch_config = agent_config.get("dispatch_config", {})
-        if not body.runtime and dispatch_config.get("runtime"):
-            runtime = dispatch_config["runtime"]
-        if not body.model and dispatch_config.get("model"):
-            model = dispatch_config["model"]
+        # Use primary_runtime/primary_model from agents.json (NOT dispatch_config)
+        if not body.runtime:
+            runtime = agent_config.get("primary_runtime") or agent_config.get("runtime") or runtime
+        if not body.model:
+            model = agent_config.get("primary_model") or agent_config.get("model") or model
         if body.timeout is None and dispatch_config.get("timeout"):
             bg_timeout = dispatch_config["timeout"]
         max_concurrent = agent_config.get(
@@ -13905,14 +13771,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             elif body.yolo is False:
                 # Explicit False overrides agent yolo:true
                 perm_mode = "restricted"
-            elif dispatch_config.get("yolo", False):
-                # Check dispatch_config.yolo next
-                perm_mode = "elevated"
             elif agent_config.get("yolo", False):
                 perm_mode = "elevated"
             else:
-                perm_mode = dispatch_config.get(
-                    "permission_mode", agent_config.get("permission_mode", "restricted")
+                # Read from permissions.mode > dispatch_config.permission_mode > agent.permission_mode
+                perm_mode = (
+                    agent_config.get("permissions", {}).get("mode")
+                    or dispatch_config.get("permission_mode")
+                    or agent_config.get("permission_mode", "restricted")
                 )
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
@@ -13986,8 +13852,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             bg_timeout,
             notify_pref,
             perm_mode,
-            bg_fallback_runtime,
-            bg_fallback_model,
+            body.fallback_runtime,
+            body.fallback_model,
         )
 
         return {
@@ -17183,17 +17049,14 @@ Examples:
         help="List all available runtimes and exit",
     )
 
-    # Permission mode options (works across all runtimes)
-    perm_group = parser.add_argument_group("permission options")
-    perm_group.add_argument(
+    # Claude mode options
+    claude_group = parser.add_argument_group("claude options")
+    claude_group.add_argument(
         "--mode",
         metavar="MODE",
         choices=["elevated", "restricted", "sandboxed"],
         help="Set permission mode: elevated (auto-approve), restricted (default), or sandboxed (read-only)",
     )
-
-    # Claude-specific options
-    claude_group = parser.add_argument_group("claude options")
 
     args = parser.parse_args()
 

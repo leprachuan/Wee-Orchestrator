@@ -437,7 +437,7 @@ def _execute_search(func_args: dict) -> str:
     count = min(int(count_raw if count_raw is not None else 5), 20)
     output_format = (func_args.get("format") or "text").lower()
 
-    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
+    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://127.0.0.1:8888")
     searxng_url = searxng_url.rstrip("/")
 
     params = urllib.parse.urlencode(
@@ -450,7 +450,12 @@ def _execute_search(func_args: dict) -> str:
     )
     url = f"{searxng_url}/search?{params}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Wee-Runtime/1.0"})
+        headers = {
+            "User-Agent": "Wee-Runtime/1.0",
+            "X-Forwarded-For": "127.0.0.1",
+            "X-Real-IP": "127.0.0.1"
+        }
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.URLError as e:
