@@ -3088,14 +3088,17 @@ You can mention an agent in your prompt and it will auto-delegate:
             else:
                 bg_prompt_parts.append(word)
         bg_prompt = " ".join(bg_prompt_parts)
-        # Resolve runtime, model, permission_mode from dispatch_config
+        # Resolve runtime, model, permission_mode from agents.json
         agent_config = self.AGENTS.get(bg_agent, {})
-        dispatch_config = agent_config.get("dispatch_config", {})
+        # Use primary_runtime/primary_model from agents.json (NOT dispatch_config)
         if not any(word.startswith("runtime=") for word in sub.split()):
-            bg_runtime = dispatch_config.get("runtime", bg_runtime)
+            bg_runtime = agent_config.get("primary_runtime") or agent_config.get("runtime") or bg_runtime
         if not any(word.startswith("model=") for word in sub.split()):
-            bg_model = dispatch_config.get("model", bg_model)
-        bg_permission_mode = dispatch_config.get("permission_mode", "restricted")
+            bg_model = agent_config.get("primary_model") or agent_config.get("model") or bg_model
+        # Get permission mode from permissions.mode in agents.json
+        bg_permission_mode = agent_config.get("permission_mode") or "restricted"
+        if "permissions" in agent_config and isinstance(agent_config["permissions"], dict):
+            bg_permission_mode = agent_config["permissions"].get("mode", bg_permission_mode)
 
         if not bg_prompt:
             return "❌ No prompt provided. Usage: `/background <prompt>`"
@@ -13583,10 +13586,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
         dispatch_config = agent_config.get("dispatch_config", {})
-        if not body.runtime and dispatch_config.get("runtime"):
-            runtime = dispatch_config["runtime"]
-        if not body.model and dispatch_config.get("model"):
-            model = dispatch_config["model"]
+        # Use primary_runtime/primary_model from agents.json (NOT dispatch_config)
+        if not body.runtime:
+            runtime = agent_config.get("primary_runtime") or agent_config.get("runtime") or runtime
+        if not body.model:
+            model = agent_config.get("primary_model") or agent_config.get("model") or model
         if body.timeout is None and dispatch_config.get("timeout"):
             bg_timeout = dispatch_config["timeout"]
         max_concurrent = agent_config.get(
@@ -13602,14 +13606,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             elif body.yolo is False:
                 # Explicit False overrides agent yolo:true
                 perm_mode = "restricted"
-            elif dispatch_config.get("yolo", False):
-                # Check dispatch_config.yolo next
-                perm_mode = "elevated"
             elif agent_config.get("yolo", False):
                 perm_mode = "elevated"
             else:
-                perm_mode = dispatch_config.get(
-                    "permission_mode", agent_config.get("permission_mode", "restricted")
+                # Read from permissions.mode > dispatch_config.permission_mode > agent.permission_mode
+                perm_mode = (
+                    agent_config.get("permissions", {}).get("mode")
+                    or dispatch_config.get("permission_mode")
+                    or agent_config.get("permission_mode", "restricted")
                 )
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
