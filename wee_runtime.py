@@ -437,7 +437,7 @@ def _execute_search(func_args: dict) -> str:
     count = min(int(count_raw if count_raw is not None else 5), 20)
     output_format = (func_args.get("format") or "text").lower()
 
-    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
+    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://127.0.0.1:8888")
     searxng_url = searxng_url.rstrip("/")
 
     params = urllib.parse.urlencode(
