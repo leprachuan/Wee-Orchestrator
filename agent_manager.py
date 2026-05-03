@@ -14191,6 +14191,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             agent: Optional[str] = None
             runtime: Optional[str] = None
             model: Optional[str] = None
+            fallback_runtime: Optional[str] = None
+            fallback_model: Optional[str] = None
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: str = ""
             notify: bool = False
@@ -14210,6 +14212,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             agent: Optional[str] = None
             runtime: Optional[str] = None
             model: Optional[str] = None
+            fallback_runtime: Optional[str] = None
+            fallback_model: Optional[str] = None
             mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
             task: Optional[str] = None
             notify: Optional[bool] = None
@@ -14289,6 +14293,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 created_by=created_by,
                 timeout=body.timeout,
                 permission_mode=body.permission_mode,
+                fallback_runtime=body.fallback_runtime,
+                fallback_model=body.fallback_model,
             )
             if not result.get("success"):
                 raise HTTPException(
