@@ -1022,106 +1022,6 @@ def check_runtime_available(runtime: str) -> bool:
     return False
 
 
-
-# ── Runtime Disable/Enable Manager ──────────────────────────────────────
-
-class DisabledRuntimesManager:
-    """Manages disabled runtimes - persisted in a JSON file."""
-    
-    def __init__(self, config_dir: str = ".settings"):
-        self.config_dir = Path(config_dir)
-        self.config_dir.mkdir(exist_ok=True)
-        self.config_file = self.config_dir / "disabled_runtimes.json"
-        self._load()
-    
-    def _load(self):
-        """Load disabled runtimes from config file."""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, 'r') as f:
-                    data = json.load(f)
-                    self.disabled_runtimes = set(data.get("disabled", []))
-            except Exception as e:
-                logging.warning(f"Failed to load disabled runtimes: {e}")
-                self.disabled_runtimes = set()
-        else:
-            self.disabled_runtimes = set()
-    
-    def _save(self):
-        """Save disabled runtimes to config file."""
-        try:
-            with open(self.config_file, 'w') as f:
-                json.dump({"disabled": sorted(list(self.disabled_runtimes))}, f, indent=2)
-        except Exception as e:
-            logging.error(f"Failed to save disabled runtimes: {e}")
-    
-    def is_disabled(self, runtime_id: str) -> bool:
-        """Check if a runtime is disabled."""
-        return runtime_id in self.disabled_runtimes
-    
-    def disable(self, runtime_id: str) -> bool:
-        """Disable a runtime. Returns True if changed."""
-        if runtime_id not in self.disabled_runtimes:
-            self.disabled_runtimes.add(runtime_id)
-            self._save()
-            return True
-        return False
-    
-    def enable(self, runtime_id: str) -> bool:
-        """Enable a runtime. Returns True if changed."""
-        if runtime_id in self.disabled_runtimes:
-            self.disabled_runtimes.discard(runtime_id)
-            self._save()
-            return True
-        return False
-    
-    def set_disabled(self, disabled_list: List[str]):
-        """Set the entire list of disabled runtimes."""
-        self.disabled_runtimes = set(disabled_list)
-        self._save()
-    
-    def get_disabled(self) -> List[str]:
-        """Get list of disabled runtimes."""
-        return sorted(list(self.disabled_runtimes))
-
-
-# Global instance
-_disabled_runtimes_manager = None
-
-def get_disabled_runtimes_manager() -> DisabledRuntimesManager:
-    """Get or create the global DisabledRuntimesManager instance."""
-    global _disabled_runtimes_manager
-    if _disabled_runtimes_manager is None:
-        _disabled_runtimes_manager = DisabledRuntimesManager()
-    return _disabled_runtimes_manager
-
-
-def get_all_runtimes() -> List[Dict[str, str]]:
-    """Get list of all runtimes (both available and unavailable).
-    
-    Returns:
-        List of all runtime dicts with 'id', 'label', and 'available' keys
-    """
-    all_runtimes = [
-        {"id": "copilot", "label": "copilot"},
-        {"id": "copilot-sdk", "label": "copilot-sdk", "icon": "🤖"},
-        {"id": "opencode", "label": "opencode"},
-        {"id": "claude", "label": "claude"},
-        {"id": "claude-sdk", "label": "claude-sdk", "icon": "🧠"},
-        {"id": "gemini", "label": "gemini"},
-        {"id": "codex", "label": "codex"},
-        {"id": "devin", "label": "devin"},
-        {"id": "cursor", "label": "cursor", "icon": "🖱️"},
-        {"id": "wee", "label": "wee", "icon": "🍀"},
-    ]
-    
-    # Add availability status
-    for rt in all_runtimes:
-        rt["available"] = check_runtime_available(rt["id"])
-    
-    return all_runtimes
-
-
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
 
@@ -1142,11 +1042,6 @@ def get_available_runtimes() -> List[Dict[str, str]]:
     ]
 
     available = [rt for rt in all_runtimes if check_runtime_available(rt["id"])]
-    
-    # Filter out disabled runtimes
-    disabled_mgr = get_disabled_runtimes_manager()
-    available = [rt for rt in available if not disabled_mgr.is_disabled(rt["id"])]
-    
     return available
 
 
@@ -4150,26 +4045,23 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.CURSOR_MODELS)
 
     def _fetch_ollama_models_live(self) -> list:
-        """Discover live Ollama model names with a short TTL cache.
+        """Return available wee models: local Ollama + OpenRouter cloud models.
 
         Issue #124: Replace hardcoded 3-model list with live discovery from kubuntu.
+        Returns model names suitable for ollama/<name> ID format.
         """
         import time as _time
-        import httpx
+        import urllib.request as _urllib_req
 
         ollama_ttl = 60
-        if not hasattr(self, "_ollama_models_cache"):
-            self._ollama_models_cache = []
-        if not hasattr(self, "_ollama_cache_ts"):
-            self._ollama_cache_ts = 0.0
         if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
             return self._ollama_models_cache
 
         ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
         try:
-            resp = httpx.get(ollama_url, timeout=5)
-            resp.raise_for_status()
-            data = resp.json()
+            req = _urllib_req.Request(ollama_url)
+            resp = _urllib_req.urlopen(req, timeout=5)
+            data = json.loads(resp.read())
             names = [m["name"] for m in data.get("models", []) if m.get("name")]
             self._ollama_models_cache = names
             self._ollama_cache_ts = _time.time()
@@ -4182,7 +4074,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
             # Return cached data even if stale, or empty list
             return self._ollama_models_cache or []
-
 
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama (live) + OpenRouter cloud models.
@@ -4248,8 +4139,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         for cat, entries in self.WEE_MODELS.items():
             if "Ollama" not in cat:
                 result[cat] = list(entries)
-        if "Wee Native (OpenRouter)" in result:
-            result["OpenRouter Models"] = list(result["Wee Native (OpenRouter)"])
 
         # Try live OpenRouter discovery
         try:
@@ -4267,12 +4156,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                 print(
                     "[wee] No OpenRouter API key -- using static list", file=sys.stderr
                 )
-                static_result = self._static_models_to_dict(self.WEE_MODELS)
-                if "Wee Native (OpenRouter)" in static_result:
-                    static_result["OpenRouter Models"] = list(
-                        static_result["Wee Native (OpenRouter)"]
-                    )
-                return static_result
+                return self._static_models_to_dict(self.WEE_MODELS)
 
             import urllib.request
 
@@ -4295,7 +4179,6 @@ You can mention an agent in your prompt and it will auto-delegate:
             if discovered:
                 discovered.sort(key=lambda t: t[1])
                 result["Wee Native (OpenRouter)"] = discovered
-                result["OpenRouter Models"] = list(discovered)
                 print(
                     "[wee] OpenRouter: discovered %d models" % len(discovered),
                     file=sys.stderr,
@@ -4958,75 +4841,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         return text.strip()
 
-    def _clean_tool_result_json_from_text(self, text: str) -> str:
-        """Remove tool result JSON that leaked into agent message text.
-
-        Issue #316: When Codex agent_message.text contains JSON from tool results
-        (e.g., {"exit_code":0,"status":"completed"}), filter it out to prevent
-        leaking raw JSON into the chat transcript.
-        """
-        import json as _json_clean
-
-        if not text or not isinstance(text, str):
-            return text
-
-        text_stripped = text.strip()
-        if not text_stripped:
-            return text
-
-        # Case 1: Entire text is JSON - definitely a tool result that leaked
-        if (text_stripped.startswith("{") or text_stripped.startswith("[")) and (
-            text_stripped.endswith("}") or text_stripped.endswith("]")
-        ):
-            try:
-                _json_clean.loads(text_stripped)
-                # It's valid JSON - filter it out entirely
-                return ""
-            except (ValueError, _json_clean.JSONDecodeError):
-                pass
-
-        # Case 2: Contains tool-result-like JSON patterns - filter those lines
-        if any(
-            key in text.lower()
-            for key in ["exit_code", "status", "completed", "stdout", "stderr"]
-        ):
-            # Try to extract only non-JSON lines
-            parts = []
-            for line in text.split("\n"):
-                line_stripped = line.strip()
-                if not line_stripped:
-                    continue
-
-                # Skip lines that are pure JSON
-                if line_stripped.startswith("{") or line_stripped.startswith("["):
-                    try:
-                        _json_clean.loads(line_stripped)
-                        continue  # This is JSON, skip it
-                    except (ValueError, _json_clean.JSONDecodeError):
-                        pass
-
-                # Skip lines with JSON key-value patterns
-                if re.search(
-                    r'"[^"]*"\s*:\s*(?:\d+|true|false|null|"[^"]*")',
-                    line_stripped,
-                ):
-                    # Looks like JSON - check if it has tool result keys
-                    if any(
-                        k in line_stripped.lower()
-                        for k in ["exit_code", "status", "completed", "stdout"]
-                    ):
-                        continue  # Skip this JSON line
-
-                parts.append(line)
-
-            if parts:
-                return "\n".join(parts).strip()
-            # If all lines were filtered, return empty
-            return ""
-
-        return text
-
-
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
 
@@ -5069,37 +4883,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         if yolo == "on":
             return "elevated"
         return "restricted"
-
-    def build_runtime_permission_env(
-        self, runtime: str, permission_mode: str
-    ) -> dict:
-        """Build runtime-specific environment variables for permission modes.
-
-        Maps permission_mode to runtime-specific env vars/flags that need to be
-        passed to subprocess environments. This allows devin, copilot, and other
-        runtimes to inherit the elevated permissions in their child processes.
-
-        Args:
-            runtime: The runtime name (e.g., 'devin', 'copilot', 'claude-code')
-            permission_mode: The permission mode ('elevated', 'restricted', 'sandboxed')
-
-        Returns:
-            A dict of environment variable updates to merge into subprocess env
-        """
-        env_updates = {}
-
-        if permission_mode == "elevated":
-            if runtime == "devin":
-                env_updates["DEVIN_PERMISSION_MODE"] = "dangerous"
-            elif runtime in ("claude-code", "claude-acp"):
-                # Claude Code / ACP equivalent for elevated permissions
-                # (May not have exact equivalent; document if needed)
-                pass
-            elif runtime == "cursor":
-                # Cursor editor's permission handling (if applicable)
-                pass
-
-        return env_updates
 
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
@@ -5326,10 +5109,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ):
                         _text = _event["item"].get("text", "")
                         if _text:
-                            # Issue #316: Clean tool result JSON from agent message text
-                            _text = self._clean_tool_result_json_from_text(_text)
-                            if _text:  # Only append if text remains after cleaning
-                                jsonl_texts.append(_text)
+                            jsonl_texts.append(_text)
                 except (ValueError, KeyError):
                     continue
 
@@ -6415,7 +6195,6 @@ User Request:
         n8n_session_id: str,
         use_pty: bool = False,
         stdin_text: str = "",
-        permission_mode: str = "restricted",
     ) -> str:
         """Execute a subprocess with PID tracking.
 
@@ -6430,10 +6209,6 @@ User Request:
         When *use_pty* is True and streaming is active, stdout is connected to
         a pseudo-terminal so that runtimes whose binaries buffer stdout (e.g.
         the Rust-based Devin CLI) flush output incrementally.
-
-        Args:
-            permission_mode: Permission mode for the subprocess ('elevated', 'restricted', 'sandboxed')
-                           This determines which runtime-specific permission env vars are set.
         """
         import threading as _threading
 
@@ -6473,12 +6248,6 @@ User Request:
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
             _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
-            
-            # Apply runtime-specific permission mode environment variables
-            # This allows subprocesses (e.g., devin) to inherit elevated permissions
-            perm_env = self.build_runtime_permission_env(runtime, permission_mode)
-            _sub_env.update(perm_env)
-            
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -7327,7 +7096,6 @@ User Request:
             prompt,
             n8n_session_id,
             stdin_text=context_prompt,
-            permission_mode=mode,
         )
         result = self.strip_metadata(output, "copilot")
 
@@ -7401,7 +7169,6 @@ User Request:
                 _recovery_preamble,
                 n8n_session_id,
                 stdin_text=_recovery_context,
-                permission_mode=mode,
             )
             _stripped_recovery = self.strip_metadata(_recovery_output, "copilot")
             if _TOKEN_EXPIRED_MARKER in _stripped_recovery:
@@ -8046,8 +7813,7 @@ User Request:
         cmd.append(context_prompt)
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "opencode", agent, prompt, n8n_session_id,
-            permission_mode=mode,
+            cmd, agent_dir, effective_timeout, "opencode", agent, prompt, n8n_session_id
         )
 
         # Check for session errors
@@ -8143,8 +7909,7 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id,
-            permission_mode=mode,
+            cmd, agent_dir, effective_timeout, "claude", agent, prompt, n8n_session_id
         )
 
         if "Error: Claude command failed" in output:
@@ -8269,8 +8034,7 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id,
-            permission_mode=mode,
+            cmd, agent_dir, effective_timeout, "gemini", agent, prompt, n8n_session_id
         )
 
         if "Error: Gemini command failed" in output:
@@ -8387,8 +8151,7 @@ User Request:
             )
 
         output = self._execute_subprocess_with_tracking(
-            cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id,
-            permission_mode=mode,
+            cmd, agent_dir, effective_timeout, "codex", agent, prompt, n8n_session_id
         )
 
         if "Error: CODEX command failed" in output:
@@ -8516,7 +8279,6 @@ User Request:
             prompt,
             n8n_session_id,
             use_pty=True,
-            permission_mode=mode,
         )
 
         # After each run, capture and persist the most recent devin session UUID
@@ -8640,7 +8402,6 @@ User Request:
             prompt,
             n8n_session_id,
             use_pty=True,
-            permission_mode=mode,
         )
 
         # After each run, persist session state for future resumption
@@ -8664,6 +8425,10 @@ User Request:
     ) -> str:
         """Execute via Wee Native runtime - OpenAI-compatible chat completions.
 
+        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
+        LM Studio, etc.) using the openai Python package. No external CLI
+        binary required.
+
         Model format: [provider/]model_name
         Examples:
             ollama/gemma4:e4b         - Ollama on Kubuntu
@@ -8682,19 +8447,48 @@ User Request:
             from openai import OpenAI
         except ImportError:
             return "Error: openai package not installed. " "Run: pip install openai"
+
         session_data = self.get_or_create_session_data(n8n_session_id)
+        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
-        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
-        bg_task_id = session_data.get("bg_task_id")
 
-        session_api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
-        session_api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
-        api_base, api_key, resolved_model = self._wee_resolve_endpoint(
-            model, session_api_base, session_api_key
-        )
-        context_window = self._wee_get_context_limit_for_api(resolved_model, api_base)
-        token_tracker = self._wee_load_token_tracker(n8n_session_id, context_window)
+        # -- Resolve model, endpoint, and API key --
+        api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
+        api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
+
+        # Provider presets
+        _PRESETS = {
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+
+        resolved_model = model
+        for prefix, (preset_base, preset_key) in _PRESETS.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1 :]
+                if not api_base:
+                    api_base = preset_base
+                if not api_key and preset_key:
+                    api_key = preset_key
+                break
+
+        if not api_base:
+            api_base = "http://192.168.1.101:11434/v1"
+        if not api_key:
+            # Try keyring for OpenRouter
+            if "openrouter" in api_base.lower():
+                try:
+                    import keyring
+
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except Exception:
+                    pass
+                if not api_key:
+                    api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                api_key = "ollama"
 
         print(
             f"[Wee Native] model={resolved_model} api_base={api_base} "
@@ -8702,6 +8496,7 @@ User Request:
             file=sys.stderr,
         )
 
+        # Issue #111: Build context prompt with correct args (after model resolution)
         base_context_prompt = self.build_agent_context_prompt(
             agent,
             prompt,
@@ -8712,11 +8507,43 @@ User Request:
             model=resolved_model,
             channel=channel,
         )
+        # Issue #111: Augment system prompt with explicit tool capability section
+        # so models that ignore JSON schemas still know tools are available.
         context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
 
+        # -- Streaming infrastructure --
+        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+
+        # -- Issue #125: Free model 429 retry + fallback chain --
+        _free_cfg = self._wee_load_free_config()
+        _max_retries_429 = _free_cfg.get("max_retries_per_model", 3)
+        _backoff_429 = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
+        _is_free_model_req = self._wee_is_free_model(model)
+        if _is_free_model_req:
+            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
+            _attempt_chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
+        else:
+            _attempt_chain = [model]
+
+        # -- Create OpenAI client and call API --
+        import httpx as _httpx_wee
+        client = OpenAI(
+            base_url=api_base,
+            api_key=api_key,
+            timeout=_httpx_wee.Timeout(
+                connect=15.0,
+                read=float(effective_timeout),
+                write=30.0,
+                pool=15.0,
+            ),
+            max_retries=0,
+        )
+
+        # -- Issue #108: Load conversation history --
         try:
             messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
         except Exception as load_err:
+            # Fallback: start with empty messages if loading fails
             print(
                 f"[Wee Native] Warning: Failed to load messages: "
                 f"{load_err}, starting fresh",
@@ -8725,18 +8552,12 @@ User Request:
             messages = []
             if context_prompt:
                 messages.append({"role": "system", "content": context_prompt})
-
         messages.append({"role": "user", "content": prompt})
         messages = self._wee_maybe_compact(
-            None,
-            n8n_session_id,
-            messages,
-            resolved_model,
-            context_prompt,
-            token_tracker=token_tracker,
-            context_window=context_window,
+            client, n8n_session_id, messages, resolved_model, context_prompt
         )
 
+        # -- Tool definitions for agentic loop (Issue #107) --
         _WEE_TOOLS = [
             {
                 "type": "function",
@@ -8773,3 +8594,8360 @@ User Request:
                 },
             },
         ]
+
+        # -- Tool definitions for agentic loop (Issue #123) --
+        _WEE_TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Execute a bash shell command and return its output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to execute",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "python",
+                    "description": "Execute Python 3 code and return the output.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The Python code to execute",
+                            }
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+        ]
+
+        collected_output = []
+        _tool_call_counter = 0
+        MAX_TOOL_ROUNDS = 10
+
+        try:
+            for round_num in range(MAX_TOOL_ROUNDS + 1):
+                # Build create kwargs — include tools unless on final safety round
+                create_kwargs = {
+                    "model": resolved_model,
+                    "messages": messages,
+                    "stream": True,
+                }
+                if round_num < MAX_TOOL_ROUNDS:
+                    create_kwargs["tools"] = _WEE_TOOLS
+
+                try:
+                    stream = client.chat.completions.create(**create_kwargs)
+                except Exception as tools_err:
+                    # Some models/endpoints may not support tools — retry without
+                    if "tools" in create_kwargs:
+                        print(
+                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
+                            file=sys.stderr,
+                        )
+                        create_kwargs.pop("tools", None)
+                        try:
+                            stream = client.chat.completions.create(**create_kwargs)
+                        except Exception as retry_err:
+                            if self._wee_is_free_model(model) and (
+                                "429" in str(retry_err)
+                                or "rate limit" in str(retry_err).lower()
+                            ):
+                                fallback_cfg = self._wee_load_free_config() or {}
+                                fallback_chain = (
+                                    fallback_cfg.get("free_model_fallback_chain") or []
+                                )
+                                fallback_model = next(iter(fallback_chain), None)
+                                if not fallback_model:
+                                    raise
+                                (
+                                    fallback_base,
+                                    fallback_key,
+                                    fallback_resolved_model,
+                                ) = self._wee_resolve_endpoint(
+                                    fallback_model, api_base, api_key
+                                )
+                                client = OpenAI(
+                                    base_url=fallback_base,
+                                    api_key=fallback_key,
+                                    timeout=effective_timeout,
+                                )
+                                resolved_model = fallback_resolved_model
+                                create_kwargs["model"] = resolved_model
+                                stream = client.chat.completions.create(
+                                    **create_kwargs
+                                )
+                            else:
+                                raise
+                    else:
+                        raise
+
+                # Accumulate content and tool calls from streaming response
+                round_content = []
+                tool_calls_acc = {}  # index -> {id, name, arguments}
+
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+
+                    # Content tokens — stream to user
+                    if delta.content:
+                        token = delta.content
+                        round_content.append(token)
+                        if stream_buffer:
+                            stream_buffer.push("chunk", {"text": token})
+
+                    # Tool call deltas (Issue #107)
+                    if getattr(delta, "tool_calls", None):
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                _tool_call_counter += 1
+                                tool_calls_acc[idx] = {
+                                    "id": getattr(tc_delta, "id", None)
+                                    or f"tc_wee_{_tool_call_counter}",
+                                    "name": "",
+                                    "arguments": "",
+                                }
+                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith(
+                                "tc_wee_"
+                            ):
+                                pass  # keep first real id
+                            elif tc_delta.id:
+                                tool_calls_acc[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tool_calls_acc[idx][
+                                        "arguments"
+                                    ] += tc_delta.function.arguments
+
+                content_text = "".join(round_content)
+
+                # No tool calls — we have the final answer
+                if not tool_calls_acc:
+                    collected_output.append(content_text)
+                    messages.append({"role": "assistant", "content": content_text})
+                    break
+
+                # -- Tool calls detected (Issues #107 + #109) --
+                print(
+                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
+                    file=sys.stderr,
+                )
+
+                # Build assistant message with tool_calls for conversation history
+                assistant_tool_calls = []
+                for idx in sorted(tool_calls_acc.keys()):
+                    tc = tool_calls_acc[idx]
+                    assistant_tool_calls.append(
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": tc["arguments"],
+                            },
+                        }
+                    )
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": content_text or None,
+                    "tool_calls": assistant_tool_calls,
+                }
+                messages.append(assistant_msg)
+
+                # Execute each tool call and emit SSE events (Issue #109)
+                for tc_entry in assistant_tool_calls:
+                    tc_id = tc_entry["id"]
+                    func_name = tc_entry["function"]["name"]
+                    func_args_str = tc_entry["function"]["arguments"]
+
+                    # Parse arguments
+                    try:
+                        func_args = _json.loads(func_args_str)
+                    except (ValueError, _json.JSONDecodeError):
+                        func_args = {"raw": func_args_str}
+
+                    # Issue #109: Emit tool start event to SSE stream
+                    tc_start_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "status": "running",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_start_event)
+
+                    print(
+                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                        file=sys.stderr,
+                    )
+
+                    # Execute the tool
+                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
+
+                    # Issue #109: Emit tool complete event to SSE stream
+                    tc_done_event = {
+                        "id": tc_id,
+                        "name": func_name,
+                        "arguments": func_args,
+                        "result": tool_result[:2000] if tool_result else "",
+                        "status": "complete",
+                    }
+                    if stream_buffer:
+                        stream_buffer.push("tool_call", tc_done_event)
+
+                    # Append tool result to conversation for next round
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": tool_result or "No output",
+                        }
+                    )
+
+            else:
+                # All MAX_TOOL_ROUNDS had tool calls with no final text
+                last_tool_results = [
+                    m["content"] for m in messages if m.get("role") == "tool"
+                ]
+                if last_tool_results:
+                    collected_output.append(
+                        "Tool execution completed. Last result:\n"
+                        + last_tool_results[-1][:2000]
+                    )
+                else:
+                    collected_output.append(
+                        "Max tool rounds reached without final response."
+                    )
+
+            output = "".join(collected_output)
+
+            # Issue #108: Persist conversation history
+            self._wee_save_messages(n8n_session_id, messages)
+
+            # Push done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", output)
+
+            print(
+                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                file=sys.stderr,
+            )
+            return output
+
+        except Exception as e:
+            _e_str = str(e)
+            _is_429 = "429" in _e_str or "rate limit" in _e_str.lower() or "429 exhausted" in _e_str
+            if _is_free_model_req and _is_429:
+                # Try next model in fallback chain
+                _cur_idx = _attempt_chain.index(model) if model in _attempt_chain else 0
+                for _fi, _fallback_model in enumerate(_attempt_chain):
+                    if _fallback_model.lower() == model.lower():
+                        _cur_idx = _fi
+                        break
+                if _cur_idx + 1 < len(_attempt_chain):
+                    _next_model = _attempt_chain[_cur_idx + 1]
+                    _fb_msg = f"\n⚠️ Still rate limited, falling back to {_next_model.split('/')[-1]}...\n"
+                    print(f"[Wee Native] {_fb_msg.strip()}", file=sys.stderr)
+                    if stream_buffer:
+                        stream_buffer.push("chunk", {"text": _fb_msg})
+                    # Recurse with next model (single fallback step)
+                    return self.run_wee_native(
+                        prompt=prompt, model=_next_model, agent=agent,
+                        session_id=session_id, resume=resume,
+                        n8n_session_id=n8n_session_id, timeout=timeout,
+                        render_type=render_type,
+                    )
+                else:
+                    _done_msg = "\n❌ All free model fallbacks exhausted. Please try again later or switch to a paid model."
+                    if stream_buffer:
+                        stream_buffer.push("done", _done_msg)
+                    return _done_msg
+
+            error_msg = f"Error: Wee native runtime failed: {e}"
+            print(f"[Wee Native] {error_msg}", file=sys.stderr)
+
+            # Push error as done sentinel
+            if stream_buffer:
+                stream_buffer.push("done", error_msg)
+
+            return error_msg
+
+    # -- Wee runtime helper methods (Issues #107, #108, #109) --
+
+    def _wee_load_messages(
+        self,
+        n8n_session_id: str,
+        context_prompt: str,
+        resume: bool = True,
+    ) -> list:
+        """Load wee conversation history from session map.
+
+        Issue #108: Ollama is stateless — the full conversation must be
+        included in every request.  This loads persisted messages from the
+        session_map so multi-turn context is preserved.
+        """
+        if resume:
+            session_data = self.load_session_data(n8n_session_id)
+            if session_data and session_data.get("wee_messages"):
+                msgs = list(session_data["wee_messages"])
+                # Always refresh the system prompt to pick up context changes
+                if msgs and msgs[0].get("role") == "system":
+                    msgs[0]["content"] = context_prompt
+                elif context_prompt:
+                    msgs.insert(0, {"role": "system", "content": context_prompt})
+                return msgs
+
+        # Fresh conversation — start with system prompt
+        messages = []
+        if context_prompt:
+            messages.append({"role": "system", "content": context_prompt})
+        return messages
+
+    def _wee_save_messages(self, n8n_session_id: str, messages: list) -> None:
+        """Persist wee conversation history to session map.
+
+        Issue #108: Saves the full message array (system + user + assistant +
+        tool) so the next turn can reconstruct the conversation.
+        Caps at MAX_WEE_MESSAGES to prevent unbounded growth.
+        """
+        MAX_WEE_MESSAGES = 100
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id in session_map:
+                # Keep system prompt + last N messages
+                if len(messages) > MAX_WEE_MESSAGES:
+                    system_msgs = [m for m in messages if m.get("role") == "system"]
+                    non_system = [m for m in messages if m.get("role") != "system"]
+                    saved = (
+                        system_msgs
+                        + non_system[-(MAX_WEE_MESSAGES - len(system_msgs)) :]
+                    )
+                else:
+                    saved = list(messages)
+                # Strip tool_calls from assistant messages for JSON serialization
+                clean = []
+                for m in saved:
+                    if m.get("tool_calls"):
+                        mc = dict(m)
+                        mc["tool_calls"] = [
+                            {
+                                "id": (
+                                    tc.get("id", "")
+                                    if isinstance(tc, dict)
+                                    else getattr(tc, "id", "")
+                                ),
+                                "type": "function",
+                                "function": {
+                                    "name": (
+                                        tc.get("function", {}).get("name", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(
+                                            getattr(tc, "function", None), "name", ""
+                                        )
+                                    ),
+                                    "arguments": (
+                                        tc.get("function", {}).get("arguments", "")
+                                        if isinstance(tc, dict)
+                                        else getattr(
+                                            getattr(tc, "function", None),
+                                            "arguments",
+                                            "",
+                                        )
+                                    ),
+                                },
+                            }
+                            for tc in m["tool_calls"]
+                        ]
+                        clean.append(mc)
+                    else:
+                        clean.append(m)
+                session_map[n8n_session_id]["wee_messages"] = clean
+                self.save_session_map(session_map)
+
+    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+        """Issue #111: Append explicit tool capability declaration to system prompt.
+
+        Many Ollama models ignore JSON tool schemas entirely and respond as if
+        no tools exist. Explicitly stating tool availability in the system
+        prompt text reliably fixes this across all models.
+        """
+        tool_section = (
+            "\n[Available Tools]\n"
+            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
+            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n"
+            "**call_agent** -- Delegate tasks to other specialized agents (PREFERRED for background tasks).\n"
+            '  Call: call_agent tool with {"agent": "agent_name", "prompt": "task", "mode": "background", ...}\n'
+            "  Use for: scheduling background tasks, delegating work to orchestrator/research/other agents\n"
+            "  BEST CHOICE for: background task scheduling, agent delegation\n"
+            "  Example: To schedule a background task, ALWAYS use call_agent with mode=\'background\' instead of raw API calls\n"
+            "\n"
+            "**bash** -- Execute a bash shell command and return its output.\n"
+            '  Call: bash tool with {"command": "your shell command here"}\n'
+            "  Use for: running commands, SSH, file operations, checking system state\n"
+            "  DO NOT use bash for API calls or background task scheduling -- use call_agent instead\n"
+            "\n"
+            "**python** -- Execute Python 3 code and return its output.\n"
+            '  Call: python tool with {"code": "your python code here"}\n'
+            "  Use for: data processing, calculations, scripting, file parsing\n"
+            "\n"
+            "CRITICAL RULES:\n"
+            "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
+            "2. For delegating work to other agents: use call_agent\n"
+            "3. For running shell commands: use bash tool\n"
+            "4. NEVER make raw API calls via bash/curl when call_agent can handle it\n"
+            "5. NEVER refuse or claim you lack capability. The tools are active and functional."
+        )
+        return system_prompt + tool_section
+
+
+    @staticmethod
+    def _wee_estimate_tokens(messages: list, model: str = "") -> int:
+        """Estimate token usage for wee runtime messages."""
+        from wee_runtime import count_message_tokens
+
+        return count_message_tokens(messages or [], model)
+
+    def _wee_get_context_limit(self, model: str) -> int:
+        """Resolve the context window size for a wee model."""
+        return self._wee_get_context_limit_for_api(model, "")
+
+    def _wee_get_context_limit_for_api(self, model: str, api_base: str) -> int:
+        """Resolve the context window size for a wee model and endpoint."""
+        normalized = (model or "").lower()
+        known_windows = [
+            ("gemma4", 128000),
+            ("llama-4-scout", 131072),
+            ("llama-3.1", 131072),
+            ("64k", 65536),
+            ("128k", 128000),
+            ("32k", 32768),
+        ]
+        for needle, limit in known_windows:
+            if needle in normalized:
+                heuristic_limit = limit
+                break
+        else:
+            heuristic_limit = self._WEE_DEFAULT_CONTEXT_LIMIT
+
+        if not api_base:
+            return heuristic_limit
+
+        try:
+            from wee_cli import resolve_context_window
+            from wee_runtime import get_context_window
+
+            resolved = resolve_context_window(model, api_base)
+            if resolved and resolved > 0 and resolved != get_context_window(model):
+                return resolved
+        except Exception:
+            pass
+
+        return heuristic_limit
+
+    def _wee_load_token_tracker(self, n8n_session_id: str, context_window: int):
+        """Restore wee token tracking from session state."""
+        from wee_cli import TokenTracker
+
+        tracker = TokenTracker(context_window=context_window)
+        session_data = self.load_session_data(n8n_session_id) or {}
+        usage = session_data.get("wee_context_usage") or {}
+        tracker.prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        tracker.completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        tracker.total_tokens = int(usage.get("total_tokens", 0) or 0)
+        tracker.turns = int(usage.get("turns", 0) or 0)
+        tracker.session_total = int(usage.get("session_total", 0) or 0)
+        tracker.last_prompt_tokens = int(usage.get("last_prompt_tokens", 0) or 0)
+        tracker.current_context_tokens = int(
+            usage.get("current_context_tokens", 0) or tracker.last_prompt_tokens or 0
+        )
+        tracker.context_window = int(usage.get("context_window", context_window) or 0)
+        return tracker
+
+    def _wee_build_meta(
+        self,
+        api_base: str,
+        model: str,
+        tracker,
+        last_usage: Optional[dict],
+        messages: list,
+        source: str,
+        auto_compacted: bool = False,
+    ) -> tuple[dict, dict]:
+        """Build persisted wee context state and WebUI metadata."""
+        context_window = int(getattr(tracker, "context_window", 0) or 0)
+        estimated_tokens = self._wee_estimate_tokens(messages, model)
+        current_tokens = int(
+            getattr(tracker, "current_context_tokens", 0)
+            or getattr(tracker, "last_prompt_tokens", 0)
+            or estimated_tokens
+            or 0
+        )
+        compact_trigger = int(context_window * 0.75) if context_window else 0
+        remaining_before_compaction = max(0, compact_trigger - current_tokens)
+        remaining_before_limit = max(0, context_window - current_tokens)
+        percent_used = (
+            min(100.0, current_tokens / context_window * 100.0)
+            if context_window
+            else 0.0
+        )
+
+        usage_state = {
+            "prompt_tokens": int(getattr(tracker, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(tracker, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(tracker, "total_tokens", 0) or 0),
+            "turns": int(getattr(tracker, "turns", 0) or 0),
+            "session_total": int(getattr(tracker, "session_total", 0) or 0),
+            "current_context_tokens": current_tokens,
+            "last_prompt_tokens": int(
+                getattr(tracker, "last_prompt_tokens", 0) or current_tokens
+            ),
+            "context_window": context_window,
+            "estimated_tokens": estimated_tokens,
+            "compaction_trigger_tokens": compact_trigger,
+            "remaining_before_compaction": remaining_before_compaction,
+            "remaining_before_limit": remaining_before_limit,
+            "percent_used": percent_used,
+            "source": source,
+            "auto_compacted": auto_compacted,
+        }
+
+        meta = {
+            "runtime": "wee",
+            "context_window": context_window,
+            "current_context_tokens": current_tokens,
+            "context_percent": percent_used,
+            "compaction_trigger_tokens": compact_trigger,
+            "remaining_before_compaction": remaining_before_compaction,
+            "remaining_before_limit": remaining_before_limit,
+            "source": source,
+            "auto_compacted": auto_compacted,
+        }
+        if last_usage:
+            meta["tokens"] = int(last_usage.get("total_tokens", 0) or 0)
+            meta["prompt_tokens"] = int(last_usage.get("prompt_tokens", 0) or 0)
+            meta["completion_tokens"] = int(last_usage.get("completion_tokens", 0) or 0)
+
+        api_base_lower = (api_base or "").lower()
+        if "11434" in api_base_lower or api_base_lower.startswith(
+            "http://192.168.1.101"
+        ):
+            meta["cost_label"] = "local"
+        elif "1234" in api_base_lower:
+            meta["cost_label"] = "local"
+        elif "openrouter" in api_base_lower and ":free" in (model or "").lower():
+            meta["cost_label"] = "free"
+
+        return usage_state, meta
+
+    def _wee_save_runtime_state(
+        self,
+        n8n_session_id: str,
+        tracker,
+        model: str,
+        api_base: str,
+        messages: list,
+        last_usage: Optional[dict],
+        source: str,
+        auto_compacted: bool = False,
+    ) -> None:
+        """Persist wee token usage and context tracking for WebUI sessions."""
+        usage_state, meta = self._wee_build_meta(
+            api_base=api_base,
+            model=model,
+            tracker=tracker,
+            last_usage=last_usage,
+            messages=messages,
+            source=source,
+            auto_compacted=auto_compacted,
+        )
+        with self._session_map_lock:
+            session_map = self.load_session_map()
+            if n8n_session_id not in session_map:
+                self._get_or_create_session_data_unlocked(n8n_session_id)
+                session_map = self.load_session_map()
+            if n8n_session_id not in session_map:
+                return
+            if isinstance(session_map[n8n_session_id], str):
+                session_map[n8n_session_id] = {
+                    "session_id": session_map[n8n_session_id],
+                    "model": model,
+                    "agent": get_default_agent(),
+                    "runtime": "wee",
+                }
+            session_map[n8n_session_id]["wee_context_usage"] = usage_state
+            session_map[n8n_session_id]["wee_last_usage"] = last_usage or {}
+            session_map[n8n_session_id]["wee_last_meta"] = meta
+            self.save_session_map(session_map)
+
+    def _wee_save_transcript(self, n8n_session_id: str, messages: list) -> str:
+        """Persist a transcript snapshot used by compaction summaries."""
+        safe_session = re.sub(r"[^A-Za-z0-9._-]+", "_", n8n_session_id or "unknown")
+        safe_session = safe_session.strip("._") or "unknown"
+        transcript_dir = (
+            Path(__file__).resolve().parent / "logs" / "transcripts" / safe_session
+        )
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        transcript_path = transcript_dir / f"transcript_{timestamp}.json"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2, ensure_ascii=False)
+        return str(transcript_path)
+
+    def _wee_compact_context(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        model: str,
+        system_prompt: str,
+    ) -> list:
+        """Summarize older wee conversation context and preserve recent turns."""
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+        if len(non_system) <= 1:
+            return messages
+
+        transcript_path = self._wee_save_transcript(n8n_session_id, messages)
+        to_summarize = non_system[:-1]
+        latest_message = non_system[-1]
+        if not to_summarize:
+            return messages
+
+        def _summary_snippet(text: str, limit: int = 700) -> str:
+            text = str(text)
+            if len(text) <= limit:
+                return text
+            head = max(1, int(limit * 0.6))
+            tail = max(1, limit - head - 5)
+            return f"{text[:head]} ... {text[-tail:]}"
+
+        transcript_lines = []
+        for msg in to_summarize:
+            role = msg.get("role", "")
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = " ".join(
+                    part.get("text", "") for part in content if isinstance(part, dict)
+                )
+            if role in ("user", "assistant") and content:
+                prefix = "User" if role == "user" else "Assistant"
+                transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
+        if not transcript_lines:
+            return messages
+
+        summary_prompt = (
+            "Summarize the following conversation history concisely. Preserve all "
+            "key facts, decisions, file paths, and errors so the conversation can "
+            "continue coherently.\n\nConversation:\n" + "\n".join(transcript_lines)
+        )
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": summary_prompt}],
+                stream=False,
+            )
+            summary_text = response.choices[0].message.content or ""
+        except Exception as exc:
+            summary_text = f"[Compaction error: {exc}]"
+
+        summary_message = {
+            "role": "assistant",
+            "content": (
+                "[Earlier conversation summary]\n"
+                f"{summary_text or 'Earlier conversation summarized.'}\n\n"
+                f"Full transcript: {transcript_path}"
+            ),
+        }
+        return system_msgs + [summary_message, latest_message]
+
+    def _wee_maybe_compact(
+        self,
+        client,
+        n8n_session_id: str,
+        messages: list,
+        model: str,
+        system_prompt: str,
+        threshold: float = 0.75,
+        token_tracker=None,
+        context_window: int = 0,
+    ) -> list:
+        """Compact wee context when estimated token usage crosses threshold."""
+        if threshold >= 1.0:
+            return messages
+        context_limit = context_window or self._wee_get_context_limit(model)
+        if context_limit <= 0:
+            return messages
+        current_tokens = 0
+        if token_tracker is not None:
+            current_tokens = int(
+                getattr(token_tracker, "current_context_tokens", 0)
+                or getattr(token_tracker, "last_prompt_tokens", 0)
+                or 0
+            )
+        if not current_tokens:
+            current_tokens = self._wee_estimate_tokens(messages, model)
+        if current_tokens < int(context_limit * threshold):
+            return messages
+        return self._wee_compact_context(
+            client, n8n_session_id, messages, model, system_prompt
+        )
+
+    def _wee_load_free_config(self) -> dict:
+        """Compatibility shim for wee free-model fallback tests."""
+        return {}
+
+    def _wee_is_free_model(self, model: str) -> bool:
+        """Compatibility shim for wee free-model fallback tests."""
+        return (
+            ":free" in (model or "").lower()
+            or "openrouter/free" in (model or "").lower()
+        )
+
+    def _wee_resolve_endpoint(
+        self, model: str, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[str, str, str]:
+        """Compatibility shim returning the resolved endpoint tuple."""
+        _presets = {
+            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "openrouter": ("https://openrouter.ai/api/v1", None),
+            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
+        }
+        resolved_model = model
+        resolved_base = api_base
+        resolved_key = api_key
+        for prefix, (preset_base, preset_key) in _presets.items():
+            if model.lower().startswith(f"{prefix}/"):
+                resolved_model = model[len(prefix) + 1 :]
+                if not resolved_base:
+                    resolved_base = preset_base
+                if not resolved_key and preset_key:
+                    resolved_key = preset_key
+                break
+        if not resolved_base:
+            resolved_base = _presets["ollama"][0]
+        if not resolved_key:
+            resolved_key = "ollama"
+        return resolved_base, resolved_key, resolved_model
+
+    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
+        """Execute a tool call from the wee runtime agentic loop.
+
+        Issue #107: Supports bash and python tools.  Uses the same
+        _execute_bash_command infrastructure as other runtimes.
+        """
+        try:
+            if func_name == "bash":
+                command = func_args.get("command", "")
+                if not command:
+                    return "Error: No command provided"
+                return self._execute_bash_command(command, agent)
+            elif func_name == "python":
+                code = func_args.get("code", "")
+                if not code:
+                    return "Error: No code provided"
+                agent_info = self.AGENTS.get(agent, self.AGENTS.get("orchestrator"))
+                cwd = agent_info["path"] if agent_info else str(Path.cwd())
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(self.command_timeout, 120),
+                    cwd=cwd,
+                )
+                output = result.stdout
+                if result.stderr:
+                    output += ("\n" if output else "") + result.stderr
+                if not output.strip():
+                    if result.returncode == 0:
+                        return "✓ Executed successfully (exit code: 0)"
+                    else:
+                        return f"✗ Failed with exit code: {result.returncode}"
+                return output.strip()
+            else:
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+        except subprocess.TimeoutExpired:
+            return f"Error: Tool '{func_name}' timed out"
+        except Exception as e:
+            return f"Error executing {func_name}: {e}"
+
+    def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
+        """Return the stored cursor session flag for this n8n session, or None."""
+        mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
+        try:
+            with open(mapping_file) as f:
+                data = json.load(f)
+                return data.get("cursor_session_active")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _save_cursor_session_id(self, n8n_session_id: str):
+        """Mark that a cursor session exists for this n8n session."""
+        try:
+            self.cursor_session_dir.mkdir(parents=True, exist_ok=True)
+            mapping_file = self.cursor_session_dir / f"{n8n_session_id}.json"
+            with open(mapping_file, "w") as f:
+                json.dump(
+                    {"cursor_session_active": True, "n8n_session_id": n8n_session_id}, f
+                )
+            print(
+                f"[Session] Stored cursor session mapping: {n8n_session_id[:8]}...",
+                file=sys.stderr,
+            )
+        except Exception as e:
+            print(
+                f"[Session] Warning: could not save cursor session ID: {e}",
+                file=sys.stderr,
+            )
+
+    def _get_devin_session_id(self, n8n_session_id: str) -> Optional[str]:
+        """Return the stored devin session UUID for this n8n session, or None."""
+        mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+        try:
+            with open(mapping_file) as f:
+                data = json.load(f)
+                return data.get("devin_session_id")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _save_devin_session_id(
+        self, n8n_session_id: str, devin_bin: str, cwd: Optional[str] = None
+    ):
+        """Capture the most recently active devin session UUID and store it."""
+        try:
+            result = subprocess.run(
+                [devin_bin, "list", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd,
+            )
+            sessions = json.loads(result.stdout)
+            if not sessions:
+                return
+            # Most recent session is first in the list
+            devin_sid = sessions[0].get("id")
+            if not devin_sid:
+                return
+            mapping_file = self.devin_session_dir / f"{n8n_session_id}.json"
+            with open(mapping_file, "w") as f:
+                json.dump({"devin_session_id": devin_sid}, f)
+            print(
+                f"[Session] Stored devin session mapping: {n8n_session_id[:8]}... → {devin_sid[:8]}...",
+                file=sys.stderr,
+            )
+        except Exception as e:
+            print(
+                f"[Session] Warning: could not save devin session ID: {e}",
+                file=sys.stderr,
+            )
+
+    def session_exists(
+        self, session_id: str, runtime: str, n8n_session_id: Optional[str] = None
+    ) -> bool:
+        """Check if session state exists for runtime"""
+        if runtime in ("copilot", "copilot-sdk"):
+            # Modern Copilot stores sessions as directories with events.jsonl inside
+            session_dir = self.session_state_dir / session_id
+            if session_dir.is_dir() and (session_dir / "events.jsonl").exists():
+                return True
+            # Legacy: also check for old .jsonl format at root level
+            return (self.session_state_dir / f"{session_id}.jsonl").exists()
+        elif runtime == "opencode":
+            if not session_id or not session_id.startswith("ses_"):
+                return False
+            try:
+                for session_file in self._find_opencode_session_files():
+                    if session_file.stem == session_id:
+                        return True
+            except Exception:
+                pass
+            return False
+        elif runtime in ("claude", "claude-sdk"):
+            if not session_id:
+                return False
+            # Verify session actually exists in Claude's project storage.
+            # Claude stores sessions as {session_id}.jsonl under ~/.claude/projects/*/
+            # A pre-generated UUID from session map creation won't have a file yet,
+            # so this correctly returns False on first message and True after Claude
+            # has created the session and we've captured its ID.
+            claude_projects_dir = Path.home() / ".claude" / "projects"
+            try:
+                return any(
+                    (p / f"{session_id}.jsonl").exists()
+                    for p in claude_projects_dir.iterdir()
+                    if p.is_dir()
+                )
+            except (OSError, FileNotFoundError):
+                return False
+        elif runtime == "gemini":
+            return (self.gemini_session_dir / f"{session_id}.json").exists()
+        elif runtime == "codex":
+            # Legacy: CODEX stored sessions as rollout-*.jsonl files (pre-v0.125.0)
+            try:
+                for session_file in self.codex_session_dir.glob(
+                    "*/*/*/rollout-*.jsonl"
+                ):
+                    filename = session_file.name.replace(".jsonl", "")
+                    file_session_id = (
+                        filename[-36:] if len(filename) >= 36 else filename
+                    )
+                    if file_session_id == session_id:
+                        return True
+            except Exception:
+                pass
+            # Do not treat arbitrary UUIDs as resumable Codex sessions.
+            # The transient thread.started ID is not sufficient for
+            # `codex exec resume` and leads to empty assistant messages.
+            return False
+        elif runtime == "devin":
+            # Devin session mappings are keyed by n8n_session_id, not backend session_id
+            key = n8n_session_id if n8n_session_id else session_id
+            return (self.devin_session_dir / f"{key}.json").exists()
+        elif runtime == "cursor":
+            # Cursor session mappings are keyed by n8n_session_id
+            key = n8n_session_id if n8n_session_id else session_id
+            return (self.cursor_session_dir / f"{key}.json").exists()
+        elif runtime == "wee":
+            # Issue #108: Wee stores conversation history in session_map
+            data = self.load_session_data(n8n_session_id or session_id)
+            return bool(data and data.get("wee_messages"))
+        return False
+
+    def get_most_recent_session_id(
+        self, runtime: str, agent: str = "devops"
+    ) -> Optional[str]:
+        """Get most recent session ID from storage or CLI"""
+        try:
+            if runtime in ("copilot", "copilot-sdk"):
+                # Modern Copilot: sessions are directories with events.jsonl inside
+                session_dirs = [
+                    d
+                    for d in self.session_state_dir.iterdir()
+                    if d.is_dir() and (d / "events.jsonl").exists()
+                ]
+                if session_dirs:
+                    # Sort by modification time of events.jsonl
+                    dirs_sorted = sorted(
+                        session_dirs,
+                        key=lambda d: (d / "events.jsonl").stat().st_mtime,
+                        reverse=True,
+                    )
+                    return dirs_sorted[0].name
+                # Legacy fallback: check for old .jsonl format
+                files = sorted(
+                    self.session_state_dir.glob("*.jsonl"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                return files[0].stem if files else None
+            elif runtime == "opencode":
+                # Prefer filesystem lookup because `opencode session list` may fail on some hosts
+                # (for example due to sqlite/model service issues) even when session files exist.
+                files = self._find_opencode_session_files()
+                if files:
+                    files_sorted = sorted(
+                        files,
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    return files_sorted[0].stem
+
+                # Fallback to CLI listing if no files found.
+                agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+                env = os.environ.copy()
+                env["PAGER"] = "cat"
+                cmd = [str(self.opencode_bin), "session", "list"]
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, cwd=agent_dir, env=env
+                )
+                if result.returncode != 0:
+                    return None
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("ses_"):
+                        return line.split()[0]
+                return None
+            elif runtime == "claude":
+                # Prefer the 'latest' symlink if it exists (fastest)
+                latest_link = self.claude_debug_dir / "latest"
+                if latest_link.is_symlink():
+                    target = latest_link.resolve()
+                    if target.exists() and target.suffix == ".txt":
+                        return target.stem
+                # Fallback: most recently modified .txt file in debug dir
+                files = sorted(
+                    self.claude_debug_dir.glob("*.txt"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                return files[0].stem if files else None
+            elif runtime == "gemini":
+                files = sorted(
+                    self.gemini_session_dir.glob("*.json"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                return files[0].stem if files else None
+            elif runtime == "codex":
+                # Legacy/persisted local Codex sessions.
+                files = sorted(
+                    self.codex_session_dir.glob("*/*/*/rollout-*.jsonl"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if files:
+                    filename = files[0].name
+                    name_without_ext = filename.replace(".jsonl", "")
+                    session_id = (
+                        name_without_ext[-36:]
+                        if len(name_without_ext) >= 36
+                        else name_without_ext
+                    )
+                    return session_id
+                return None
+            elif runtime == "devin":
+                # Devin CLI does not persist local session files
+                return None
+            elif runtime == "cursor":
+                # Cursor agent CLI does not persist local session files
+                return None
+        except Exception as e:
+            print(f"Error getting recent session ID: {e}", file=sys.stderr)
+            return None
+
+    def _find_opencode_session_files(self) -> List[Path]:
+        """Find OpenCode session JSON files across known storage layouts."""
+        storage_root = Path.home() / ".local" / "share" / "opencode" / "storage"
+        candidates = []
+        # Newer OpenCode layout observed on this host.
+        session_diff_dir = storage_root / "session_diff"
+        if session_diff_dir.exists():
+            candidates.extend(session_diff_dir.glob("ses_*.json"))
+        # Legacy layout used by older OpenCode versions.
+        session_dir = storage_root / "session"
+        if session_dir.exists():
+            candidates.extend(session_dir.glob("*/ses_*.json"))
+            candidates.extend(session_dir.glob("ses_*.json"))
+        return [p for p in candidates if p.is_file()]
+
+    # Background task support
+    _bg_task_mgr = None  # Set by create_api_app
+    _bg_identity = None  # Set per-call for slash command context
+    _notification_mgr = None  # Set by create_api_app
+
+    def _execute_background_task(
+        self, task_id, session_id, prompt, agent, runtime, model, channel, timeout=None
+    ):
+        """Run a background task in the current thread (called from thread pool)."""
+        self.get_or_create_session_data(session_id)
+        self.update_session_field(session_id, "agent", agent)
+        self.update_session_field(session_id, "model", model)
+        self.update_session_field(session_id, "runtime", runtime)
+        self.update_session_field(session_id, "channel", channel)
+        self.update_session_field(session_id, "render_type", "text")
+        # Background tasks run unattended — grant elevated permissions so
+        # SDK runtimes (copilot-sdk, claude-sdk) don't block on approval gates
+        self.update_session_field(session_id, "permissions", {"mode": "elevated"})
+        # Issue #142: Store task_id so run_wee_native can track tool calls
+        self.update_session_field(session_id, "bg_task_id", task_id)
+        if timeout is not None:
+            self.update_session_field(session_id, "timeout", timeout)
+        try:
+            result = self.execute(prompt, session_id)
+            if self._bg_task_mgr:
+                self._bg_task_mgr.complete_task(task_id, result)
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = task_rec.get("origin_session_id") if task_rec else None
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "completed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
+
+        except Exception as exc:
+            if self._bg_task_mgr:
+                self._bg_task_mgr.fail_task(task_id, str(exc))
+                task_rec = self._bg_task_mgr.get_task(task_id)
+                o_sid = task_rec.get("origin_session_id") if task_rec else None
+                if o_sid:
+                    self._bg_task_mgr.push_bg_event(
+                        o_sid,
+                        {
+                            "task_id": task_id,
+                            "summary": prompt[:80],
+                            "status": "failed",
+                            "agent": agent,
+                            "timestamp": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                                time.gmtime(),
+                            ),
+                        },
+                    )
+
+    def _dispatch_single_runtime(
+        self,
+        runtime: str,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        can_resume: bool,
+        n8n_session_id: str,
+        effective_timeout: int,
+        render_type: str,
+        mode: str = "restricted",
+    ) -> str:
+        """Dispatch prompt to a single runtime and return the output."""
+        # Touch before dispatch to keep session alive during long operations
+        self.touch_session(n8n_session_id)
+
+        if runtime == "copilot":
+            result = self.run_copilot(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "copilot-sdk":
+            result = self.run_copilot_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "opencode":
+            result = self.run_opencode(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "claude":
+            result = self.run_claude(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "claude-sdk":
+            result = self.run_claude_sdk(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+        elif runtime == "gemini":
+            result = self.run_gemini(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "codex":
+            result = self.run_codex(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "devin":
+            result = self.run_devin(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "cursor":
+            result = self.run_cursor(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        elif runtime == "wee":
+            result = self.run_wee_native(
+                prompt,
+                model,
+                agent,
+                session_id if can_resume else None,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+            )
+        else:
+            return f"Error: Unknown runtime '{runtime}'"
+
+        # Touch after dispatch to record completion activity
+        self.touch_session(n8n_session_id)
+        return result
+
+    def execute(self, prompt: str, n8n_session_id: str) -> str:
+        """Main execution logic"""
+        # Touch session to mark activity and prevent cleanup
+        self.touch_session(n8n_session_id)
+
+        # Get session data first — pass identity so it's persisted in the
+        # session map, enabling preference lookups by identity later.
+        session_data = self.get_or_create_session_data(
+            n8n_session_id, identity=self._bg_identity
+        )
+        current_runtime = session_data.get("runtime", "copilot")
+        current_agent = session_data.get("agent", "orchestrator")
+
+        # Check for bash command (prompts starting with !)
+        if prompt.startswith("!"):
+            return self._execute_bash_command(prompt[1:].strip(), current_agent)
+
+        # First check for explicit slash commands
+        command, argument = self.parse_slash_command(prompt)
+
+        # If not a slash command, check for implicit agent delegation
+        if command is None:
+            delegated_agent, cleaned_prompt = self.detect_agent_delegation(prompt)
+            if delegated_agent and delegated_agent in self.AGENTS:
+                # User asked for specific agent help - auto-delegate
+                print(
+                    f"[Auto-Delegate] Detected request for '{delegated_agent}' agent",
+                    file=sys.stderr,
+                )
+                return self._execute_with_context(
+                    cleaned_prompt,
+                    {
+                        "session_id": str(uuid4()),
+                        "model": session_data.get("model", "gpt-5-mini"),
+                        "agent": delegated_agent,
+                        "runtime": current_runtime,
+                        "is_delegation": True,
+                    },
+                    n8n_session_id,
+                )
+
+        # --- Slash Commands ---
+
+        # F020: Check registry for pure-server handlers first.
+        # Commands with a handler bypass the LLM entirely.
+        if command and command in self._slash_command_registry:
+            entry = self._slash_command_registry[command]
+            if entry.get("handler"):
+                return entry["handler"](argument, session_data, n8n_session_id)
+
+        # --- Execution ---
+
+        # Prepare for execution
+        session_id = session_data.get("session_id")
+        model = session_data.get("model", "gpt-5-mini")
+        agent = session_data.get("agent", "orchestrator")
+        effective_timeout = self.get_effective_timeout(session_data)
+        render_type = self.get_render_type(session_data)
+        # Get permission mode from session (backward compat with yolo_mode)
+        _perms = (
+            session_data.get("permissions") or {}
+        )  # Handle None from session template
+        if isinstance(_perms, dict) and _perms.get("mode") in (
+            "elevated",
+            "restricted",
+            "sandboxed",
+        ):
+            mode = _perms["mode"]
+        elif session_data.get("yolo_mode") == "on":
+            mode = "elevated"
+        else:
+            mode = "restricted"
+
+        # --- Direct Single-Runtime Dispatch (simplified from auto-runtime logic) ---
+
+        # Check if we can resume
+        # For Gemini, we always try to resume the latest session for context retention
+        if current_runtime == "gemini":
+            can_resume = True  # Always attempt to resume latest Gemini session
+        elif current_runtime == "devin":
+            # Devin handles its own session resumption internally via
+            # _get_devin_session_id(); pass n8n_session_id for correct lookup
+            can_resume = (
+                self.session_exists(
+                    session_id, current_runtime, n8n_session_id=n8n_session_id
+                )
+                if session_id
+                else self.session_exists(
+                    "", current_runtime, n8n_session_id=n8n_session_id
+                )
+            )
+        elif current_runtime == "cursor":
+            # Cursor handles session resumption via --continue flag
+            can_resume = (
+                self.session_exists(
+                    session_id, current_runtime, n8n_session_id=n8n_session_id
+                )
+                if session_id
+                else self.session_exists(
+                    "", current_runtime, n8n_session_id=n8n_session_id
+                )
+            )
+        elif current_runtime == "wee":
+            # Issue #108 fix: Wee has no external session_id — history is keyed
+            # by n8n_session_id in session_map.  Must pass n8n_session_id so
+            # session_exists() finds wee_messages regardless of session_id.
+            can_resume = self.session_exists(
+                session_id, current_runtime, n8n_session_id=n8n_session_id
+            )
+        else:
+            can_resume = (
+                self.session_exists(session_id, current_runtime)
+                if session_id
+                else False
+            )
+
+        output = self._dispatch_single_runtime(
+            current_runtime,
+            prompt,
+            model,
+            agent,
+            session_id,
+            can_resume,
+            n8n_session_id,
+            effective_timeout,
+            render_type,
+            mode,
+        )
+
+        # Handle session ID mapping for runtimes that auto-generate IDs
+        if not can_resume and current_runtime in (
+            "copilot",
+            "opencode",
+            "gemini",
+        ):
+            new_id = self.get_most_recent_session_id(current_runtime, agent)
+            if new_id:
+                self.update_session_field(n8n_session_id, "session_id", new_id)
+
+        # Handle opencode session loss
+        if (
+            current_runtime == "opencode"
+            and can_resume
+            and ("Resource not found" in output or "NotFoundError" in output)
+        ):
+            print(
+                f"[Session] Session {session_id} lost/corrupted. Starting new session.",
+                file=sys.stderr,
+            )
+            output = self._dispatch_single_runtime(
+                "opencode",
+                prompt,
+                model,
+                agent,
+                None,
+                False,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
+            new_id = self.get_most_recent_session_id("opencode", agent)
+            if new_id:
+                self.update_session_field(n8n_session_id, "session_id", new_id)
+
+        # Post-process output for telegram_html to ensure Telegram compatibility
+        if render_type == "telegram_html":
+            # Sanitize output to remove unsupported tags
+            output = self.sanitize_telegram_html(output)
+
+        return output
+
+
+def _check_command_result(result: str, error_keywords: List[str]) -> None:
+    """Helper function to check command results and exit on error
+
+    Args:
+        result: The output from executing a command
+        error_keywords: List of keywords that indicate an error occurred
+
+    Raises:
+        SystemExit: If any error keywords are found in the result
+    """
+    for keyword in error_keywords:
+        if keyword in result:
+            print(result, file=sys.stderr)
+            sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# FastAPI Application
+# ---------------------------------------------------------------------------
+
+_api_auth_manager: Optional["AuthManager"] = None
+
+
+def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
+    """Deliver a pairing code. Returns True on success, False on failure."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        if channel == "telegram":
+            from telegram_connector import TelegramConnector
+
+            config_path = os.path.join(script_dir, "telegram_config.json")
+            with open(config_path) as f:
+                cfg = json.load(f)
+            token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            connector = TelegramConnector(token, config_file=config_path)
+            last_exc = None
+            for attempt in range(1, 4):
+                try:
+                    connector.send_message(
+                        int(identity),
+                        f"Your pairing code is: {code}\nIt expires in 5 minutes.",
+                    )
+                    return True
+                except Exception as _exc:
+                    last_exc = _exc
+                    print(
+                        f"[API] Telegram send attempt {attempt}/3 failed: {_exc}",
+                        file=sys.stderr,
+                    )
+                    if attempt < 3:
+                        time.sleep(2)
+            print(
+                f"[API] All 3 Telegram send attempts failed: {last_exc}",
+                file=sys.stderr,
+            )
+            return False
+        elif channel == "webex":
+            config_path = os.path.join(script_dir, "webex_config.json")
+            with open(config_path) as f:
+                cfg = json.load(f)
+            token = (
+                cfg.get("bot_token")
+                or cfg.get("token")
+                or os.getenv("WEBEX_BOT_TOKEN", "")
+            )
+            msg = f"Your pairing code is: **{code}**\nIt expires in 5 minutes."
+            # If identity looks like an email, use toPersonEmail; otherwise treat as roomId
+            import re as _re
+
+            if _re.match(r"[^@]+@[^@]+\.[^@]+", identity):
+                payload = {"toPersonEmail": identity, "text": msg, "markdown": msg}
+            else:
+                payload = {"roomId": identity, "text": msg, "markdown": msg}
+            import requests as _req
+
+            resp = _req.post(
+                "https://webexapis.com/v1/messages",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                print(
+                    f"[API] WebEX send failed ({resp.status_code}): {resp.text[:200]}",
+                    file=sys.stderr,
+                )
+                return False
+            return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[API] Warning: could not send pairing code via {channel}: {exc}")
+
+
+def _get_telegram_username(user_id: str):
+    """Look up @username for a numeric Telegram user_id in telegram_config.json.
+    Returns the username string (without @), or None if not found."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "telegram_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        pairing = cfg.get("user_pairings", {}).get(str(user_id), {})
+        username = pairing.get("username", "")
+        return username.lstrip("@") if username else None
+    except Exception:
+        return None
+
+
+def _ddg_image_search(query: str, max_results: int = 4) -> list:
+    """Fetch image results from DuckDuckGo without an API key.
+    Returns list of {url, thumbnail, title, source} dicts."""
+    import re as _re
+
+    import requests as _req
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://duckduckgo.com/",
+    }
+    try:
+        # Step 1: get VQD token
+        r1 = _req.get(
+            "https://duckduckgo.com/",
+            params={"q": query},
+            headers=headers,
+            timeout=8,
+        )
+        m = _re.search(r"vqd=([\d-]+)", r1.text)
+        if not m:
+            return []
+        vqd = m.group(1)
+        # Step 2: fetch image JSON
+        r2 = _req.get(
+            "https://duckduckgo.com/i.js",
+            params={
+                "q": query,
+                "o": "json",
+                "l": "us-en",
+                "s": "0",
+                "f": ",,,,,",
+                "p": "1",
+                "vqd": vqd,
+            },
+            headers=headers,
+            timeout=8,
+        )
+        out = []
+        for item in r2.json().get("results", [])[:max_results]:
+            if item.get("image"):
+                out.append(
+                    {
+                        "url": item["image"],
+                        "thumbnail": item.get("thumbnail", item["image"]),
+                        "title": item.get("title", ""),
+                        "source": item.get("source", ""),
+                    }
+                )
+        return out
+    except Exception:
+        return []
+
+
+def _resolve_telegram_identity(username: str):
+    """Reverse-lookup @username in telegram_config.json user_pairings.
+    Returns numeric user_id string, or None if not found (user must message bot first).
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "telegram_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        for uid, pairing in cfg.get("user_pairings", {}).items():
+            if pairing.get("username", "").lower() == username.lower():
+                return uid
+        return None
+    except Exception:
+        return None
+
+
+def _compute_bg_task_defaults(session_map, identity, channel):
+    """Compute inheritable defaults from existing sessions for a new background task.
+
+    Only safe fields (notification_preference, runtime, model) are inherited.
+    The 'agent' field is intentionally excluded to prevent session agent leakage
+    (see issue #75).
+
+    Args:
+        session_map: dict of n8n_sid -> session_data
+        identity: user identity string
+        channel: auth channel string
+
+    Returns:
+        dict with only safe inherited fields (never contains 'agent')
+    """
+    SAFE_FIELDS = ("notification_preference", "runtime", "model")
+    matching_same = []
+    matching_other = []
+
+    for n8n_sid, data in session_map.items():
+        if isinstance(data, str):
+            data = {"session_id": data}
+        sid_identity = data.get("identity")
+        sid_channel = data.get("channel")
+        if sid_identity and sid_identity == identity:
+            if sid_channel == channel:
+                matching_same.append(data)
+            else:
+                matching_other.append(data)
+
+    defaults = {}
+    for data in matching_same + matching_other:
+        if not defaults:
+            for key in SAFE_FIELDS:
+                if key in data:
+                    defaults[key] = data[key]
+        # Always prefer notification_preference from any matching session
+        pref = data.get("notification_preference")
+        if pref and not defaults.get("notification_preference"):
+            defaults["notification_preference"] = pref
+
+    return defaults
+
+
+def create_api_app():  # noqa: C901 – factory kept in one place intentionally
+    """Factory that builds and returns the FastAPI application."""
+    import asyncio
+    import concurrent.futures
+    import mimetypes
+    from enum import Enum
+
+    from fastapi import (
+        FastAPI,
+        File,
+        Header,
+        HTTPException,
+        Query,
+        Request,
+        UploadFile,
+        WebSocket,
+        WebSocketDisconnect,
+    )
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import (
+        FileResponse,
+        JSONResponse,
+        Response,
+        StreamingResponse,
+    )
+    from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel, field_validator
+
+    global _api_auth_manager
+
+    # ---- configuration from environment ----
+    APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
+    IS_PRODUCTION = APP_ENV != "DEV"
+    SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
+    if not SHARED_KEY:
+        print(
+            "[SECURITY][WARN] API shared key is empty — authentication is effectively disabled. Set API_SHARED_KEY env var.",
+            file=sys.stderr,
+        )
+    PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
+    PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
+    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    SESSION_TOKEN_ABSOLUTE_TTL = int(
+        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")
+    )
+    CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    SCHEDULER_JOBS_FILE = os.environ.get(
+        "SCHEDULER_JOBS_FILE",
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), ".task-scheduler", "jobs.json"
+        ),
+    )
+    SCHEDULER_ENABLED = os.environ.get(
+        "SCHEDULER_ENABLED", "true"
+    ).strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+    # ---- shared instances ----
+    auth_mgr = AuthManager(
+        shared_key=SHARED_KEY,
+        pairing_code_length=PAIRING_CODE_LENGTH,
+        pairing_code_ttl=PAIRING_CODE_TTL,
+        session_token_ttl=SESSION_TOKEN_TTL,
+        session_token_absolute_ttl=SESSION_TOKEN_ABSOLUTE_TTL,
+        sessions_file=os.path.join(
+            os.path.dirname(SCHEDULER_JOBS_FILE), "sessions.json"
+        ),
+    )
+    _api_auth_manager = auth_mgr
+    rate_limiter = RateLimiter()
+    session_mgr = SessionManager(config_file=CONFIG_FILE, app_env=APP_ENV)
+    history_mgr = HistoryManager()
+    bg_task_mgr = BackgroundTaskManager()
+    session_mgr._bg_task_mgr = bg_task_mgr
+    # Expose for testing/introspection (read-only reference)
+    import sys as _sys
+
+    _sys.modules[__name__]._session_mgr = session_mgr
+    usage_tracker = RuntimeUsageTracker()
+
+    # Shared thread pool executor for background tasks
+    # Allow up to MAX_TASKS_PER_USER concurrent background tasks
+    bg_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=BackgroundTaskManager.MAX_TASKS_PER_USER,
+        thread_name_prefix="bg_task_",
+    )
+
+    # Notification manager for background task completion notifications
+    try:
+        from notification_manager import NotificationManager
+
+        notification_mgr = NotificationManager()
+    except ImportError:
+        notification_mgr = None
+        print(
+            "[API] NotificationManager not available — notifications disabled",
+            file=sys.stderr,
+        )
+
+    session_mgr._notification_mgr = notification_mgr
+
+    _start_time = time.time()
+
+    # ---- LLM Session Title Generation ----
+    QUOTE_CHARS = chr(34) + chr(39)  # ASCII double-quote + single-quote
+    import httpx as _httpx
+
+    _TITLE_GEN_OLLAMA_URL = os.environ.get(
+        "TITLE_GEN_OLLAMA_URL", "http://192.168.1.101:11434"
+    )
+    _TITLE_GEN_MODEL = os.environ.get("TITLE_GEN_MODEL", "granite3.3-tuned")
+    _TITLE_REFRESH_INTERVAL = int(os.environ.get("TITLE_REFRESH_INTERVAL", "10"))
+
+    def _smart_heuristic_title(messages: list) -> str:
+        """Generate a reasonable title without an LLM using heuristic extraction."""
+        if not messages:
+            return ""
+        # Find first substantive user message (skip slash commands)
+        user_msg = ""
+        for m in messages:
+            if m.get("role") == "user":
+                text = m.get("content", "").strip()
+                if text and not text.startswith("/"):
+                    user_msg = text
+                    break
+        if not user_msg:
+            return ""
+        # Clean up: remove markdown, code fences, URLs
+        cleaned = re.sub(r"```[\s\S]*?```", "", user_msg)
+        cleaned = re.sub(r"`[^`]+`", "", cleaned)
+        cleaned = re.sub(r"https?://\S+", "", cleaned)
+        cleaned = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"", cleaned)
+        cleaned = re.sub(r"[#*_~>]", "", cleaned)
+        cleaned = " ".join(cleaned.split())
+        if not cleaned:
+            return user_msg[:60]
+        # If it's a question, keep the question form
+        if "?" in cleaned:
+            q_end = cleaned.index("?") + 1
+            title = cleaned[:q_end]
+        else:
+            title = cleaned
+        # Truncate intelligently at word boundary
+        if len(title) > 60:
+            title = title[:57]
+            last_space = title.rfind(" ")
+            if last_space > 30:
+                title = title[:last_space]
+            title += "..."
+        return title.strip()
+
+    async def _generate_title_via_llm(messages: list) -> Optional[str]:
+        """Generate a concise session title using an LLM.
+
+        Tries Ollama first (free, local), then Anthropic API.
+        Returns None if all providers fail.
+        """
+        context_msgs = (
+            messages[:6] if len(messages) <= 6 else messages[:3] + messages[-3:]
+        )
+        conversation = "\n".join(
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: "
+            f"{m.get('content', '')[:300]}"
+            for m in context_msgs
+        )
+
+        system_prompt = (
+            "Generate a concise, descriptive title (max 60 chars) for this "
+            "conversation. The title should help a human quickly understand "
+            "the topic. Return ONLY the title text, no quotes, no explanation."
+        )
+
+        # Try Ollama (free, local)
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{_TITLE_GEN_OLLAMA_URL}/api/generate",
+                    json={
+                        "model": _TITLE_GEN_MODEL,
+                        "prompt": (
+                            f"{system_prompt}\n\n"
+                            f"Conversation:\n{conversation}\n\nTitle:"
+                        ),
+                        "stream": False,
+                        "options": {"temperature": 0.3, "num_predict": 30},
+                    },
+                )
+                if resp.status_code == 200:
+                    title = resp.json().get("response", "").strip().strip(QUOTE_CHARS)
+                    if title and 3 <= len(title) <= 120:
+                        return title
+        except Exception:
+            pass
+
+        # Try Anthropic API
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if anthropic_key:
+            try:
+                import anthropic as _anthropic
+
+                client = _anthropic.AsyncAnthropic(api_key=anthropic_key)
+                resp = await client.messages.create(
+                    model="claude-haiku-4.5",
+                    max_tokens=30,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": f"Conversation:\n{conversation}"}
+                    ],
+                )
+                title = resp.content[0].text.strip().strip(QUOTE_CHARS)
+                if title and 3 <= len(title) <= 120:
+                    return title
+            except Exception:
+                pass
+
+        return None
+
+    async def _maybe_auto_generate_title(channel: str, identity: str, session_id: str):
+        """Check if a session needs title generation and do it if so."""
+        try:
+            info = history_mgr.get_session_for_title_check(
+                channel, identity, session_id
+            )
+            if not info:
+                return
+
+            title_source = info["title_source"]
+            msg_count = info["message_count"]
+            msg_at_gen = info["message_count_at_title_gen"]
+
+            if title_source == "user":
+                return
+
+            needs_generation = msg_count >= 2 and title_source == "auto"
+
+            if (
+                not needs_generation
+                and title_source == "llm"
+                and msg_count - msg_at_gen >= _TITLE_REFRESH_INTERVAL
+            ):
+                needs_generation = True
+
+            if not needs_generation:
+                return
+
+            # Try LLM first, fall back to smart heuristic
+            title = await _generate_title_via_llm(info["messages"])
+            source = "llm"
+            if not title:
+                title = _smart_heuristic_title(info["messages"])
+                source = "heuristic"
+
+            if title and title != info.get("title"):
+                history_mgr.update_title_llm(
+                    channel, identity, session_id, title, source=source
+                )
+                logging.info(
+                    f"[TitleGen] {source} title for {session_id[:12]}: {title}"
+                )
+        except Exception as exc:
+            logging.warning(f"[TitleGen] Failed for {session_id[:12]}: {exc}")
+
+    # ---- Pydantic models ----
+    class ChannelEnum(str, Enum):
+        telegram = "telegram"
+        webex = "webex"
+        webui = "webui"
+
+    class PairingRequest(BaseModel):
+        identity: str
+        channel: ChannelEnum
+
+    class PairingVerification(BaseModel):
+        code: str
+        identity: str
+
+    class SessionCreate(BaseModel):
+        session_id: Optional[str] = (
+            None  # Optional: if provided, use this session_id instead of generating
+        )
+        agent: Optional[str] = None
+        model: Optional[str] = None
+        runtime: Optional[str] = None
+
+    class ExecuteRequest(BaseModel):
+        query: str
+        timeout: Optional[int] = None
+        model: Optional[str] = None
+        runtime: Optional[str] = None
+        agent: Optional[str] = None
+
+        @field_validator("query")
+        @classmethod
+        def validate_query_length(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Query must be 10,000 characters or less")
+            return v
+
+    class QueryRequest(BaseModel):
+        """One-shot query without session management."""
+
+        prompt: str
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        agent: Optional[str] = None
+        timeout: Optional[int] = None
+
+        @field_validator("prompt")
+        @classmethod
+        def validate_prompt_length(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Prompt must be 10,000 characters or less")
+            return v
+
+    # ---- authentication dependency ----
+    async def authenticate(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ) -> dict:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401, detail="Missing or invalid authorization header"
+            )
+
+        token = authorization[7:]
+
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid shared key")
+            # Only trust X-User-Identity from loopback (where our connectors run)
+            client_ip = request.client.host if request.client else ""
+            is_local = client_ip in ("127.0.0.1", "::1", "localhost")
+            identity = (
+                x_user_identity if (is_local and x_user_identity) else "shared_key_user"
+            )
+            return {
+                "identity": identity,
+                "channel": x_auth_channel or "api",
+                "auth_type": "shared_key",
+            }
+
+        if token.startswith("session_"):
+            token_data = auth_mgr.validate_session_token(token)
+            if not token_data:
+                raise HTTPException(
+                    status_code=401, detail="Invalid or expired session token"
+                )
+            return {
+                "identity": token_data["identity"],
+                "channel": token_data["channel"],
+                "auth_type": "session_token",
+            }
+
+        raise HTTPException(status_code=401, detail="Unrecognized token type")
+
+    # ---- lifespan for background cleanup ----
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        async def _periodic_cleanup():
+            while True:
+                await asyncio.sleep(300)
+                auth_mgr.cleanup_expired()
+                rate_limiter.cleanup()
+                bg_task_mgr.cleanup_old()
+                # Periodic reconciliation: promote queued tasks if slots available
+                try:
+                    _all = bg_task_mgr.list_all_tasks()
+                    _queued_periodic = [t for t in _all if t["status"] == "queued"]
+                    _queued_periodic.sort(key=lambda t: t.get("created_at", ""))
+                    for _qt in _queued_periodic:
+                        _agent = _qt.get("agent", "orchestrator")
+                        _ch = _qt.get("channel", "api")
+                        _uid = _qt.get("user_identity", "")
+                        _acfg = session_mgr.AGENTS.get(_agent, {})
+                        _mc = _acfg.get(
+                            "max_concurrent",
+                            BackgroundTaskManager.MAX_TASKS_PER_USER,
+                        )
+                        _rn = bg_task_mgr.count_running(_ch, _uid, _agent)
+                        if _rn >= _mc:
+                            continue
+                        _nsid = str(uuid4())
+                        bg_task_mgr.promote_queued_task(_qt["task_id"], _nsid)
+                        print(
+                            f"[Periodic] Promoting queued task {_qt['task_id']}",
+                            flush=True,
+                        )
+                        bg_executor.submit(
+                            _run_background_task,
+                            _qt["task_id"],
+                            _nsid,
+                            _qt["prompt"],
+                            _qt["agent"],
+                            _qt["runtime"],
+                            _qt["model"],
+                            _qt["channel"],
+                            _qt["user_identity"],
+                            _qt.get("timeout") or 900,
+                            _qt.get("notify", True),
+                            _qt.get("permission_mode", "restricted"),
+                            _qt.get("fallback_runtime"),
+                            _qt.get("fallback_model"),
+                        )
+                except Exception as _rec_exc:
+                    print(
+                        f"[Periodic] Queue reconciliation error: {_rec_exc}",
+                        flush=True,
+                    )
+
+        async def _agents_file_watcher():
+            """Poll agents.json mtime every 10s and hot-reload on change."""
+            while True:
+                await asyncio.sleep(10)
+                try:
+                    cfg_path = getattr(session_mgr, "_agents_config_path", None)
+                    if not cfg_path or not cfg_path.exists():
+                        continue
+                    current_mtime = cfg_path.stat().st_mtime
+                    last_mtime = getattr(session_mgr, "_agents_json_mtime", 0.0)
+                    if current_mtime != last_mtime:
+                        ok, msg = session_mgr.reload_agents_from_disk()
+                        if ok:
+                            print(
+                                f"[Hot-Reload] agents.json changed on disk — {msg}",
+                                file=sys.stderr,
+                            )
+                        else:
+                            # Update mtime even on failure to avoid log-spam on every poll cycle
+                            session_mgr._agents_json_mtime = current_mtime
+                            print(
+                                f"[Hot-Reload] agents.json changed but reload failed: {msg}",
+                                file=sys.stderr,
+                            )
+                except Exception as exc:
+                    print(
+                        f"[Hot-Reload] Error watching agents.json: {exc}",
+                        file=sys.stderr,
+                    )
+
+        # Reconcile orphaned tasks from previous process lifetime
+        _reconcile_result = bg_task_mgr.reconcile_stale_tasks()
+        if _reconcile_result["stale_running"] or _reconcile_result["queued_ready"]:
+            print(
+                f"[Startup] Task reconciliation: "
+                f"{_reconcile_result['stale_running']} stale running → failed, "
+                f"{_reconcile_result['queued_ready']} queued tasks ready for promotion",
+                flush=True,
+            )
+            # Promote queued tasks that now have available slots
+            _all_tasks = bg_task_mgr.list_all_tasks()
+            _queued = [t for t in _all_tasks if t["status"] == "queued"]
+            _queued.sort(key=lambda t: t.get("created_at", ""))
+            for _qt in _queued:
+                _agent = _qt.get("agent", "orchestrator")
+                _channel = _qt.get("channel", "api")
+                _identity = _qt.get("user_identity", "")
+                _agent_config = session_mgr.AGENTS.get(_agent, {})
+                _max_conc = _agent_config.get(
+                    "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+                )
+                _running_now = bg_task_mgr.count_running(_channel, _identity, _agent)
+                if _running_now >= _max_conc:
+                    continue
+                _new_sid = str(uuid4())
+                bg_task_mgr.promote_queued_task(_qt["task_id"], _new_sid)
+                print(
+                    f"[Startup] Promoting queued task {_qt['task_id']} → running",
+                    flush=True,
+                )
+                bg_executor.submit(
+                    _run_background_task,
+                    _qt["task_id"],
+                    _new_sid,
+                    _qt["prompt"],
+                    _qt["agent"],
+                    _qt["runtime"],
+                    _qt["model"],
+                    _qt["channel"],
+                    _qt["user_identity"],
+                    _qt.get("timeout") or 900,
+                    _qt.get("fallback_runtime"),
+                    _qt.get("fallback_model"),
+                    _qt.get("notify", True),
+                    _qt.get("permission_mode", "restricted"),
+                )
+
+        cleanup_task = asyncio.ensure_future(_periodic_cleanup())
+        watcher_task = asyncio.ensure_future(_agents_file_watcher())
+        yield
+        cleanup_task.cancel()
+        watcher_task.cancel()
+
+    # ---- FastAPI app ----
+    app = FastAPI(
+        title="Wee-Orchestrator API",
+        version="1.0.0",
+        docs_url="/api/v1/docs" if not IS_PRODUCTION else None,
+        redoc_url="/api/v1/redoc" if not IS_PRODUCTION else None,
+        lifespan=_lifespan,
+    )
+
+    # Expose managers on app.state for testing
+    app.state.bg_task_mgr = bg_task_mgr
+
+    # ---- CORS middleware ----
+    cors_origins = [
+        o.strip()
+        for o in os.environ.get("API_CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-User-Identity",
+                "X-Auth-Channel",
+            ],
+        )
+
+    @app.middleware("http")
+    async def _webui_no_cache_middleware(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path or ""
+        if path == "/ui" or path.startswith("/ui/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+    # ---- generic exception handler ----
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(request: Request, exc: Exception):
+        if IS_PRODUCTION:
+            return JSONResponse(
+                status_code=500, content={"detail": "Internal server error"}
+            )
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    # ---- endpoints ----
+
+    # ---- endpoints ----
+
+    @app.get("/api/v1/agents")
+    async def get_agents():
+        """Return list of configured agents for WebUI."""
+        try:
+            agents = []
+            for name, info in session_mgr.AGENTS.items():
+                agents.append(
+                    {
+                        "name": name,
+                        "description": info.get("description", ""),
+                        "path": info.get("path", ""),
+                        "primary_runtime": info.get("primary_runtime"),
+                        "primary_model": info.get("primary_model"),
+                    }
+                )
+            return {"agents": agents}
+        except Exception as e:
+            return {"agents": [], "error": str(e)}
+
+    @app.get("/api/v1/health")
+    async def health():
+        return {
+            "status": "ok",
+            "uptime_seconds": time.time() - _start_time,
+            "version": "1.0.0",
+            "environment": APP_ENV,
+            "agents_loaded": len(session_mgr.AGENTS),
+            "scheduler_enabled": SCHEDULER_ENABLED,
+            "active_sessions": len(session_mgr.load_session_map()),
+        }
+
+    @app.get("/api/v1/service-status")
+    async def get_service_status():
+        """Query systemctl status for connector services."""
+        import asyncio
+        import socket as _socket
+
+        env_suffix = "-dev" if APP_ENV == "DEV" else ""
+        services = {
+            "telegram": f"telegram-bot-listener{env_suffix}.service",
+            "webex": f"webex-connector{env_suffix}.service",
+        }
+
+        results = {}
+        for name, svc in services.items():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "systemctl",
+                    "is-active",
+                    svc,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+                status = stdout.decode().strip()
+                results[name] = {
+                    "service": svc,
+                    "status": status,
+                    "active": status == "active",
+                }
+            except Exception as e:
+                results[name] = {
+                    "service": svc,
+                    "status": "unknown",
+                    "active": False,
+                    "error": str(e),
+                }
+
+        return {
+            "services": results,
+            "node": _socket.gethostname(),
+            "checked_at": time.time(),
+        }
+
+    @app.get("/api/v1/config")
+    async def get_config():
+        """Public endpoint — returns feature flags for the WebUI."""
+        return {
+            "scheduler_enabled": SCHEDULER_ENABLED,
+            "background_tasks_enabled": True,
+            "app_env": APP_ENV,
+        }
+
+    @app.get("/api/v1/agents")
+    async def get_agents():
+        """Return available agents from agents.json."""
+        agents = []
+        for name, info in session_mgr.AGENTS.items():
+            agents.append(
+                {
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "path": info.get("path", ""),
+                }
+            )
+        return {"agents": agents}
+
+    @app.get("/api/v1/runtimes")
+    async def get_runtimes():
+        """Return list of available runtimes on this system.
+
+        Only runtimes that are actually installed/available are returned.
+        This prevents the WebUI from showing runtimes that cannot be used.
+        """
+        runtimes = get_available_runtimes()
+        return {"runtimes": runtimes}
+
+    @app.get("/api/v1/models")
+    async def get_models(runtime: str = "copilot"):
+        """Return available models for the specified runtime.
+
+        Uses CLI discovery for all runtimes where possible; falls back to the
+        built-in static model list when the runtime CLI is unavailable or does
+        not expose a model-listing command.
+        """
+        runtime = runtime.lower().strip()
+        known_runtimes = {
+            "copilot",
+            "copilot-sdk",
+            "opencode",
+            "claude",
+            "claude-sdk",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+            "wee",
+            "ollama",
+        }
+        if runtime not in known_runtimes:
+            return {
+                "runtime": runtime,
+                "models": [],
+                "error": f"Unknown runtime: {runtime}",
+            }
+
+        try:
+            loop = asyncio.get_event_loop()
+            raw = await loop.run_in_executor(
+                None, session_mgr.get_models_for_runtime, runtime
+            )
+            models = []
+            for group_name, model_ids in raw.items():
+                for model_id in model_ids:
+                    # Support both flat strings and (id, desc, aliases) tuples
+                    if isinstance(model_id, tuple):
+                        model_id = model_id[0]
+                    label = (
+                        session_mgr._get_model_description(model_id, runtime)
+                        or model_id
+                    )
+                    models.append({"id": model_id, "label": label, "group": group_name})
+            return {"runtime": runtime, "models": models}
+        except Exception as e:
+            return {"runtime": runtime, "models": [], "error": str(e)}
+
+    @app.get("/api/v1/wee/models")
+    async def get_wee_models(force: bool = False):
+        """Return discovered wee models with enriched metadata.
+
+        Queries Ollama and OpenAI-compatible hosts, returns models grouped
+        by provider with size, status, and modification time.
+
+        Query params:
+            force: bypass cache and re-discover (default false)
+        """
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            enriched = discovery.discover_all_enriched(force=force)
+            host_status = discovery.get_host_status()
+            return {
+                "runtime": "wee",
+                "providers": enriched,
+                "host_status": host_status,
+            }
+        except Exception as e:
+            return {"runtime": "wee", "providers": {}, "error": str(e)}
+
+    @app.post("/api/v1/wee/models/refresh")
+    async def refresh_wee_models():
+        """Force refresh the wee model cache."""
+        try:
+            from wee_model_discovery import get_discovery
+            discovery = get_discovery()
+            discovery.invalidate_cache()
+            result = discovery.discover_all(force=True)
+            total = sum(len(v) for v in result.values())
+            return {"status": "refreshed", "total_models": total, "providers": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    @app.post("/api/v1/auth/request-pairing")
+    async def request_pairing(body: PairingRequest, request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "pairing", max_requests=5, window=900):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        identity = body.identity.lstrip("@")
+        if body.channel.value == "telegram":
+            resolved = _resolve_telegram_identity(identity)
+            if resolved is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Telegram user @{identity} not found. "
+                        "Please send any message to the bot first, then try again."
+                    ),
+                )
+            identity = resolved
+
+        code = auth_mgr.generate_pairing_code(identity, body.channel.value)
+        delivered = _send_pairing_code(body.channel.value, identity, code)
+        if not delivered:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Pairing code generated but failed to deliver via {body.channel.value}. Please try again.",
+            )
+        return {
+            "message": f"Pairing code sent via {body.channel.value}",
+            "expires_in": PAIRING_CODE_TTL,
+            "identity_resolved": identity,
+        }
+
+    @app.post("/api/v1/auth/verify-pairing")
+    async def verify_pairing(body: PairingVerification):
+        token = auth_mgr.verify_pairing_code(body.code, body.identity)
+        if not token:
+            raise HTTPException(
+                status_code=400, detail="Invalid or expired pairing code"
+            )
+        token_data = auth_mgr.validate_session_token(token)
+        channel = token_data["channel"] if token_data else "unknown"
+        username = None
+        if channel == "telegram":
+            username = _get_telegram_username(body.identity)
+        return {
+            "token": token,
+            "expires_in": SESSION_TOKEN_TTL,
+            "absolute_expires_in": SESSION_TOKEN_ABSOLUTE_TTL,
+            "identity": body.identity,
+            "channel": channel,
+            "username": username,
+        }
+
+    @app.post("/api/v1/sessions/create")
+    async def create_session(
+        body: SessionCreate,
+        user: dict = Header(None),
+        request: Request = None,
+    ):
+        # Manual auth – FastAPI Depends() isn't used here so we call directly
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        # Use provided session_id or generate a new one
+        session_id = body.session_id if body.session_id else str(uuid4())[:8]
+        session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+        history_mgr.create_session(
+            user["channel"], user["identity"], session_id, agent=body.agent or ""
+        )
+
+        # Store channel in session so file instructions are channel-aware
+        session_mgr.update_session_field(session_id, "channel", user["channel"])
+
+        # WebUI sessions default to markdown so media instructions are active
+        session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        if body.agent:
+            session_mgr.update_session_field(session_id, "agent", body.agent)
+
+        # Inherit agent default permissions into session
+        effective_agent = body.agent or get_default_agent()
+        if effective_agent and effective_agent in session_mgr.AGENTS:
+            agent_cfg = session_mgr.AGENTS[effective_agent]
+            default_perms = agent_cfg.get(
+                "permissions",
+                {
+                    "mode": "restricted",
+                    "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                    "tools": {"allow": ["*"], "deny": []},
+                    "network": {"allow_urls": ["*"], "deny_urls": []},
+                    "mcp": {"allow": ["*"], "deny": []},
+                },
+            )
+            session_mgr.update_session_field(session_id, "permissions", default_perms)
+        if body.model:
+            session_mgr.update_session_field(session_id, "model", body.model)
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+
+        session_data = session_mgr.get_or_create_session_data(session_id)
+        return {
+            "session_id": session_id,
+            "agent": session_data.get("agent", "orchestrator"),
+            "model": session_data.get("model"),
+            "runtime": session_data.get("runtime"),
+        }
+
+    @app.post("/api/v1/sessions/{session_id}/execute")
+    async def execute_session(session_id: str, body: ExecuteRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "execute", max_requests=60, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        existing = session_mgr.load_session_data(session_id)
+        if not existing:
+            print(
+                f"[Session Recovery] Session {session_id} not in session map, "
+                f"attempting recovery (user={user['identity']}, channel={user['channel']})",
+                file=sys.stderr,
+            )
+            history_sessions = history_mgr.get_sessions(
+                user["channel"], user["identity"]
+            )
+            session_ids_in_history = {s["session_id"] for s in history_sessions}
+            if session_id not in session_ids_in_history:
+                print(
+                    f"[Session Recovery] Session {session_id} not in history — 404",
+                    file=sys.stderr,
+                )
+                raise HTTPException(status_code=404, detail="Session not found")
+            print(
+                f"[Session Recovery] Restored session {session_id} from history",
+                file=sys.stderr,
+            )
+            existing = session_mgr.get_or_create_session_data(
+                session_id, identity=user["identity"]
+            )
+            session_mgr.update_session_field(session_id, "channel", user["channel"])
+            session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        # Touch session to mark activity
+        session_mgr.touch_session(session_id)
+
+        # Persist identity so mute preferences can be discovered later
+        session_mgr.update_session_field(session_id, "identity", user["identity"])
+
+        # Apply per-query overrides for model, runtime, and agent if provided
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.model:
+            # Resolve model name/alias to actual model ID for current runtime
+            current_rt = body.runtime or existing.get("runtime", "copilot")
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            if model_id:
+                session_mgr.update_session_field(session_id, "model", model_id)
+            else:
+                # Fallback: use the name as-is if lookup fails
+                session_mgr.update_session_field(session_id, "model", body.model)
+        # NOTE: body.agent is intentionally NOT persisted to the session here.
+        # Agent changes must go through /agent set (slash command) or session
+        # creation — not silently via every API call.  See F015.
+
+        session_mgr._bg_identity = user["identity"]
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(
+                pool, session_mgr.execute, body.query, session_id
+            )
+
+        history_mgr.append_message(
+            user["channel"], user["identity"], session_id, "user", body.query
+        )
+        history_mgr.append_message(
+            user["channel"], user["identity"], session_id, "assistant", result
+        )
+
+        # Fire-and-forget LLM title generation
+        asyncio.create_task(
+            _maybe_auto_generate_title(user["channel"], user["identity"], session_id)
+        )
+
+        session_data = session_mgr.get_or_create_session_data(
+            session_id, identity=user["identity"]
+        )
+        # Sync agent to history so session list always shows current agent
+        current_agent = session_data.get("agent") or ""
+        if current_agent:
+            history_mgr.update_session_agent(
+                user["channel"], user["identity"], session_id, current_agent
+            )
+        runtime = session_data.get("runtime", "copilot")
+        return {
+            "session_id": session_id,
+            "response": result,
+            "runtime": runtime,
+            "model": session_data.get("model"),
+        }
+
+    @app.post("/api/v1/query")
+    async def stateless_query(body: QueryRequest, request: Request):
+        """One-shot query endpoint - no session management required.
+
+        Creates a temporary session, executes the prompt, returns the result.
+        Useful for testing, scripting, and simple integrations.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "query", max_requests=30, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        session_id = f"query_{str(uuid4())[:8]}"
+        session_mgr.get_or_create_session_data(session_id, identity=user["identity"])
+        session_mgr.update_session_field(session_id, "channel", user["channel"])
+        session_mgr.update_session_field(session_id, "render_type", "text")
+
+        effective_agent = body.agent or get_default_agent()
+        session_mgr.update_session_field(session_id, "agent", effective_agent)
+
+        if body.model:
+            current_rt = body.runtime or "copilot"
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            session_mgr.update_session_field(
+                session_id, "model", model_id or body.model
+            )
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+
+        if body.timeout:
+            session_mgr.update_session_field(session_id, "timeout", body.timeout)
+
+        session_mgr._bg_identity = user["identity"]
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(
+                pool, session_mgr.execute, body.prompt, session_id
+            )
+
+        session_data = session_mgr.get_or_create_session_data(
+            session_id, identity=user["identity"]
+        )
+        runtime = session_data.get("runtime", "copilot")
+        model = session_data.get("model")
+        # Clean up temporary query session to avoid session_map bloat
+        try:
+            with session_mgr._session_map_lock:
+                _smap = session_mgr.load_session_map()
+                _smap.pop(session_id, None)
+                session_mgr.save_session_map(_smap)
+        except Exception:
+            pass
+
+        # Strip ANSI escape codes from runtime output (#68)
+        _ansi_re = re.compile(
+            r"\x1b\[[0-9;]*[a-zA-Z]" r"|\x1b\][^\x07]*\x07" r"|\x1b\([A-Z0-9]"
+        )
+        if result and isinstance(result, str):
+            result = _ansi_re.sub("", result)
+
+        # Detect empty / null responses — runtime produced no output (#68)
+        if not result or (isinstance(result, str) and not result.strip()):
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "empty_response",
+                    "message": "Runtime returned no output",
+                    "runtime": runtime,
+                    "model": model,
+                },
+            )
+
+        # Detect runtime execution errors and return proper HTTP codes
+        _RUNTIME_ERROR_PATTERNS = [
+            ("ProviderModelNotFoundError", 422, "model_not_found"),
+            ("Model not found:", 422, "model_not_found"),
+            ("NotFoundError:", 422, "resource_not_found"),
+            ("Resource not found", 422, "resource_not_found"),
+            ("weekly rate limit", 429, "weekly_rate_limit_exceeded"),
+            ("rate limit", 429, "rate_limited"),
+            ("RateLimitError", 429, "rate_limited"),
+            ("PermissionDeniedError", 403, "permission_denied"),
+            ("AuthenticationError", 401, "auth_error"),
+            ("Error: executable not found", 503, "runtime_unavailable"),
+            ("ECONNREFUSED", 502, "connection_refused"),
+            ("Connection refused", 502, "connection_refused"),
+            ("connect ECONNREFUSED", 502, "connection_refused"),
+            ("ETIMEDOUT", 504, "connection_timeout"),
+            ("ECONNRESET", 502, "connection_reset"),
+            ("socket hang up", 502, "connection_reset"),
+        ]
+        if isinstance(result, str):
+            for pattern, status_code, error_code in _RUNTIME_ERROR_PATTERNS:
+                if pattern.lower() in result.lower():
+                    raise HTTPException(
+                        status_code=status_code,
+                        detail={
+                            "error": error_code,
+                            "message": result.strip()[:500],
+                            "runtime": runtime,
+                            "model": model,
+                        },
+                    )
+
+        return {
+            "session_id": session_id,
+            "response": result,
+            "runtime": runtime,
+            "model": model,
+        }
+
+    @app.post("/api/v1/sessions/{session_id}/stream")
+    async def stream_session(session_id: str, body: ExecuteRequest, request: Request):
+        """SSE streaming endpoint — WebUI only.
+
+        Returns a ``text/event-stream`` response.  Events:
+
+        ``{"type":"start"}``            — emitted immediately so the browser can
+                                          create the streaming bubble.
+        ``{"type":"chunk","text":"…"}`` — one or more lines of raw stdout as they
+                                          arrive from the AI CLI subprocess.
+        ``{"type":"done","response":"…","runtime":"…","model":"…"}``
+                                        — final, metadata-stripped response.
+                                          The browser replaces the streaming
+                                          bubble with this fully-rendered text.
+        ``{"type":"error","message":"…"}`` — on failure.
+
+        Slash-commands (``/…``) and bash commands (``!…``) produce no subprocess
+        output; the ``start`` event is followed immediately by ``done``.
+        """
+        import json as _json
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(client_ip, "execute", max_requests=60, window=60):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        existing = session_mgr.load_session_data(session_id)
+        if not existing:
+            # Session map entry was lost — likely due to cleanup daemon
+            # removing the backend session while the UI was idle.
+            print(
+                f"[Session Recovery] Stream: session {session_id} not in map, "
+                f"attempting recovery (user={user['identity']}, "
+                f"channel={user['channel']})",
+                file=sys.stderr,
+            )
+            history_sessions = history_mgr.get_sessions(
+                user["channel"], user["identity"]
+            )
+            session_ids_in_history = {s["session_id"] for s in history_sessions}
+            if session_id not in session_ids_in_history:
+                print(
+                    f"[Session Recovery] Stream: session {session_id} not in "
+                    f"history — returning 404",
+                    file=sys.stderr,
+                )
+                raise HTTPException(status_code=404, detail="Session not found")
+            print(
+                f"[Session Recovery] Stream: restored session {session_id} "
+                f"from chat history — backend will be recreated",
+                file=sys.stderr,
+            )
+            existing = session_mgr.get_or_create_session_data(
+                session_id, identity=user["identity"]
+            )
+            session_mgr.update_session_field(session_id, "channel", user["channel"])
+            session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        # Touch session to mark activity and prevent cleanup
+        session_mgr.touch_session(session_id)
+
+        # Persist identity so mute preferences can be discovered later
+        session_mgr.update_session_field(session_id, "identity", user["identity"])
+
+        # Apply per-query overrides for model, runtime, and agent if provided
+        if body.runtime:
+            session_mgr.update_session_field(session_id, "runtime", body.runtime)
+        if body.model:
+            # Resolve model name/alias to actual model ID for current runtime
+            current_rt = body.runtime or existing.get("runtime", "copilot")
+            model_id = session_mgr.get_model_from_name(body.model, current_rt)
+            if model_id:
+                session_mgr.update_session_field(session_id, "model", model_id)
+            else:
+                # Fallback: use the name as-is if lookup fails
+                session_mgr.update_session_field(session_id, "model", body.model)
+        # NOTE: body.agent is intentionally NOT persisted to the session here.
+        # Agent changes must go through /agent set (slash command) or session
+        # creation — not silently via every API call.  See F015.
+
+        session_mgr._bg_identity = user["identity"]
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        # Slash / bash commands don't spawn a subprocess, so no chunks will
+        # ever arrive on the queue.  Detect them early so we can skip the
+        # queue-draining loop and just await the future directly.
+        is_command = body.query.lstrip().startswith(("/", "!"))
+
+        async def generate():
+            # Register the queue so _execute_subprocess_with_tracking can push chunks
+            if not is_command:
+                session_mgr._register_stream(session_id, queue, loop)
+
+            # Tell the browser to create its streaming bubble right away
+            yield f"data: {_json.dumps({'type': 'start'})}\n\n"
+
+            # Track whether we successfully delivered the done event to the
+            # client.  If we didn't (client disconnected), keep the buffer
+            # alive so a reconnecting client can replay it.
+            done_delivered = False
+
+            # IMPORTANT: Do NOT use `with ThreadPoolExecutor(...) as pool:` here.
+            # Its __exit__ calls shutdown(wait=True) which blocks the asyncio
+            # event loop when the client disconnects (e.g. /cancel aborts the
+            # SSE stream).  That freeze prevents ALL requests (including the
+            # cancel endpoint) from being processed until execute() finishes.
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = loop.run_in_executor(
+                pool, session_mgr.execute, body.query, session_id
+            )
+
+            try:
+                if is_command:
+                    # No subprocess → just wait for the result, no chunks to stream
+                    try:
+                        result = await future
+                    except Exception as exc:
+                        result = f"Error: {exc}"
+                else:
+                    # Drain chunks from the queue until the subprocess sends the
+                    # 'done' sentinel, then await the (already-complete) future
+                    # for the final stripped response.
+                    try:
+                        while True:
+                            try:
+                                kind, data = await asyncio.wait_for(
+                                    queue.get(), timeout=1.0
+                                )
+                            except asyncio.TimeoutError:
+                                # Send a keepalive comment every second so the
+                                # connection is not torn down by proxies/browsers
+                                yield ": keepalive\n\n"
+                                # If execute() finished early (e.g. an error before
+                                # the subprocess started) break out gracefully
+                                if future.done():
+                                    break
+                                continue
+
+                            if kind == "chunk":
+                                # data is now a dict with text, ends_sentence, ends_paragraph
+                                if isinstance(data, dict):
+                                    yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                                else:
+                                    # Fallback for non-Claude runtimes
+                                    yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                            elif kind == "tool_call":
+                                # F026: skip tool_call SSE events in silent mode
+                                _sd = session_mgr.load_session_data(session_id)
+                                if not (_sd and _sd.get("silent_mode")):
+                                    yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                            elif kind == "done":
+                                break  # subprocess finished; final result in future
+                    except Exception as exc:
+                        yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                        return
+
+                    try:
+                        result = await future
+                    except Exception as exc:
+                        result = f"Error: {exc}"
+
+                history_mgr.append_message(
+                    user["channel"], user["identity"], session_id, "user", body.query
+                )
+                history_mgr.append_message(
+                    user["channel"], user["identity"], session_id, "assistant", result
+                )
+
+                # Fire-and-forget LLM title generation
+                asyncio.create_task(
+                    _maybe_auto_generate_title(
+                        user["channel"], user["identity"], session_id
+                    )
+                )
+
+                session_data = session_mgr.get_or_create_session_data(session_id)
+                # Sync agent to history so session list always shows current agent
+                current_agent = session_data.get("agent") or ""
+                if current_agent:
+                    history_mgr.update_session_agent(
+                        user["channel"], user["identity"], session_id, current_agent
+                    )
+                runtime = session_data.get("runtime", "copilot")
+                done_event = {
+                    "type": "done",
+                    "response": result,
+                    "runtime": runtime,
+                    "model": session_data.get("model"),
+                    "agent": current_agent,
+                }
+                _wm = session_data.get("wee_last_meta")
+                if _wm:
+                    done_event["wee_meta"] = _wm
+                done_payload = _json.dumps(done_event)
+                yield f"data: {done_payload}\n\n"
+                done_delivered = True
+            finally:
+                if not is_command:
+                    session_mgr._unregister_stream(session_id, queue=queue)
+                    # Only clean up the buffer if we successfully delivered
+                    # the done event to the client.  If the client disconnected
+                    # mid-stream, keep the buffer so they can reconnect and
+                    # replay the missed output.
+                    if done_delivered:
+                        session_mgr._cleanup_stream_buffer(session_id)
+                pool.shutdown(wait=False)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.get("/api/v1/sessions/{session_id}/stream/reconnect")
+    async def reconnect_stream(session_id: str, request: Request):
+        """Reconnect to an active or recently-finished stream for *session_id*.
+
+        Replays all buffered chunks, then continues streaming live output
+        until the query completes.  Returns 200 JSON ``{"active": false}``
+        when there is nothing to reconnect to.
+
+        This enables the WebUI to switch between session tabs without losing
+        stream output — when the user switches back, the frontend calls this
+        endpoint to catch up on missed chunks and resume live streaming.
+        """
+        import json as _json
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        # Opportunistically clean up stale buffers
+        session_mgr._cleanup_stale_stream_buffers()
+
+        buf = session_mgr._stream_buffers.get(session_id)
+        query_info = session_mgr.get_running_query(session_id)
+
+        # Nothing to reconnect to
+        if not buf and not query_info:
+            return {"active": False, "message": "No active stream for this session"}
+
+        # If there's a query running but no buffer (e.g. non-streaming command),
+        # just report it as active so the UI can show a spinner
+        if not buf:
+            return {
+                "active": True,
+                "streaming": False,
+                "message": "Query running (non-streaming)",
+            }
+
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def generate():
+            # Register as consumer FIRST so we don't miss chunks
+            replay_index = buf.add_consumer(queue, loop)
+            # Also register in _stream_queues so new connections are tracked
+            session_mgr._stream_queues[session_id] = (queue, loop)
+
+            try:
+                yield f"data: {_json.dumps({'type': 'reconnect', 'buffered_chunks': replay_index})}\n\n"
+
+                # Replay buffered chunks up to the registration point
+                replay_chunks = buf.get_replay_chunks(replay_index)
+                for kind, data in replay_chunks:
+                    if kind == "chunk":
+                        if isinstance(data, dict):
+                            yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                        else:
+                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                    elif kind == "tool_call":
+                        # F026: skip tool_call SSE events in silent mode
+                        _sd = session_mgr.load_session_data(session_id)
+                        if not (_sd and _sd.get("silent_mode")):
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                    elif kind == "done":
+                        # Query already finished — send done event with stored result
+                        session_data = session_mgr.get_or_create_session_data(
+                            session_id
+                        )
+                        runtime = session_data.get("runtime", "copilot")
+                        done_payload = _json.dumps(
+                            {
+                                "type": "done",
+                                "response": (
+                                    data if isinstance(data, str) else str(data)
+                                ),
+                                "runtime": runtime,
+                                "model": session_data.get("model"),
+                                **(
+                                    {"wee_meta": session_data.get("wee_last_meta")}
+                                    if session_data.get("wee_last_meta")
+                                    else {}
+                                ),
+                            }
+                        )
+                        yield f"data: {done_payload}\n\n"
+                        return
+
+                # If buffer is already finished after replay, send done
+                if buf.finished:
+                    session_data = session_mgr.get_or_create_session_data(session_id)
+                    runtime = session_data.get("runtime", "copilot")
+                    result = buf.done_result if isinstance(buf.done_result, str) else ""
+                    done_payload = _json.dumps(
+                        {
+                            "type": "done",
+                            "response": result,
+                            "runtime": runtime,
+                            "model": session_data.get("model"),
+                            **(
+                                {"wee_meta": session_data.get("wee_last_meta")}
+                                if session_data.get("wee_last_meta")
+                                else {}
+                            ),
+                        }
+                    )
+                    yield f"data: {done_payload}\n\n"
+                    return
+
+                # Drain live chunks from the queue
+                while True:
+                    try:
+                        kind, data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        if buf.finished:
+                            break
+                        continue
+
+                    if kind == "chunk":
+                        if isinstance(data, dict):
+                            yield f"data: {_json.dumps({'type': 'chunk', **data})}\n\n"
+                        else:
+                            yield f"data: {_json.dumps({'type': 'chunk', 'text': data})}\n\n"
+                    elif kind == "tool_call":
+                        # F026: skip tool_call SSE events in silent mode
+                        _sd = session_mgr.load_session_data(session_id)
+                        if not (_sd and _sd.get("silent_mode")):
+                            yield f"data: {_json.dumps({'type': 'tool_call', **_sanitize_tool_call_for_display(data)})}\n\n"
+                    elif kind == "done":
+                        break
+
+                # Send final done event
+                session_data = session_mgr.get_or_create_session_data(session_id)
+                runtime = session_data.get("runtime", "copilot")
+                result = buf.done_result if isinstance(buf.done_result, str) else ""
+                done_payload = _json.dumps(
+                    {
+                        "type": "done",
+                        "response": result,
+                        "runtime": runtime,
+                        "model": session_data.get("model"),
+                        **(
+                            {"wee_meta": session_data.get("wee_last_meta")}
+                            if session_data.get("wee_last_meta")
+                            else {}
+                        ),
+                    }
+                )
+                yield f"data: {done_payload}\n\n"
+            finally:
+                buf.remove_consumer(queue)
+                session_mgr._stream_queues.pop(session_id, None)
+                # Clean up buffer only if done AND no other consumers remain
+                if buf.finished and not buf.has_consumers():
+                    session_mgr._cleanup_stream_buffer(session_id)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.get("/api/v1/sessions/{session_id}/status")
+    async def session_status(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            # Auto-recreate session_map entry for sessions that exist in history
+            # but whose session_map entry was lost (restart, map mismatch, etc.)
+            history_sessions = history_mgr.get_sessions(
+                user["channel"], user["identity"]
+            )
+            session_ids_in_history = {s["session_id"] for s in history_sessions}
+            if session_id not in session_ids_in_history:
+                raise HTTPException(status_code=404, detail="Session not found")
+            data = session_mgr.get_or_create_session_data(
+                session_id, identity=user["identity"]
+            )
+            session_mgr.update_session_field(session_id, "channel", user["channel"])
+            session_mgr.update_session_field(session_id, "render_type", "markdown")
+
+        result = {
+            "session_id": session_id,
+            "agent": data.get("agent"),
+            "runtime": data.get("runtime"),
+            "model": data.get("model"),
+            "yolo_mode": data.get("yolo_mode", "restricted"),
+            "permissions": data.get("permissions"),
+            "silent_mode": data.get("silent_mode", False),  # F027
+        }
+        if data.get("wee_context_usage"):
+            result["wee_context_usage"] = data.get("wee_context_usage")
+        if data.get("wee_last_meta"):
+            result["wee_last_meta"] = data.get("wee_last_meta")
+
+        # Include running query info so the frontend can reconnect streams
+        query_info = session_mgr.get_running_query(session_id)
+        has_buffer = session_id in session_mgr._stream_buffers
+        if query_info:
+            result["running_query"] = True
+            result["has_stream_buffer"] = has_buffer
+        else:
+            result["running_query"] = False
+            result["has_stream_buffer"] = has_buffer
+
+        return result
+
+    @app.get("/api/v1/sessions/{session_id}/live-status")
+    async def get_live_status(session_id: str, request: Request):
+        """Return the latest live status update for a running session (F004).
+
+        Mobile channel connectors poll this endpoint to replace static
+        "Still working on it..." messages with real LLM progress updates.
+        Requires only bearer token auth (no user identity needed).
+        """
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing auth")
+        token = auth_header[7:]
+        # Accept shared key (used by connectors) or session token
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid auth")
+        elif not auth_mgr.validate_token(token):
+            raise HTTPException(status_code=401, detail="Invalid auth")
+
+        status = session_mgr.get_live_status(session_id)
+        if status:
+            return {
+                "status": status["text"],
+                "updated_at": status["updated_at"],
+            }
+        return {"status": None, "updated_at": None}
+
+    @app.post("/api/v1/sessions/{session_id}/cancel")
+    async def cancel_session(session_id: str, request: Request):
+        """Cancel a running query for a session.
+
+        This is a dedicated endpoint that bypasses the execute pipeline so it
+        can be called even while a streaming response is in-flight.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        query_info = session_mgr.get_running_query(session_id)
+        if not query_info:
+            return {"cancelled": False, "message": "No running query for this session"}
+
+        pid = query_info["pid"]
+
+        if not session_mgr.is_process_running(pid):
+            session_mgr.clear_running_query(session_id)
+            return {"cancelled": False, "message": "Query has already completed"}
+
+        runtime = query_info.get("runtime", "unknown")
+        if session_mgr.kill_process(pid):
+            session_mgr.clear_running_query(session_id)
+            session_mgr._cleanup_stream_buffer(session_id)
+            return {
+                "cancelled": True,
+                "message": f"Cancelled running query (PID: {pid}, Runtime: {runtime})",
+            }
+        else:
+            return {
+                "cancelled": False,
+                "message": f"Failed to cancel query (PID: {pid})",
+            }
+
+    # --- Runtime usage endpoint ---
+
+    @app.get("/api/v1/runtime-usage")
+    async def get_runtime_usage(request: Request):
+        """Return Copilot premium request usage from GitHub billing."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, usage_tracker.get_usage)
+
+    # --- History endpoints ---
+
+    @app.get("/api/v1/history/sessions")
+    async def list_history_sessions(request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return {"sessions": history_mgr.get_sessions(user["channel"], user["identity"])}
+
+    @app.get("/api/v1/history/sessions/{session_id}/messages")
+    async def get_history_messages(
+        session_id: str,
+        request: Request,
+        limit: int = Query(100, ge=1, le=1000),
+        offset: Optional[int] = Query(None, ge=0),
+    ):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        messages = history_mgr.get_session_messages(
+            user["channel"], user["identity"], session_id
+        )
+        if messages is None:
+            raise HTTPException(status_code=404, detail="Session not found in history")
+        total = len(messages)
+        # Default offset: from the end (most recent messages)
+        if offset is None:
+            offset = max(total - limit, 0)
+        page = messages[offset : offset + limit]
+        return {
+            "session_id": session_id,
+            "messages": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    @app.delete("/api/v1/history/sessions/{session_id}")
+    async def delete_history_session(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not history_mgr.delete_session(
+            user["channel"], user["identity"], session_id
+        ):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"deleted": True, "session_id": session_id}
+
+    @app.patch("/api/v1/history/sessions/{session_id}")
+    async def rename_history_session(session_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        title = body.get("title", "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required")
+        if not history_mgr.rename_session(
+            user["channel"], user["identity"], session_id, title
+        ):
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"renamed": True, "session_id": session_id, "title": title[:120]}
+
+    @app.post("/api/v1/history/sessions/{session_id}/generate-title")
+    async def generate_session_title(session_id: str, request: Request):
+        """Force (re)generate an LLM title for a session."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        info = history_mgr.get_session_for_title_check(
+            user["channel"], user["identity"], session_id
+        )
+        if not info:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        if not info["messages"]:
+            raise HTTPException(status_code=400, detail="Session has no messages")
+
+        # Try LLM first, then heuristic
+        title = await _generate_title_via_llm(info["messages"])
+        source = "llm"
+        if not title:
+            title = _smart_heuristic_title(info["messages"])
+            source = "heuristic"
+
+        if title:
+            history_mgr.update_title_llm(
+                user["channel"], user["identity"], session_id, title, source=source
+            )
+            return {
+                "session_id": session_id,
+                "title": title,
+                "source": source,
+            }
+
+        raise HTTPException(status_code=500, detail="Could not generate title")
+
+    # --- File upload ---
+
+    @app.post("/api/v1/sessions/{session_id}/upload")
+    async def upload_file(
+        session_id: str, request: Request, file: UploadFile = File(...)
+    ):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        contents = await file.read()
+        if len(contents) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File exceeds 50MB limit")
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(file.filename).name)[:200]
+        upload_dir = Path(f"/tmp/webui_uploads/{session_id}")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest = upload_dir / safe_name
+        dest.write_bytes(contents)
+        mime, _ = mimetypes.guess_type(safe_name)
+        return {
+            "file_path": str(dest),
+            "filename": safe_name,
+            "size": len(contents),
+            "mime_type": mime or "application/octet-stream",
+        }
+
+    # --- Serve uploaded files (authenticated) ---
+
+    @app.get("/api/v1/uploads/{session_id}/{filename}")
+    async def serve_upload(session_id: str, filename: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(filename).name)
+        path = Path(f"/tmp/webui_uploads/{session_id}/{safe_name}")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(str(path))
+
+    # --- File Viewer ---
+
+    # Allowed base directories for the file viewer (security)
+    _FILE_VIEWER_ALLOWED_BASES = [
+        "/opt/",
+        "/tmp/",
+        "/home/",
+    ]
+    _FILE_VIEWER_MAX_SIZE = 5 * 1024 * 1024  # 5MB text limit
+    _FILE_VIEWER_BINARY_EXTS = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".ico",
+        ".bmp",
+        ".pdf",
+    }
+    _FILE_VIEWER_TEXT_EXTS = {
+        ".md",
+        ".txt",
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".conf",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".html",
+        ".htm",
+        ".css",
+        ".scss",
+        ".less",
+        ".xml",
+        ".sql",
+        ".graphql",
+        ".gql",
+        ".rs",
+        ".go",
+        ".java",
+        ".kt",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rb",
+        ".php",
+        ".pl",
+        ".lua",
+        ".r",
+        ".swift",
+        ".scala",
+        ".env",
+        ".env.example",
+        ".gitignore",
+        ".dockerignore",
+        ".csv",
+        ".log",
+        ".diff",
+        ".patch",
+        "",  # extensionless files (Makefile, Dockerfile, etc.)
+    }
+
+    @app.get("/api/v1/files/view")
+    async def view_file(path: str, request: Request):
+        """Read a file from the server for the file viewer panel."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        # Resolve and validate path
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved_str = str(resolved)
+        if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
+            raise HTTPException(
+                status_code=403, detail="Path not in allowed directories"
+            )
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+
+        ext = resolved.suffix.lower()
+        file_size = resolved.stat().st_size
+        mime, _ = mimetypes.guess_type(str(resolved))
+
+        # Binary files (images, PDFs) → serve as FileResponse
+        if ext in _FILE_VIEWER_BINARY_EXTS:
+            return FileResponse(
+                str(resolved),
+                media_type=mime or "application/octet-stream",
+                headers={"X-File-Name": resolved.name, "X-File-Size": str(file_size)},
+            )
+
+        # Text files → return JSON with content
+        if file_size > _FILE_VIEWER_MAX_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large ({file_size} bytes, max {_FILE_VIEWER_MAX_SIZE})",
+            )
+
+        try:
+            content = resolved.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Cannot read file: {e}")
+
+        # Determine language hint for syntax highlighting
+        lang_map = {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".jsx": "javascript",
+            ".json": "json",
+            ".yaml": "yaml",
+            ".yml": "yaml",
+            ".sh": "bash",
+            ".bash": "bash",
+            ".html": "html",
+            ".htm": "html",
+            ".css": "css",
+            ".sql": "sql",
+            ".md": "markdown",
+            ".xml": "xml",
+            ".go": "go",
+            ".rs": "rust",
+            ".java": "java",
+            ".rb": "ruby",
+            ".php": "php",
+            ".c": "c",
+            ".cpp": "cpp",
+            ".h": "c",
+            ".hpp": "cpp",
+        }
+        lang = lang_map.get(ext, "plaintext")
+        # Detect extensionless files
+        if ext == "":
+            name_lower = resolved.name.lower()
+            if "makefile" in name_lower:
+                lang = "makefile"
+            elif "dockerfile" in name_lower:
+                lang = "dockerfile"
+
+        return {
+            "path": str(resolved),
+            "name": resolved.name,
+            "size": file_size,
+            "mime": mime or "text/plain",
+            "language": lang,
+            "content": content,
+            "type": "text",
+        }
+
+    @app.get("/api/v1/files/view/raw")
+    async def view_file_raw(path: str, request: Request):
+        """Serve a file as raw binary (for images, PDFs)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved_str = str(resolved)
+        if not any(resolved_str.startswith(b) for b in _FILE_VIEWER_ALLOWED_BASES):
+            raise HTTPException(
+                status_code=403, detail="Path not in allowed directories"
+            )
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+
+        mime, _ = mimetypes.guess_type(str(resolved))
+        return FileResponse(
+            str(resolved), media_type=mime or "application/octet-stream"
+        )
+
+    # --- Image search ---
+
+    @app.get("/api/v1/search/images")
+    async def search_images(q: str, request: Request, max_results: int = 4):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not q.strip():
+            raise HTTPException(status_code=400, detail="Query required")
+        max_r = min(max(1, max_results), 8)
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            results = await loop.run_in_executor(
+                pool, _ddg_image_search, q.strip(), max_r
+            )
+        return {"query": q, "results": results}
+
+    # --- Audio Transcription ---
+
+    @app.post("/api/v1/sessions/{session_id}/transcribe")
+    async def transcribe_audio(
+        session_id: str, request: Request, file: UploadFile = File(...)
+    ):
+        """Upload an audio file and get text transcription back."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not session_mgr.load_session_data(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        contents = await file.read()
+        if len(contents) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Audio file exceeds 25MB limit")
+        if len(contents) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        # Save to temp file
+        safe_name = re.sub(r"[^\w.\-]", "_", Path(file.filename).name)[:200]
+        upload_dir = Path(f"/tmp/webui_uploads/{session_id}")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        dest = upload_dir / safe_name
+        dest.write_bytes(contents)
+
+        try:
+            import audio_transcriber
+
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                text, backend = await loop.run_in_executor(
+                    pool, audio_transcriber.transcribe, str(dest)
+                )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Transcription failed: {str(e)}"
+            )
+
+        if not text:
+            raise HTTPException(status_code=422, detail="Could not transcribe audio")
+
+        return {
+            "text": text,
+            "backend": backend,
+            "filename": safe_name,
+            "size": len(contents),
+        }
+
+    @app.get("/api/v1/transcription/status")
+    async def transcription_status(request: Request):
+        """Check transcription backend availability."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        import audio_transcriber
+
+        return audio_transcriber.get_status()
+
+    # --- Scratch Notes (Session-based) ---
+
+    @app.get("/api/v1/sessions/{session_id}/scratch")
+    async def get_scratch_notes(session_id: str, request: Request):
+        """Retrieve scratch notes for a session."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        session_map = session_mgr.load_session_map()
+        session_data = session_map.get(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        scratch = session_data.get("scratch", "")
+        return {"scratch": scratch, "session_id": session_id}
+
+    class ScratchNotesRequest(BaseModel):
+        scratch: str
+
+        @field_validator("scratch")
+        @classmethod
+        def validate_scratch(cls, v):
+            if len(v) > 1000:
+                raise ValueError("Scratch notes must be 1000 characters or less")
+            return v
+
+    @app.post("/api/v1/sessions/{session_id}/scratch")
+    async def save_scratch_notes(
+        session_id: str, request: Request, body: ScratchNotesRequest
+    ):
+        """Save scratch notes for a session."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        session_map = session_mgr.load_session_map()
+        session_data = session_map.get(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session_data["scratch"] = body.scratch
+        session_map[session_id] = session_data
+        session_mgr.save_session_map(session_map)
+
+        return {"success": True, "scratch": body.scratch, "session_id": session_id}
+
+    # --- Background Tasks ---
+
+    class BackgroundTaskRequest(BaseModel):
+        prompt: str
+        agent: Optional[str] = None
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        timeout: Optional[int] = None
+        notify: Optional[bool] = None
+        permission_mode: Optional[str] = (
+            None  # elevated, restricted (default), sandboxed
+        )
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
+        description: Optional[str] = (
+            None  # human-readable task name shown in Agents panel
+        )
+        origin_session_id: Optional[str] = None  # chat session that initiated this task
+        fallback_runtime: Optional[str] = None  # runtime to retry with if primary fails
+        fallback_model: Optional[str] = None  # model to use with fallback runtime
+
+        @field_validator("prompt")
+        @classmethod
+        def validate_prompt(cls, v):
+            if len(v) > 10000:
+                raise ValueError("Prompt must be 10,000 characters or less")
+            return v
+
+    def _emit_bg_notification(
+        task_id: str,
+        prompt: str,
+        status: str,
+        channel: str,
+        user_identity: str,
+        output_preview=None,
+        error=None,
+        notify: bool = True,
+        agent: Optional[str] = None,
+    ):
+        """Emit a background task completion notification via notification_mgr.
+
+        When ``is_critical`` is True the notification bypasses the global
+        suppression toggle (used for heartbeat alerts and system crashes).
+        """
+        if notification_mgr is None:
+            return
+        try:
+            # Re-check per-identity mute preference at emit time
+            # (user may have muted after the task was created).
+            if notify and not is_critical:
+                if notification_mgr.is_muted(user_identity):
+                    notify = False
+                elif agent and notification_mgr.is_agent_muted(user_identity, agent):
+                    notify = False
+
+            user_key = bg_task_mgr._user_key(channel, user_identity)
+            notification_mgr.create_notification(
+                task_id=task_id,
+                description=prompt[:200],
+                status=status,
+                channel=channel,
+                user_key=user_key,
+                output_preview=output_preview,
+                error=error,
+                skip_external=not notify,
+                agent=agent,
+            )
+            # Push in-thread event to originating session
+            task = bg_task_mgr.get_task(task_id)
+            origin_sid = task.get("origin_session_id") if task else None
+            if origin_sid:
+                bg_task_mgr.push_bg_event(
+                    origin_sid,
+                    {
+                        "task_id": task_id,
+                        "summary": prompt[:80],
+                        "status": status,
+                        "agent": (task.get("agent", "") if task else ""),
+                        "timestamp": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(),
+                        ),
+                    },
+                )
+        except Exception as exc:
+            print(
+                f"[API] Notification emit failed for {task_id}: {exc}", file=sys.stderr
+            )
+
+    def _run_command_task(
+        task_id: str,
+        command: str,
+        working_dir: str,
+        timeout: int,
+        job_id: str,
+        job_name: str,
+        notify: bool = False,
+    ):
+        """Blocking function that runs a command-mode scheduled task directly via
+        subprocess.  Called from a thread pool executor — no LLM involved.
+
+        Mirrors the logic of scheduler/executor.py _execute_command_mode() but
+        integrates with the background-task manager so the result appears in
+        the Tasks panel with stdout/stderr output.
+        """
+        import subprocess as _sp
+
+        logger.info(
+            f"[Command Mode] Run Now executing job {job_id}: cmd={command[:80]}..."
+        )
+
+        try:
+            result = _sp.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                shell=True,
+                cwd=working_dir,
+            )
+
+            if result.returncode == 0:
+                output = result.stdout.strip() or "(no output)"
+                bg_task_mgr.complete_task(task_id, output)
+                logger.info(
+                    f"[Command Mode] Run Now job {job_id} completed successfully"
+                )
+            else:
+                error_msg = (
+                    result.stderr
+                    or result.stdout
+                    or f"Command failed with exit code {result.returncode}"
+                )
+                bg_task_mgr.fail_task(task_id, error_msg)
+                logger.error(
+                    f"[Command Mode] Run Now job {job_id} failed: exit code {result.returncode}"
+                )
+        except _sp.TimeoutExpired:
+            bg_task_mgr.fail_task(task_id, f"Command timed out after {timeout}s")
+            logger.error(
+                f"[Command Mode] Run Now job {job_id} timed out after {timeout}s"
+            )
+        except Exception as e:
+            bg_task_mgr.fail_task(task_id, str(e))
+            logger.error(f"[Command Mode] Run Now job {job_id} exception: {e}")
+
+        # Save result to scheduler logs/results for consistency
+        try:
+            sched = _get_scheduler()
+            task_rec = bg_task_mgr.get_task(task_id)
+            success = task_rec and task_rec.get("status") == "completed"
+            sched._save_result(
+                job_id,
+                job_name,
+                success=success,
+                output=(task_rec or {}).get("final_response", ""),
+                error=(task_rec or {}).get("error", ""),
+            )
+            status_label = "succeeded" if success else "failed"
+            sched._log_job(job_id, f"Run Now (command mode) {status_label}")
+        except Exception as exc:
+            logger.warning(
+                f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
+            )
+
+    def _run_background_task(
+        task_id: str,
+        session_id: str,
+        prompt: str,
+        agent: str,
+        runtime: str,
+        model: str,
+        channel: str,
+        user_identity: str,
+        timeout: int = None,
+        notify: bool = True,
+        permission_mode: str = "restricted",
+        fallback_runtime: str = None,
+        fallback_model: str = None,
+    ):
+        """Blocking function that runs a background task in a subprocess.
+        Called from a thread pool executor.
+
+        Uses Popen for incremental output capture and real-time tool call
+        parsing.  Output lines are appended to the task as they arrive so
+        the WebUI can poll for live progress.
+
+        NOTE: The entire function body is wrapped in a single try/except to
+        guarantee that any unexpected exception (e.g. file-lock race on the
+        session-map JSON) always transitions the task to 'failed' instead of
+        leaving it stuck in 'running' forever.
+        """
+        import json as _json
+        import re as _re
+        import subprocess
+
+        _tool_call_counter = 0
+
+        def _parse_tool_call_from_line(line_text, rt):
+            """Detect tool call patterns from a single output line."""
+            nonlocal _tool_call_counter
+            stripped = line_text.strip()
+            if not stripped:
+                return None
+
+            tc = None
+            if rt == "copilot":
+                # Copilot shows tool calls as bullet points: "\u25cf <description>"
+                m_tool = _re.match(
+                    r"^[\u25cf\u2b24]\s+(.+?)(?:\s+\(\+\d+\))?$", stripped
+                )
+                if m_tool:
+                    _desc = m_tool.group(1).strip()
+                    if any(kw in _desc.lower() for kw in ["read", "view", "open"]):
+                        _tn = "read"
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in [
+                            "create",
+                            "write",
+                            "save",
+                            "edit",
+                            "update",
+                            "modify",
+                        ]
+                    ):
+                        _tn = "write"
+                    elif any(kw in _desc.lower() for kw in ["delete", "remove", "rm"]):
+                        _tn = "shell"
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in ["list", "ls", "find", "search", "glob"]
+                    ):
+                        _tn = "glob"
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in ["run", "exec", "install", "deploy", "build", "test"]
+                    ):
+                        _tn = "shell"
+                    elif any(
+                        kw in _desc.lower()
+                        for kw in ["fetch", "curl", "http", "api", "download"]
+                    ):
+                        _tn = "web_fetch"
+                    else:
+                        _tn = "tool"
+                    tc = {"name": _tn, "input": _desc}
+                else:
+                    # Shell command: "  $ <command>"
+                    m_cmd = _re.match(r"^\$\s+(.+)", stripped)
+                    if m_cmd:
+                        tc = {"name": "shell", "input": m_cmd.group(1).strip()}
+                    else:
+                        # Legacy fallback
+                        m = _re.match(
+                            r"^(?:Running|Calling|Using|Ran)\s+(\w[\w.]*)\s*(.*)",
+                            stripped,
+                        )
+                        if m:
+                            tc = {"name": m.group(1), "input": m.group(2).strip()}
+            elif rt == "opencode":
+                # OpenCode tool invocation lines: "| ToolName args..."
+                # Support the full set of known OpenCode tools
+                m = _re.match(r"^\|\s+(\w+)\b(.*)", stripped)
+                if m:
+                    _oc_tool = m.group(1)
+                    _oc_known = {
+                        "Glob",
+                        "Read",
+                        "Write",
+                        "Bash",
+                        "Edit",
+                        "bash",
+                        "grep",
+                        "find",
+                        "Fetch",
+                        "ListDir",
+                        "Search",
+                        "TodoRead",
+                        "TodoWrite",
+                        "WebFetch",
+                        "Shell",
+                        "Patch",
+                        "MultiEdit",
+                        "LS",
+                        "Cat",
+                        "Sed",
+                        "Awk",
+                        "Mv",
+                        "Cp",
+                        "Rm",
+                        "Mkdir",
+                    }
+                    if _oc_tool in _oc_known or _oc_tool[0].isupper():
+                        tc = {"name": _oc_tool, "input": m.group(2).strip()}
+                # Also detect "Running: <command>" or "Executing: <cmd>"
+                if not tc:
+                    m2 = _re.match(r"^(?:Running|Executing|>)\s+(.+)", stripped)
+                    if m2:
+                        tc = {"name": "shell", "input": m2.group(1).strip()}
+            elif rt == "codex":
+                # Codex exec shows tool calls in several formats:
+                # 1. "Calling function: name ..." or "Tool: name ..."
+                m = _re.match(
+                    r"^(?:Calling function|Tool|Executing|Running):\s*(\w[\w.]*)\s*(.*)",
+                    stripped,
+                    _re.IGNORECASE,
+                )
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # 2. Shell command execution: lines starting with "$ command" or "> command"
+                if not tc:
+                    m2 = _re.match(r"^[$>]\s+(.+)", stripped)
+                    if m2:
+                        tc = {"name": "shell", "input": m2.group(1).strip()}
+                # 3. "read_file(path=...)" or "write_file(path=...)" function-call syntax
+                if not tc:
+                    m3 = _re.match(r"^(\w+)\((.+)\)\s*$", stripped)
+                    if m3 and any(
+                        kw in m3.group(1).lower()
+                        for kw in [
+                            "read",
+                            "write",
+                            "shell",
+                            "bash",
+                            "exec",
+                            "search",
+                            "list",
+                            "create",
+                            "edit",
+                            "patch",
+                            "apply",
+                        ]
+                    ):
+                        tc = {"name": m3.group(1), "input": m3.group(2).strip()}
+            elif rt == "gemini":
+                # Gemini CLI tool call patterns (with --yolo, tools auto-execute):
+                # 1. "✦ Calling tool_name(args)" or "Calling tool_name(args)"
+                m = _re.match(
+                    r"^[✦*]?\s*(?:Calling|Using tool|Function call|Running)\s+(\w[\w.]*)\s*(.*)",
+                    stripped,
+                    _re.IGNORECASE,
+                )
+                if m:
+                    tc = {"name": m.group(1), "input": m.group(2).strip()}
+                # 2. "⚡ <tool_name>(<args>)" or "tool_name(<args>)"
+                if not tc:
+                    m2 = _re.match(r"^[⚡✦*]?\s*(\w+)\((.+)\)\s*$", stripped)
+                    if m2 and any(
+                        kw in m2.group(1).lower()
+                        for kw in [
+                            "read",
+                            "write",
+                            "shell",
+                            "bash",
+                            "exec",
+                            "search",
+                            "list",
+                            "create",
+                            "edit",
+                            "file",
+                            "run",
+                            "cat",
+                            "ls",
+                            "find",
+                            "grep",
+                            "save",
+                            "update",
+                            "delete",
+                            "fetch",
+                            "curl",
+                            "get",
+                            "put",
+                        ]
+                    ):
+                        tc = {"name": m2.group(1), "input": m2.group(2).strip()}
+                # 3. Shell-like execution: "$ command" or "> command"
+                if not tc:
+                    m3 = _re.match(r"^[$>]\s+(.+)", stripped)
+                    if m3:
+                        tc = {"name": "shell", "input": m3.group(1).strip()}
+                # 4. "Running command: <cmd>" pattern
+                if not tc:
+                    m4 = _re.match(
+                        r"^Running\s+command:\s*(.+)", stripped, _re.IGNORECASE
+                    )
+                    if m4:
+                        tc = {"name": "shell", "input": m4.group(1).strip()}
+
+            elif rt == "claude":
+                # Claude background tasks now use claude binary with stream-json.
+                # Try to parse JSON tool_use events first.
+                try:
+                    _obj = _json.loads(stripped)
+                    _evt_type = _obj.get("type")
+                    if _evt_type == "stream_event":
+                        _event = _obj.get("event") or {}
+                        _inner = _event.get("type", "")
+                        if _inner == "content_block_start":
+                            _cb = _event.get("content_block") or {}
+                            if _cb.get("type") == "tool_use":
+                                tc = {
+                                    "name": _cb.get("name", "tool"),
+                                    "input": _json.dumps(_cb.get("input", {})),
+                                }
+                        elif _inner == "content_block_stop":
+                            pass  # tool result will follow
+                except (ValueError, KeyError, TypeError):
+                    pass
+                # Plain-text fallback for non-JSON output
+                if not tc:
+                    m = _re.match(
+                        r"^(?:Tool|Calling|Using tool):\s*(\w[\w.]*)\s*(.*)",
+                        stripped,
+                        _re.IGNORECASE,
+                    )
+                    if m:
+                        tc = {"name": m.group(1), "input": m.group(2).strip()}
+
+            if tc:
+                _tool_call_counter += 1
+                return {
+                    "id": f"bg_{task_id[:8]}_{_tool_call_counter}",
+                    "name": tc["name"],
+                    "input": tc.get("input", ""),
+                    "status": "detected",
+                    "runtime": rt,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            return None
+
+        # Fallback eligibility patterns for bg tasks (Issue #219).
+        # All patterns use \b word boundaries so tokens embedded inside
+        # underscore-separated identifiers (e.g. status_code_429_count,
+        # unauthorized_users, timeout_value, api_key_invalid_count) are NOT
+        # matched.  Python's \w class includes '_', so \b fires only at
+        # alphanumeric↔non-alphanumeric transitions, not at '_' boundaries.
+        _BG_FALLBACK_PATTERNS = [
+            re.compile(p, re.IGNORECASE)
+            for p in [
+                r"\b429\b",
+                r"\brate[\s\-]?limit(?:ed|ing)?\b",
+                r"\bquota[\s\-]exceeded\b",
+                r"\b401\b",
+                r"\bunauthorized\b",
+                r"\bmissing[\s\-]authentication\b",
+                r"\bapi[\s_\-]?key[\s_\-]?(?:invalid|expired|missing)\b",
+                r"\b503\b",
+                r"\bservice[\s\-]unavailable\b",
+                r"\b502\b",
+                r"\bbad[\s\-]gateway\b",
+                r"\bconnection[\s\-]refused\b",
+                r"\btimed?\s*out\b",
+                r"\betimedout\b",
+                r"\boverloaded\b",
+            ]
+        ]
+
+        # Errors starting with Python application-exception prefixes are
+        # not infrastructure failures; exclude them so test-assertion text
+        # like "AssertionError: expected fixture text 503 …" doesn't trigger
+        # a fallback retry.
+        _BG_EXCLUSION_RE = re.compile(
+            r"^(?:assert(?:ion)?error|typeerror|valueerror|keyerror"
+            r"|attributeerror|nameerror|runtimeerror)\s*:",
+            re.IGNORECASE,
+        )
+
+        def _is_bg_fallback_eligible(error_text):
+            if not error_text:
+                return False
+            if _BG_EXCLUSION_RE.match(error_text.strip()):
+                return False
+            for pat in _BG_FALLBACK_PATTERNS:
+                if pat.search(error_text):
+                    return True
+            return False
+
+        def _build_bg_cmd(rt, mdl, ctx_prompt, perm_mode):
+            from shutil import which as _which_bin
+
+            _agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
+
+            if rt == "gemini":
+                _gemini_bin = _which_bin("gemini") or "gemini"
+                _cmd = [_gemini_bin]
+                if perm_mode == "elevated":
+                    _cmd.append("--yolo")
+                _cmd.extend(["-o", "stream-json", "-p", ctx_prompt])
+                if mdl:
+                    _cmd.extend(["--model", mdl])
+            elif rt == "opencode":
+                _oc_bin = (
+                    str(session_mgr.opencode_bin)
+                    if session_mgr.opencode_bin
+                    else (_which_bin("opencode") or "opencode")
+                )
+                _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
+            elif rt == "codex":
+                _codex_bin = _which_bin("codex") or "codex"
+                _cmd = [_codex_bin, "exec"]
+                if perm_mode == "elevated":
+                    _cmd.extend([
+                        "--dangerously-bypass-approvals-and-sandbox",
+                        "-c",
+                        "shell_environment_policy.inherit=all",
+                    ])
+                if mdl:
+                    _cmd.extend(["-m", mdl])
+                _cmd.append(ctx_prompt)
+            elif rt == "claude":
+                _claude_bin = session_mgr.claude_bin or _which_bin("claude") or "claude"
+                _claude_perm = {
+                    "elevated": "bypassPermissions",
+                    "sandboxed": "plan",
+                }.get(perm_mode, "default")
+                _cmd = [
+                    _claude_bin, "-p", ctx_prompt,
+                    "--output-format", "stream-json",
+                    "--verbose", "--model", mdl,
+                    "--permission-mode", _claude_perm,
+                ]
+            elif rt == "devin":
+                _devin_bin = (
+                    session_mgr.devin_bin
+                    if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                    else (_which_bin("devin") or "devin")
+                )
+                _devin_perm = "dangerous"
+                _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
+                if mdl:
+                    _cmd.extend(["--model", mdl])
+                _cmd.extend(["--", ctx_prompt])
+            elif rt == "cursor":
+                _cursor_bin = (
+                    session_mgr.cursor_bin
+                    if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                    else (_which_bin("agent") or "agent")
+                )
+                _cursor_model = mdl
+                if not _cursor_model or not session_mgr.get_model_from_name(_cursor_model, "cursor"):
+                    _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                _cmd = [_cursor_bin, "-p", "--trust"]
+                if perm_mode == "elevated":
+                    _cmd.append("--yolo")
+                _cmd.extend(["--model", _cursor_model, "--workspace", _agent_dir, "--", ctx_prompt])
+            elif rt == "wee":
+                _wee_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wee_runtime.py")
+                _cmd = [sys.executable, _wee_script, "--model", mdl, "--timeout", str(timeout or 300)]
+                _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                if _wee_api_base:
+                    _cmd.extend(["--api-base", _wee_api_base])
+                if _wee_api_key:
+                    _cmd.extend(["--api-key", _wee_api_key])
+                _cmd.extend(["--system-prompt", ctx_prompt])
+                _cmd.append(prompt)
+            elif rt in ("claude-sdk", "copilot-sdk"):
+                _am_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_manager.py")
+                _cmd = [sys.executable, _am_script, "--runtime", rt, "--model", mdl, "--agent", agent, ctx_prompt, session_id or str(uuid4())]
+            else:
+                copilot_bin = (
+                    session_mgr.copilot_bin
+                    or _which_bin("copilot")
+                    or "/home/flipkey/.local/bin/copilot"
+                )
+                _cmd = [copilot_bin, "-p", ctx_prompt, "--no-color", "--model", mdl, "--allow-all-tools"]
+                if perm_mode == "elevated":
+                    _cmd.extend(["--allow-all-paths", "--yolo"])
+
+            _proc_timeout = (timeout or 900) + 30
+            _env = {
+                **os.environ,
+                "COPILOT_AGENT": agent,
+                "COPILOT_RUNTIME": rt,
+                "WEE_AGENT_DIR": _agent_dir,
+                "WEE_SESSION_ID": session_id,
+                "WEE_TASK_ID": task_id,
+            }
+            return _cmd, _env, _proc_timeout, _agent_dir
+
+        try:
+            # Update task record with fallback params (for retry logic)
+            if fallback_runtime or fallback_model:
+                bg_task_mgr.update_task(
+                    task_id,
+                    fallback_runtime=fallback_runtime,
+                    fallback_model=fallback_model,
+                )
+
+            # Build full context prompt with agent/runtime/channel metadata
+            # Pass user_identity explicitly so the system prompt curl command
+            # gets the correct X-User-Identity (avoids telegram_unknown race).
+            context_prompt = session_mgr.build_agent_context_prompt(
+                agent,
+                prompt,
+                session_id,
+                render_type="text",
+                timeout=timeout,
+                runtime=runtime,
+                model=model,
+                channel=channel,
+                bg_identity=user_identity,
+            )
+            # Memory injection moved to build_agent_context_prompt (Issue #72)
+
+            # -- Inject steering check instruction ----------------------------
+            steering_path = bg_task_mgr.get_steering_path(task_id)
+            context_prompt += (
+                f"\n\n[STEERING] You are background task `{task_id}`. Periodically "
+                f"(every 3-5 tool calls), check the file `{steering_path}` for new "
+                f"instructions from the user. If the file exists and has content, read "
+                f"it, incorporate the guidance into your current work, then continue. "
+                f"New instructions are appended with timestamps -- only act on ones you "
+                f"have not seen yet. This is how the user steers your work in real time."
+            )
+
+            # ── Build runtime-specific command ──────────────────────────
+            # Each runtime CLI has its own binary and argument format.
+            # Previously all background tasks used copilot; now we dispatch
+            # to the correct binary so the chosen runtime actually executes.
+            from shutil import which as _which_bin
+
+            # Set agent working directory for all runtimes (needed by _build_bg_cmd)
+            agent_dir = session_mgr.AGENTS.get(
+                agent, session_mgr.AGENTS.get("orchestrator", {})
+            ).get("path", os.getcwd())
+
+            def _build_bg_cmd(runtime, model):
+                """Build the CLI command list for the given runtime and model."""
+                # Ensure "openai" is treated as "wee"
+                if runtime in ("wee", "openai"):
+                    runtime = "wee"
+
+                if runtime == "gemini":
+                    _gemini_bin = _which_bin("gemini") or "gemini"
+                    _cmd = [_gemini_bin]
+                    if permission_mode == "elevated":
+                        _cmd.append("--yolo")
+                    _cmd.extend(["-o", "stream-json", "-p", context_prompt])
+                    if model:
+                        _cmd.extend(["--model", model])
+                elif runtime == "opencode":
+                    _oc_bin = (
+                        str(session_mgr.opencode_bin)
+                        if session_mgr.opencode_bin
+                        else (_which_bin("opencode") or "opencode")
+                    )
+                    _cmd = [_oc_bin, "run", "--model", model, context_prompt]
+                elif runtime == "codex":
+                    _codex_bin = _which_bin("codex") or "codex"
+                    _cmd = [
+                        _codex_bin,
+                        "exec",
+                        "--json",
+                        "--skip-git-repo-check",
+                    ]
+                    if permission_mode == "elevated":
+                        _cmd.extend(
+                            [
+                                "--dangerously-bypass-approvals-and-sandbox",
+                                "-c",
+                                "shell_environment_policy.inherit=all",
+                            ]
+                        )
+                    else:
+                        _cmd.append("--full-auto")
+                    if model:
+                        _cmd.extend(["-m", model])
+                    _cmd.append(context_prompt)
+                elif runtime == "claude":
+                    _claude_bin = (
+                        session_mgr.claude_bin or _which_bin("claude") or "claude"
+                    )
+                    _claude_perm = {
+                        "elevated": "bypassPermissions",
+                        "sandboxed": "plan",
+                    }.get(permission_mode, "default")
+                    _cmd = [
+                        _claude_bin,
+                        "-p",
+                        context_prompt,
+                        "--output-format",
+                        "stream-json",
+                        "--verbose",
+                        "--model",
+                        model,
+                        "--permission-mode",
+                        _claude_perm,
+                    ]
+                elif runtime == "devin":
+                    _devin_bin = (
+                        session_mgr.devin_bin
+                        if hasattr(session_mgr, "devin_bin") and session_mgr.devin_bin
+                        else (_which_bin("devin") or "devin")
+                    )
+                    _devin_perm = (
+                        "dangerous" if permission_mode == "elevated" else "auto"
+                    )
+                    _cmd = [_devin_bin, "-p", "--permission-mode", _devin_perm]
+                    if model:
+                        _cmd.extend(["--model", model])
+                    _cmd.extend(["--", context_prompt])
+                elif runtime == "cursor":
+                    _cursor_bin = (
+                        session_mgr.cursor_bin
+                        if hasattr(session_mgr, "cursor_bin") and session_mgr.cursor_bin
+                        else (_which_bin("agent") or "agent")
+                    )
+                    _cursor_model = model
+                    if not _cursor_model or not session_mgr.get_model_from_name(
+                        _cursor_model, "cursor"
+                    ):
+                        _cursor_model = os.environ.get("CURSOR_DEFAULT_MODEL", "auto")
+                    _cmd = [_cursor_bin, "-p", "--trust"]
+                    if permission_mode == "elevated":
+                        _cmd.append("--yolo")
+                    _cmd.extend(["--model", _cursor_model])
+                    _cmd.extend(["--workspace", agent_dir])
+                    _cmd.extend(["--", context_prompt])
+                elif runtime in ("wee", "openai"):
+                    _wee_script = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "wee_runtime.py",
+                    )
+                    _cmd = [
+                        sys.executable,
+                        _wee_script,
+                        "--model",
+                        model,
+                        "--timeout",
+                        str(timeout or 300),
+                    ]
+                    _wee_api_base = os.environ.get("WEE_API_BASE", "")
+                    _wee_api_key = os.environ.get("WEE_API_KEY", "")
+                    if _wee_api_base:
+                        _cmd.extend(["--api-base", _wee_api_base])
+                    if _wee_api_key:
+                        _cmd.extend(["--api-key", _wee_api_key])
+                    _cmd.extend(["--system-prompt", context_prompt])
+                    _cmd.append(prompt)
+                else:
+                    # Default: copilot runtime
+                    copilot_bin = (
+                        session_mgr.copilot_bin
+                        or _which_bin("copilot")
+                        or "/home/flipkey/.local/bin/copilot"
+                    )
+                    _cmd = [
+                        copilot_bin,
+                        "-p",
+                        context_prompt,
+                        "--no-color",
+                        "--model",
+                        model,
+                        "--allow-all-tools",
+                    ]
+                    if permission_mode == "elevated":
+                        _cmd.extend(["--allow-all-paths", "--yolo"])
+                return _cmd
+
+            # Route "openai" to "wee" runtime (issue #295)
+            if runtime in ("wee", "openai"):
+                effective_runtime = "wee"
+            else:
+                effective_runtime = runtime
+
+            cmd = _build_bg_cmd(effective_runtime, model)
+
+            proc_timeout = (timeout or 900) + 30
+            env = {
+                **os.environ,
+                "COPILOT_AGENT": agent,
+                "COPILOT_RUNTIME": runtime,
+                "WEE_AGENT_DIR": agent_dir,
+                "WEE_SESSION_ID": session_id,
+                "WEE_TASK_ID": task_id,
+            }
+
+            # Use Popen for incremental output capture
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=agent_dir,
+                bufsize=1,
+            )
+
+            bg_task_mgr.update_task(task_id, pid=process.pid)
+
+            import threading
+
+            stderr_lines = []
+
+            def _drain_stderr():
+                try:
+                    for err_line in process.stderr:
+                        stderr_lines.append(err_line)
+                except Exception:
+                    pass
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
+            stdout_lines = []
+            start_time = time.time()
+
+            for line in process.stdout:
+                line_text = line.rstrip("\n\r")
+
+                # Issue #142: Handle wee runtime structured tool call events
+                # These JSON lines are for tool tracking only — skip them from output
+                if runtime == "wee" and line_text.strip().startswith('{"__wee_tc__"'):
+                    try:
+                        _wee_tc = _json.loads(line_text.strip())
+                        if _wee_tc.get("__wee_tc__") == "start":
+                            _tool_call_counter += 1
+                            _tc_input = _wee_tc.get("input", {})
+                            bg_task_mgr.append_tool_call(task_id, {
+                                "id": _wee_tc.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                "name": _wee_tc.get("name", "tool"),
+                                "input": _json.dumps(_tc_input) if isinstance(_tc_input, dict) else str(_tc_input),
+                                "status": "running",
+                                "runtime": "wee",
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            })
+                        elif _wee_tc.get("__wee_tc__") == "done":
+                            bg_task_mgr.update_tool_call(
+                                task_id,
+                                _wee_tc.get("id", ""),
+                                status="completed",
+                                output=str(_wee_tc.get("output", ""))[:500],
+                            )
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    continue  # Don't include tool-tracking JSON in output
+
+                stdout_lines.append(line)
+
+                # Append to output_lines for live log viewing
+                if line_text:
+                    bg_task_mgr.append_output(task_id, line_text)
+
+                # Capture [STATUS_UPDATE: ...] markers for mobile channel progress (F004)
+                _su_bg_match = _re.search(r"\[STATUS_UPDATE[:\s]*(.+?)\]", line_text)
+                if _su_bg_match:
+                    session_mgr.set_live_status(
+                        session_id, _su_bg_match.group(1).strip()
+                    )
+
+                # ── Structured JSON parsing for stream-json runtimes ──
+                # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
+                # Claude (stream-json) emits nested stream_event objects with tool_use blocks
+                tc = None
+                if runtime in ("gemini", "claude") and line_text.strip().startswith(
+                    "{"
+                ):
+                    try:
+                        _obj = _json.loads(line_text.strip())
+                        _otype = _obj.get("type", "")
+
+                        if runtime == "gemini":
+                            if _otype == "tool_use":
+                                _tool_call_counter += 1
+                                tc = {
+                                    "id": f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                    "name": _obj.get("tool_name", "tool"),
+                                    "input": _json.dumps(_obj.get("parameters", {})),
+                                    "status": "running",
+                                    "runtime": runtime,
+                                    "timestamp": _obj.get(
+                                        "timestamp",
+                                        time.strftime(
+                                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                        ),
+                                    ),
+                                }
+                            elif _otype == "tool_result":
+                                _tool_id = _obj.get("tool_id", "")
+                                bg_task_mgr.update_tool_call(
+                                    task_id,
+                                    _tool_id,
+                                    status=_obj.get("status", "completed"),
+                                    output=_obj.get("output", "")[:500],
+                                )
+
+                        elif runtime == "claude":
+                            if _otype == "stream_event":
+                                _event = _obj.get("event") or {}
+                                _inner = _event.get("type", "")
+                                if _inner == "content_block_start":
+                                    _cb = _event.get("content_block") or {}
+                                    if _cb.get("type") == "tool_use":
+                                        _tool_call_counter += 1
+                                        tc = {
+                                            "id": _cb.get(
+                                                "id",
+                                                f"bg_{task_id[:8]}_{_tool_call_counter}",
+                                            ),
+                                            "name": _cb.get("name", "tool"),
+                                            "input": _json.dumps(_cb.get("input", {})),
+                                            "status": "running",
+                                            "runtime": runtime,
+                                            "timestamp": time.strftime(
+                                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                            ),
+                                        }
+                    except (ValueError, KeyError, TypeError):
+                        pass
+
+                # Fall back to text-based pattern detection
+                if not tc:
+                    tc = _parse_tool_call_from_line(line_text, runtime)
+
+                if tc:
+                    bg_task_mgr.append_tool_call(task_id, tc)
+
+                # Check timeout
+                if time.time() - start_time > proc_timeout:
+                    process.kill()
+                    break
+
+            process.stdout.close()
+            stderr_thread.join(timeout=5)
+            process.wait()
+
+            output = "".join(stdout_lines).strip()
+            if stderr_lines:
+                output += "\n[stderr]\n" + "".join(stderr_lines)
+
+            if process.returncode == 0:
+                # Strip CLI metadata (tool decoration, stats) from final output
+                final_output = (
+                    session_mgr.strip_metadata(output, runtime)
+                    if output
+                    else "Task completed successfully"
+                )
+                if not final_output.strip():
+                    final_output = output or "Task completed successfully"
+                session_mgr.clear_live_status(session_id)
+                bg_task_mgr.complete_task(task_id, final_output)
+                if task_id.startswith("sched_"):
+                    try:
+                        job_id = task_id.split("_")[1]
+                        sched = _get_scheduler()
+                        job = sched.get_job(job_id).get("result")
+                        if job:
+                            sched.save_result(
+                                job_id, job.get("name", job_id), True, final_output
+                            )
+                    except Exception:
+                        pass
+                _emit_bg_notification(
+                    task_id,
+                    prompt,
+                    "completed",
+                    channel,
+                    user_identity,
+                    output_preview=final_output,
+                    error=None,
+                    notify=notify,
+                    agent=agent,
+                )
+            else:
+                primary_error_msg = (
+                    f"Task failed with code {process.returncode}: {output}"
+                )
+
+                # --- Fallback retry logic (Issue #243) ---
+                _is_infra_error = any(
+                    re.search(p, output, re.IGNORECASE) for p in _FALLBACK_PATTERNS
+                )
+                _task_rec = bg_task_mgr.get_task(task_id)
+                _fb_runtime = (
+                    (_task_rec or {}).get("fallback_runtime") if _task_rec else None
+                )
+                _fb_model = (
+                    (_task_rec or {}).get("fallback_model") if _task_rec else None
+                )
+                _already_fb = (
+                    (_task_rec or {}).get("used_fallback", False)
+                    if _task_rec
+                    else False
+                )
+
+                if _is_infra_error and (_fb_runtime or _fb_model) and not _already_fb:
+                    _eff_fb_runtime = _fb_runtime or runtime
+                    _eff_fb_model = _fb_model or model
+                    bg_task_mgr.append_output(
+                        task_id,
+                        f"[Fallback] Primary failed ({primary_error_msg[:120]}), retrying with runtime={_eff_fb_runtime}, model={_eff_fb_model}",
+                    )
+                    bg_task_mgr.mark_fallback_used(
+                        task_id, _eff_fb_runtime, _eff_fb_model
+                    )
+
+                    _fb_cmd = _build_bg_cmd(_eff_fb_runtime, _eff_fb_model)
+                    _fb_env = {**env, "COPILOT_RUNTIME": _eff_fb_runtime}
+                    _fb_stdout_lines = []
+                    _fb_stderr_lines = []
+
+                    _fb_proc = subprocess.Popen(
+                        _fb_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=_fb_env,
+                        cwd=agent_dir,
+                        bufsize=1,
+                    )
+                    bg_task_mgr.update_task(task_id, pid=_fb_proc.pid)
+
+                    def _drain_fb_stderr():
+                        try:
+                            for _el in _fb_proc.stderr:
+                                _fb_stderr_lines.append(_el)
+                        except Exception:
+                            pass
+
+                    import threading as _fb_threading
+
+                    _fb_stderr_thread = _fb_threading.Thread(
+                        target=_drain_fb_stderr, daemon=True
+                    )
+                    _fb_stderr_thread.start()
+                    _fb_start = time.time()
+
+                    for _fl in _fb_proc.stdout:
+                        _fb_stdout_lines.append(_fl)
+                        _lt = _fl.rstrip("\n\r")
+                        if _lt:
+                            bg_task_mgr.append_output(task_id, _lt)
+                        _fb_tc = _parse_tool_call_from_line(_lt, _eff_fb_runtime)
+                        if _fb_tc:
+                            _fb_tc["runtime"] = _eff_fb_runtime
+                            bg_task_mgr.append_tool_call(task_id, _fb_tc)
+                        if time.time() - _fb_start > proc_timeout:
+                            _fb_proc.kill()
+                            break
+
+                    _fb_proc.stdout.close()
+                    _fb_stderr_thread.join(timeout=5)
+                    _fb_proc.wait()
+
+                    _fb_output = "".join(_fb_stdout_lines).strip()
+                    if _fb_stderr_lines:
+                        _fb_output += "\n[stderr]\n" + "".join(_fb_stderr_lines)
+
+                    if _fb_proc.returncode == 0:
+                        _fb_final = (
+                            session_mgr.strip_metadata(_fb_output, _eff_fb_runtime)
+                            if _fb_output
+                            else "Task completed via fallback runtime"
+                        )
+                        if not _fb_final.strip():
+                            _fb_final = (
+                                _fb_output or "Task completed via fallback runtime"
+                            )
+                        session_mgr.clear_live_status(session_id)
+                        bg_task_mgr.complete_task(task_id, _fb_final)
+                        _emit_bg_notification(
+                            task_id,
+                            prompt,
+                            "completed",
+                            channel,
+                            user_identity,
+                            output_preview=_fb_final,
+                            error=None,
+                            notify=notify,
+                            agent=agent,
+                        )
+                    else:
+                        combined_error = (
+                            f"Primary ({runtime}): {primary_error_msg[:200]}; "
+                            f"Fallback ({_eff_fb_runtime}): exit {_fb_proc.returncode}: {_fb_output[:200]}"
+                        )
+                        bg_task_mgr.fail_task(task_id, combined_error)
+                        _emit_bg_notification(
+                            task_id,
+                            prompt,
+                            "failed",
+                            channel,
+                            user_identity,
+                            output_preview=None,
+                            error=combined_error,
+                            notify=notify,
+                            agent=agent,
+                        )
+                else:
+                    error_msg = primary_error_msg
+                    bg_task_mgr.fail_task(task_id, error_msg)
+                    if task_id.startswith("sched_"):
+                        try:
+                            job_id = task_id.split("_")[1]
+                            sched = _get_scheduler()
+                            job = sched.get_job(job_id).get("result")
+                            if job:
+                                sched.save_result(
+                                    job_id,
+                                    job.get("name", job_id),
+                                    False,
+                                    "",
+                                    error_msg,
+                                )
+                        except Exception:
+                            pass
+                    _emit_bg_notification(
+                        task_id,
+                        prompt,
+                        "failed",
+                        channel,
+                        user_identity,
+                        output_preview=None,
+                        error=error_msg,
+                        notify=notify,
+                        agent=agent,
+                    )
+
+        except subprocess.TimeoutExpired:
+            error_msg = f"Task exceeded timeout of {timeout} seconds"
+            bg_task_mgr.fail_task(task_id, error_msg)
+            _emit_bg_notification(
+                task_id,
+                prompt,
+                "failed",
+                channel,
+                user_identity,
+                output_preview=None,
+                error=error_msg,
+                notify=notify,
+                agent=agent,
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            bg_task_mgr.fail_task(task_id, error_msg)
+            _emit_bg_notification(
+                task_id,
+                prompt,
+                "failed",
+                channel,
+                user_identity,
+                output_preview=None,
+                error=error_msg,
+                notify=notify,
+                agent=agent,
+            )
+        finally:
+            # Clean up steering file for completed task
+            bg_task_mgr.cleanup_steering(task_id)
+
+            # Promote next queued task for this user if a slot just opened
+            try:
+                next_q = bg_task_mgr.get_next_queued(channel, user_identity, agent)
+                if next_q:
+                    new_sid = str(uuid4())
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    print(f"[BG] Promoting queued task {next_q['task_id']} → running")
+                    bg_executor.submit(
+                        _run_background_task,
+                        next_q["task_id"],
+                        new_sid,
+                        next_q["prompt"],
+                        next_q["agent"],
+                        next_q["runtime"],
+                        next_q["model"],
+                        next_q["channel"],
+                        next_q["user_identity"],
+                        next_q.get("timeout") or 900,
+                        next_q.get("notify", True),
+                        next_q.get("permission_mode", "restricted"),
+                    )
+            except Exception as promo_exc:
+                print(f"[BG] Error promoting queued task: {promo_exc}")
+
+    @app.post("/api/v1/background-tasks")
+    async def create_background_task(body: BackgroundTaskRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        channel = user["channel"]
+        identity = user["identity"]
+
+        # Check concurrent limit (used below after resolving params)
+
+        # Resolve agent/runtime/model — default to user's current session config
+        # Determine defaults by searching for ANY session for this identity across all channels
+        # to inherit preferences (like notification_preference).
+        session_map = session_mgr.load_session_map()
+        # Inherit only safe fields (never 'agent') from prior sessions — see issue #75
+        defaults = _compute_bg_task_defaults(session_map, identity, channel)
+
+        agent = body.agent or defaults.get("agent", get_default_agent())
+        runtime = body.runtime or defaults.get("runtime", get_default_runtime())
+        raw_model = body.model or defaults.get("model", get_default_model())
+        resolved_model = session_mgr.get_model_from_name(raw_model, runtime)
+        # Reject explicit "auto" (placeholder, not a real model ID) and
+        # any model name that cannot be resolved to a known model.
+        if body.model and (body.model.lower() == "auto" or not resolved_model):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Invalid model '{body.model}' for runtime '{runtime}'. "
+                    f"Use GET /api/v1/models?runtime={runtime}"
+                    " to list available models."
+                ),
+            )
+        model = resolved_model or raw_model
+
+        task_id = f"bg_{str(uuid4())[:8]}"
+        session_id = str(uuid4())  # Must be valid UUID format for Copilot CLI
+
+        # Use agent-specified timeout or fall back to default (15 min)
+        bg_timeout = (
+            body.timeout if body.timeout is not None else get_bg_command_timeout()
+        )
+
+        # Determine notification preference:
+        #   body override > global toggle > per-identity store > session default > True
+        notify_pref = body.notify
+        if notify_pref is None:
+            if notification_mgr:
+                # Global toggle takes priority (Issue #146)
+                if not notification_mgr.is_global_enabled():
+                    notify_pref = False
+                # Per-identity store is authoritative
+                elif notification_mgr.is_muted(identity):
+                    notify_pref = False
+            if notify_pref is None:
+                session_pref = defaults.get("notification_preference", "all")
+                notify_pref = session_pref != "off"
+
+        # Memory injection is handled at session creation in build_agent_context_prompt
+        # (not here at API time) so queued/promoted tasks get fresh context.
+        effective_prompt = body.prompt
+
+        # Check concurrent limit — queue instead of rejecting
+        running = bg_task_mgr.count_running(channel, identity, agent)
+        agent_config = session_mgr.AGENTS.get(agent, {})
+        dispatch_config = agent_config.get("dispatch_config", {})
+        if not body.runtime and dispatch_config.get("runtime"):
+            runtime = dispatch_config["runtime"]
+        if not body.model and dispatch_config.get("model"):
+            model = dispatch_config["model"]
+        if body.timeout is None and dispatch_config.get("timeout"):
+            bg_timeout = dispatch_config["timeout"]
+        max_concurrent = agent_config.get(
+            "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+        )
+
+        # Resolve permission mode: body permission_mode > body yolo > agent yolo > agent permission_mode > default
+        perm_mode = body.permission_mode
+        if not perm_mode:
+            # body.yolo can explicitly override agent yolo
+            if body.yolo is True:
+                perm_mode = "elevated"
+            elif body.yolo is False:
+                # Explicit False overrides agent yolo:true
+                perm_mode = "restricted"
+            elif dispatch_config.get("yolo", False):
+                # Check dispatch_config.yolo next
+                perm_mode = "elevated"
+            elif agent_config.get("yolo", False):
+                perm_mode = "elevated"
+            else:
+                perm_mode = dispatch_config.get(
+                    "permission_mode", agent_config.get("permission_mode", "restricted")
+                )
+        if perm_mode not in ("elevated", "restricted", "sandboxed"):
+            perm_mode = "restricted"
+        if running >= max_concurrent:
+            # Queue the task — it will be promoted when a running task finishes
+            task = bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
+                agent=agent,
+                runtime=runtime,
+                model=model,
+                prompt=effective_prompt,
+                status="queued",
+                timeout=bg_timeout,
+                notify=notify_pref,
+                origin_session_id=body.origin_session_id,
+                fallback_runtime=body.fallback_runtime,
+                fallback_model=body.fallback_model,
+                permission_mode=perm_mode,
+            )
+            queue_pos = bg_task_mgr.count_queued(channel, identity)
+            print(
+                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
+            )
+            return {
+                "task_id": task_id,
+                "session_id": session_id,
+                "agent": agent,
+                "runtime": runtime,
+                "model": model,
+                "permission_mode": perm_mode,
+                "status": "queued",
+                "queue_position": queue_pos,
+                "timeout": bg_timeout,
+            }
+
+        # Create task record (running immediately)
+        task = bg_task_mgr.create_task(
+            task_id=task_id,
+            session_id=session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=agent,
+            runtime=runtime,
+            model=model,
+            prompt=effective_prompt,
+            status="running",
+            timeout=bg_timeout,
+            notify=notify_pref,
+            origin_session_id=body.origin_session_id,
+            permission_mode=perm_mode,
+            fallback_runtime=body.fallback_runtime,
+            fallback_model=body.fallback_model,
+        )
+
+        # Run in background thread using shared executor
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(
+            bg_executor,
+            _run_background_task,
+            task_id,
+            session_id,
+            effective_prompt,
+            agent,
+            runtime,
+            model,
+            channel,
+            identity,
+            bg_timeout,
+            notify_pref,
+            perm_mode,
+            body.fallback_runtime,
+            body.fallback_model,
+        )
+
+        return {
+            "task_id": task_id,
+            "session_id": session_id,
+            "agent": agent,
+            "runtime": runtime,
+            "model": model,
+            "permission_mode": perm_mode,
+            "status": "running",
+            "timeout": bg_timeout,
+        }
+
+    @app.get("/api/v1/sessions/{session_id}/bg-events")
+    async def get_session_bg_events(session_id: str, request: Request):
+        """Return and clear pending BG task completion events."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        events = bg_task_mgr.pop_bg_events(session_id)
+        return {"events": events}
+
+    @app.get("/api/v1/background-tasks")
+    async def list_background_tasks(request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.check(
+            client_ip, "bg_tasks_list", max_requests=120, window=60
+        ):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        tasks = bg_task_mgr.list_all_tasks()
+        # Check if running tasks are still alive
+        for t in tasks:
+            if t["status"] == "running" and t.get("pid"):
+                try:
+                    os.kill(t["pid"], 0)
+                except ProcessLookupError:
+                    bg_task_mgr.fail_task(
+                        t["task_id"], "Process terminated unexpectedly"
+                    )
+                    t["status"] = "failed"
+        # Return summary (no full output_lines for list)
+        result = []
+        for t in tasks:
+            result.append(
+                {
+                    "task_id": t["task_id"],
+                    "agent": t["agent"],
+                    "runtime": t["runtime"],
+                    "model": t["model"],
+                    "prompt": t["prompt"][:200],
+                    "status": t["status"],
+                    "created_at": t["created_at"],
+                    "completed_at": t.get("completed_at"),
+                    "error": t.get("error"),
+                    "used_fallback": t.get("used_fallback", False),
+                    "actual_runtime": t.get("actual_runtime"),
+                    "actual_model": t.get("actual_model"),
+                    "fallback_runtime": t.get("fallback_runtime"),
+                    "fallback_model": t.get("fallback_model"),
+                }
+            )
+        return {"tasks": result}
+
+    @app.get("/api/v1/background-tasks/{task_id}")
+    async def get_background_task(task_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        # Return detail with last 50 output lines
+        tool_calls = task.get("tool_calls", [])
+        return {
+            "task_id": task["task_id"],
+            "session_id": task["session_id"],
+            "agent": task["agent"],
+            "runtime": task["runtime"],
+            "model": task["model"],
+            "prompt": task["prompt"],
+            "status": task["status"],
+            "pid": task.get("pid"),
+            "created_at": task["created_at"],
+            "completed_at": task.get("completed_at"),
+            "recent_output": task.get("output_lines", [])[-50:],
+            "error": task.get("error"),
+            "tool_call_count": len(tool_calls),
+            "recent_tool_calls": tool_calls[-20:],
+            "used_fallback": task.get("used_fallback", False),
+            "actual_runtime": task.get("actual_runtime"),
+            "actual_model": task.get("actual_model"),
+            "fallback_runtime": task.get("fallback_runtime"),
+            "fallback_model": task.get("fallback_model"),
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/transcript")
+    async def get_background_task_transcript(task_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "final_response": task.get("final_response"),
+            "output_lines": task.get("output_lines", []),
+            "error": task.get("error"),
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/logs")
+    async def get_background_task_logs(task_id: str, request: Request):
+        """Return all output lines for a background task (for live log streaming)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "created_at": task["created_at"],
+            "completed_at": task.get("completed_at"),
+            "output_lines": task.get("output_lines", []),
+            "error": task.get("error"),
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/tool-calls")
+    async def get_background_task_tool_calls(task_id: str, request: Request):
+        """Return all tool calls for a background task."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "tool_calls": [
+                _sanitize_tool_call_for_display(tc) for tc in task.get("tool_calls", [])
+            ],
+            "tool_call_count": len(task.get("tool_calls", [])),
+        }
+
+    @app.delete("/api/v1/background-tasks/{task_id}")
+    async def delete_background_task(task_id: str, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if task["status"] in ("running", "queued"):
+            was_running = task["status"] == "running"
+            bg_task_mgr.kill_task(task_id)
+            # If a running task was killed, promote the next queued task
+            if was_running:
+                next_q = bg_task_mgr.get_next_queued(user["channel"], user["identity"])
+                if next_q:
+                    new_sid = str(uuid4())
+                    bg_task_mgr.promote_queued_task(next_q["task_id"], new_sid)
+                    print(
+                        f"[BG] Kill triggered promotion of queued task {next_q['task_id']}"
+                    )
+                    loop = asyncio.get_running_loop()
+                    loop.run_in_executor(
+                        bg_executor,
+                        _run_background_task,
+                        next_q["task_id"],
+                        new_sid,
+                        next_q["prompt"],
+                        next_q["agent"],
+                        next_q["runtime"],
+                        next_q["model"],
+                        next_q["channel"],
+                        next_q["user_identity"],
+                        next_q.get("timeout") or 900,
+                        next_q.get("notify", True),
+                        next_q.get("permission_mode", "restricted"),
+                        next_q.get("fallback_runtime"),
+                        next_q.get("fallback_model"),
+                    )
+            return {"task_id": task_id, "action": "killed"}
+        else:
+            bg_task_mgr.delete_task(task_id)
+            return {"task_id": task_id, "action": "deleted"}
+
+    # --- Background Task Steering ---
+
+    class SteerRequest(BaseModel):
+        instruction: str
+
+        @field_validator("instruction")
+        @classmethod
+        def validate_instruction(cls, v):
+            if not v or not v.strip():
+                raise ValueError("Instruction must not be empty")
+            if len(v) > 5000:
+                raise ValueError("Instruction must be 5,000 characters or less")
+            return v.strip()
+
+    @app.post("/api/v1/background-tasks/{task_id}/steer")
+    async def steer_background_task(task_id: str, body: SteerRequest, request: Request):
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["status"] != "running":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Task is {task['status']}, not running -- cannot steer",
+            )
+        path = bg_task_mgr.write_steering(task_id, body.instruction)
+        logger.info(
+            "[STEER] Steering written for task %s: %s", task_id, body.instruction[:80]
+        )
+        return {
+            "task_id": task_id,
+            "status": "steering_written",
+            "steering_file": path,
+            "instruction_preview": body.instruction[:200],
+        }
+
+    @app.get("/api/v1/background-tasks/{task_id}/steering")
+    async def get_steering(task_id: str, request: Request):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        task = bg_task_mgr.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        content = bg_task_mgr.read_steering(task_id)
+        return {
+            "task_id": task_id,
+            "has_steering": content is not None,
+            "content": content,
+        }
+
+    # --- Notifications ---
+
+    @app.get("/api/v1/notifications")
+    async def list_notifications(request: Request, unread_only: bool = False):
+        """Return background task completion notifications for the authenticated user."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications": [], "unread_count": 0}
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        notifications = notification_mgr.list_notifications(
+            user_key, unread_only=unread_only
+        )
+        unread_count = sum(1 for n in notifications if not n.get("read", False))
+        return {"notifications": notifications, "unread_count": unread_count}
+
+    @app.post("/api/v1/notifications/{notification_id}/read")
+    async def mark_notification_read(notification_id: str, request: Request):
+        """Mark a single notification as read."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        ok = notification_mgr.mark_read(notification_id, user_key)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return {"notification_id": notification_id, "read": True}
+
+    @app.post("/api/v1/notifications/read-all")
+    async def mark_all_notifications_read(request: Request):
+        """Mark all notifications as read for the current user."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        count = notification_mgr.mark_all_read(user_key)
+        return {"marked_read": count}
+
+    @app.delete("/api/v1/notifications/{notification_id}")
+    async def delete_notification(notification_id: str, request: Request):
+        """Delete a specific notification."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        ok = notification_mgr.delete_notification(notification_id, user_key)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return {"notification_id": notification_id, "deleted": True}
+
+    @app.delete("/api/v1/notifications")
+    async def delete_read_notifications(request: Request):
+        """Delete all read notifications for the current user."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        user_key = bg_task_mgr._user_key(user["channel"], user["identity"])
+        deleted = notification_mgr.delete_all_read(user_key)
+        return {"deleted": deleted}
+
+    # --- Global Notification Settings (Issue #146) ---
+
+    class NotificationSettingsRequest(BaseModel):
+        notifications_enabled: bool
+
+    @app.get("/api/v1/settings/notifications")
+    async def get_notification_settings(request: Request):
+        """Return the global notification toggle state."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            return {"notifications_enabled": True, "available": False}
+        settings = notification_mgr.get_global_settings()
+        settings["available"] = True
+        return settings
+
+    @app.put("/api/v1/settings/notifications")
+    async def set_notification_settings(
+        body: NotificationSettingsRequest, request: Request
+    ):
+        """Set the global notification toggle."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if notification_mgr is None:
+            raise HTTPException(
+                status_code=503, detail="Notification manager unavailable"
+            )
+        notification_mgr.set_global_enabled(body.notifications_enabled)
+        return {
+            "notifications_enabled": body.notifications_enabled,
+            "message": (
+                "Notifications enabled for all channels"
+                if body.notifications_enabled
+                else "Notifications suppressed globally (critical alerts still delivered)"
+            ),
+        }
+
+    # --- Task Scheduler ---
+    if SCHEDULER_ENABLED:
+        # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.
+        _task_scheduler = None
+
+        def _get_scheduler():
+            nonlocal _task_scheduler
+            if _task_scheduler is None:
+                try:
+                    import sys as _sys
+
+                    _sched_path = str(Path(__file__).parent)
+                    if _sched_path not in _sys.path:
+                        _sys.path.insert(0, _sched_path)
+                    from scheduler.management import TaskScheduler
+
+                    _task_scheduler = TaskScheduler()
+                except Exception as _e:
+                    raise HTTPException(
+                        status_code=503, detail=f"Scheduler unavailable: {_e}"
+                    )
+            return _task_scheduler
+
+        # ---- Scheduler authorization ----
+        # Override with comma-separated env vars to add more users without code changes.
+        _sched_allowed_telegram = {
+            u.strip().lower().lstrip("@")
+            for u in os.environ.get("SCHEDULER_ALLOWED_TELEGRAM", "").split(",")
+            if u.strip()
+        }
+        _sched_allowed_webex = {
+            u.strip().lower()
+            for u in os.environ.get("SCHEDULER_ALLOWED_WEBEX", "").split(",")
+            if u.strip()
+        }
+        if not _sched_allowed_telegram and not _sched_allowed_webex:
+            print(
+                "[SECURITY][WARN] No scheduler allowlist configured — set SCHEDULER_ALLOWED_TELEGRAM and/or SCHEDULER_ALLOWED_WEBEX env vars",
+                file=sys.stderr,
+            )
+
+        async def _require_scheduler_auth(request: Request) -> dict:
+            """Authenticate AND verify the user is allowed to manage scheduled tasks.
+
+            Raises HTTP 403 if authenticated but not in the allowlist.
+            Returns the user dict on success.
+            """
+            user = await authenticate(
+                request,
+                authorization=request.headers.get("authorization"),
+                x_user_identity=request.headers.get("x-user-identity"),
+                x_auth_channel=request.headers.get("x-auth-channel"),
+            )
+
+            # Shared-key callers (internal/admin) are always allowed.
+            if user.get("auth_type") == "shared_key":
+                return user
+
+            channel = user.get("channel", "")
+            identity = user.get("identity", "")
+
+            if channel == "telegram":
+                # identity is a numeric chat_id; resolve to username for the allowlist check.
+                username = _get_telegram_username(identity) or ""
+                if username.lower() in _sched_allowed_telegram:
+                    return user
+            elif channel == "webex":
+                if identity.lower() in _sched_allowed_webex:
+                    return user
+
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to manage scheduled tasks.",
+            )
+
+        class ScheduleJobRequest(BaseModel):
+            name: str
+            schedule: str
+            agent: Optional[str] = None
+            runtime: Optional[str] = None
+            model: Optional[str] = None
+            mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
+            task: str = ""
+            notify: bool = False
+            recurring: bool = True
+            timeout: Optional[int] = None  # Execution timeout in seconds (default: 300)
+            permission_mode: Optional[str] = (
+                None  # elevated, restricted (default), sandboxed
+            )
+
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
+
+        class UpdateJobRequest(BaseModel):
+            name: Optional[str] = None
+            schedule: Optional[str] = None
+            agent: Optional[str] = None
+            runtime: Optional[str] = None
+            model: Optional[str] = None
+            mode: Optional[str] = None  # "ai" (default, uses LLM) or "command" (shell)
+            task: Optional[str] = None
+            notify: Optional[bool] = None
+            recurring: Optional[bool] = None
+            enabled: Optional[bool] = None
+            timeout: Optional[int] = None  # Execution timeout in seconds
+            permission_mode: Optional[str] = (
+                None  # elevated, restricted (default), sandboxed
+            )
+
+        yolo: Optional[bool] = (
+            None  # If True, grants elevated mode; if False, prevents it
+        )
+
+        class ValidateScheduleRequest(BaseModel):
+            schedule: str
+
+        @app.post("/api/v1/scheduler/validate-schedule")
+        async def validate_schedule(body: ValidateScheduleRequest, request: Request):
+            """Convert natural language schedule to cron format using AI + deterministic fallback."""
+            await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=30, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            from scheduler.management import convert_schedule
+
+            result = convert_schedule(body.schedule.strip(), use_ai=True)
+            return {
+                "success": result.get("cron") is not None
+                or result.get("next_run") is not None,
+                "cron": result.get("cron"),
+                "next_run": result.get("next_run"),
+                "human_readable": result.get("human_readable", ""),
+                "method": result.get("method", "failed"),
+                "original": result.get("original", body.schedule),
+            }
+
+        @app.get("/api/v1/scheduler/status")
+        async def scheduler_status(request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().doctor()
+
+        @app.get("/api/v1/scheduler/jobs")
+        async def list_scheduler_jobs(request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().list_jobs()
+
+        @app.post("/api/v1/scheduler/jobs")
+        async def create_scheduler_job(body: ScheduleJobRequest, request: Request):
+            user = await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            # Resolve Telegram username for storage so the executor can display it
+            username = None
+            if user.get("channel") == "telegram":
+                username = _get_telegram_username(user["identity"])
+            created_by = {
+                "identity": user["identity"],
+                "channel": user["channel"],
+                "username": username,
+            }
+            result = _get_scheduler().schedule_task(
+                name=body.name,
+                schedule=body.schedule,
+                agent=body.agent,
+                runtime=body.runtime,
+                model=body.model,
+                mode=body.mode,
+                task=body.task,
+                notify=body.notify,
+                recurring=body.recurring,
+                created_by=created_by,
+                timeout=body.timeout,
+                permission_mode=body.permission_mode,
+            )
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=400, detail=result.get("message", "Failed")
+                )
+            return result
+
+        @app.get("/api/v1/scheduler/jobs/{job_id}")
+        async def get_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            result = _get_scheduler().get_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
+            return result
+
+        @app.put("/api/v1/scheduler/jobs/{job_id}")
+        async def update_scheduler_job(
+            job_id: str, body: UpdateJobRequest, request: Request
+        ):
+            await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            updates = {k: v for k, v in body.model_dump().items() if v is not None}
+            if not updates:
+                raise HTTPException(status_code=400, detail="No fields to update")
+            result = _get_scheduler().update_job(job_id, updates)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
+            return result
+
+        @app.delete("/api/v1/scheduler/jobs/{job_id}")
+        async def delete_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            result = _get_scheduler().delete_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
+            return result
+
+        @app.post("/api/v1/scheduler/jobs/{job_id}/pause")
+        async def pause_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            result = _get_scheduler().pause_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
+            return result
+
+        @app.post("/api/v1/scheduler/jobs/{job_id}/resume")
+        async def resume_scheduler_job(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            result = _get_scheduler().resume_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
+            return result
+
+        @app.post("/api/v1/scheduler/jobs/{job_id}/run")
+        async def run_scheduler_job_now(job_id: str, request: Request):
+            user = await _require_scheduler_auth(request)
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(
+                client_ip, "scheduler_write", max_requests=20, window=60
+            ):
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+            result = _get_scheduler().get_job(job_id)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=result.get("message", "Not found")
+                )
+            job = result["result"]
+
+            # Mark last_run immediately so the scheduler doesn't double-fire
+            _get_scheduler().run_job(job_id)
+
+            # Determine runtime parameters from the job
+            agent = job.get("agent") or get_default_agent()
+            runtime = job.get("runtime") or get_default_runtime()
+            model = job.get("model") or get_default_model()
+            task = job.get("task") or ""
+            timeout = int(job.get("timeout") or 300)
+            mode = job.get("mode", "ai")
+
+            # Use the triggering user's identity/channel for the bg task
+            channel = user.get("channel", "api")
+            identity = user.get("identity", "scheduler")
+
+            task_id = f"sched_{job_id}_{str(uuid4())[:6]}"
+            session_id = str(uuid4())
+
+            if mode == "command":
+                # ---- Command mode: execute shell command directly (no LLM) ----
+                working_dir = job.get("working_dir", "/opt")
+
+                bg_task_mgr.create_task(
+                    task_id=task_id,
+                    session_id=session_id,
+                    user_identity=identity,
+                    channel=channel,
+                    agent="command",
+                    runtime="shell",
+                    model="n/a",
+                    prompt=task,
+                    status="running",
+                    timeout=timeout,
+                    notify=job.get("notify", False),
+                )
+
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    bg_executor,
+                    _run_command_task,
+                    task_id,
+                    task,
+                    working_dir,
+                    timeout,
+                    job_id,
+                    job.get("name", job_id),
+                    job.get("notify", False),
+                )
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "mode": "command",
+                    "status": "running",
+                    "message": f"Command job '{job.get('name', job_id)}' is now running (direct shell execution)",
+                }
+            else:
+                # ---- AI mode: dispatch to LLM background task ----
+                prompt = task or f"Run scheduled job: {job.get('name', job_id)}"
+
+                # Resolve permission mode from job config
+                perm_mode = job.get("permission_mode", "restricted")
+                if perm_mode not in ("elevated", "restricted", "sandboxed"):
+                    perm_mode = "restricted"
+
+                bg_task_mgr.create_task(
+                    task_id=task_id,
+                    session_id=session_id,
+                    user_identity=identity,
+                    channel=channel,
+                    agent=agent,
+                    runtime=runtime,
+                    model=model,
+                    prompt=prompt,
+                    status="running",
+                    timeout=timeout,
+                    notify=job.get("notify", False),
+                    fallback_runtime=job.get("fallback_runtime"),
+                    fallback_model=job.get("fallback_model"),
+                )
+
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    bg_executor,
+                    _run_background_task,
+                    task_id,
+                    session_id,
+                    prompt,
+                    agent,
+                    runtime,
+                    model,
+                    channel,
+                    identity,
+                    timeout,
+                    job.get("notify", False),
+                    perm_mode,
+                    job.get("fallback_runtime"),
+                    job.get("fallback_model"),
+                )
+
+                return {
+                    "success": True,
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "agent": agent,
+                    "runtime": runtime,
+                    "permission_mode": perm_mode,
+                    "status": "running",
+                    "message": f"Job '{job.get('name', job_id)}' is now running",
+                }
+
+        @app.get("/api/v1/scheduler/jobs/{job_id}/results")
+        async def get_scheduler_job_results(
+            job_id: str, request: Request, limit: int = 20
+        ):
+            await _require_scheduler_auth(request)
+            limit = min(max(1, limit), 100)
+            return _get_scheduler().get_results(job_id, limit=limit)
+
+        @app.get("/api/v1/scheduler/jobs/{job_id}/logs")
+        async def get_scheduler_job_logs(job_id: str, request: Request):
+            await _require_scheduler_auth(request)
+            return _get_scheduler().get_logs(job_id)
+
+    # --- TODO list API ---------------------------------------------------
+    def _resolve_todo_dir(agent_name: str | None) -> Path | None:
+        """Resolve the TODOs/ folder for a given agent.
+
+        Returns the agent-specific TODOs/ directory if it exists, else None.
+        Checks both the new folder-based structure (TODOs/) and falls back to
+        the legacy TODOs.md flat file (returned as None to signal legacy mode).
+        """
+        import json as _json
+
+        default_dir = Path("/opt/fosterbot-home/TODOs")
+        default_md = Path("/opt/fosterbot-home/TODOs.md")
+
+        def _pick(base: Path):
+            """Return folder path or md path for a given base directory."""
+            d = base / "TODOs"
+            if d.is_dir():
+                return d
+            md = base / "TODOs.md"
+            if md.exists():
+                return md
+            return None
+
+        if not agent_name:
+            if default_dir.is_dir():
+                return default_dir
+            return default_md if default_md.exists() else None
+
+        try:
+            agents_file = Path(__file__).parent / "agents.json"
+            agents_data = _json.loads(agents_file.read_text())
+            for a in agents_data.get("agents", []):
+                if a.get("name", "").lower() == agent_name.lower():
+                    agent_path = Path(a.get("path", "/opt"))
+                    result = _pick(agent_path)
+                    if result:
+                        return result
+                    # Also check <agent_path>/fosterbot-home/
+                    result = _pick(agent_path / "fosterbot-home")
+                    if result:
+                        return result
+                    # No TODOs found — return non-existent path so UI shows empty
+                    return agent_path / "TODOs"
+        except Exception:
+            pass
+        return Path(f"/opt/{agent_name}/TODOs")
+
+    def _resolve_todo_file(agent_name: str | None) -> Path:
+        """Legacy resolver — returns a Path (may be dir or md file).
+
+        Kept for backwards compatibility. New code should use _resolve_todo_dir.
+        """
+        result = _resolve_todo_dir(agent_name)
+        if result is None:
+            return Path("/opt/fosterbot-home/TODOs.md")
+        return result
+
+    def _parse_todo_file(todo_path: Path) -> dict | None:
+        """Parse a single TODO file with DUE:/LABELS: header format.
+
+        Returns a dict with description, due, labels, details, notes keys,
+        or None if the file cannot be parsed.
+        """
+        import re as _re
+
+        try:
+            lines = todo_path.read_text().splitlines()
+        except Exception:
+            return None
+
+        due = None
+        labels = []
+        detail_start = 0
+
+        for idx, line in enumerate(lines):
+            if line.startswith("DUE:"):
+                due = line[4:].strip()
+                detail_start = idx + 1
+            elif line.startswith("LABELS:"):
+                raw = line[7:].strip()
+                # Parse {LABEL1},{LABEL2} format
+                labels = [
+                    l.strip().strip("{}")
+                    for l in _re.split(r"[,\s]+", raw)
+                    if l.strip().strip("{}")
+                ]
+                detail_start = idx + 1
+            else:
+                break  # headers must be contiguous at top of file
+
+        # Everything after the headers is the details body
+        details_lines = lines[detail_start:]
+        # Strip leading blank line if present
+        while details_lines and not details_lines[0].strip():
+            details_lines = details_lines[1:]
+        details = "\n".join(details_lines).strip()
+
+        return {
+            "description": todo_path.name,
+            "due": due,
+            "labels": labels,
+            "notes": [],
+            "details": details,
+        }
+
+    def _parse_todos_from_dir(todo_dir: Path, limit: int = 100) -> list:
+        """Read TODOs from the folder-based structure (ACTIVE/ subfolder)."""
+        active_dir = todo_dir / "ACTIVE"
+        if not active_dir.is_dir():
+            return []
+        todos = []
+        for entry in sorted(active_dir.iterdir()):
+            if entry.is_file():
+                parsed = _parse_todo_file(entry)
+                if parsed:
+                    todos.append(parsed)
+                    if len(todos) >= limit:
+                        break
+        return todos
+
+    def _parse_todos_from_md(todo_file: Path, limit: int = 100) -> list:
+        """Parse active TODOs from the markdown file, return up to `limit`.
+
+        Supports both the legacy flat TODOs.md format and the new folder-based
+        structure (when todo_file is actually a directory).
+        """
+        # New folder-based structure
+        if todo_file.is_dir():
+            return _parse_todos_from_dir(todo_file, limit)
+
+        if not todo_file.exists():
+            return []
+        todos = []
+        import re
+
+        current_todo = None
+        in_details = False
+        details_lines = []
+
+        with open(todo_file) as f:
+            for line in f:
+                raw_line = line.rstrip("\n")
+                stripped = raw_line.strip()
+
+                # Check for TODO line
+                todo_line = stripped
+                if todo_line.startswith("- "):
+                    todo_line = todo_line[2:]
+
+                if (
+                    todo_line.startswith("[ ]")
+                    or todo_line.startswith("[X]")
+                    or todo_line.startswith("[x]")
+                ):
+                    # Save previous todo with details if exists
+                    if current_todo:
+                        if details_lines:
+                            current_todo["details"] = "\n".join(details_lines).strip()
+                        todos.append(current_todo)
+                        if len(todos) >= limit:
+                            current_todo = None
+                            break
+
+                    # Only keep active (non-completed) todos for this list
+                    completed = todo_line.startswith("[X]") or todo_line.startswith(
+                        "[x]"
+                    )
+
+                    if not completed:
+                        content = re.sub(r"^\[.\]\s+", "", todo_line)
+                        due = None
+                        due_match = re.search(r"\(due ([^)]+)\)", content)
+                        if due_match:
+                            due = due_match.group(1)
+                        labels = []
+                        label_match = re.search(r"\{([^}]+)\}", content)
+                        if label_match:
+                            labels = [
+                                l.strip() for l in label_match.group(1).split(",")
+                            ]
+                        # Remove due and label markers from description
+                        content = re.sub(r"\s*\(due [^)]+\)", "", content)
+                        content = re.sub(r"\s*\{[^}]+\}", "", content).strip()
+                        current_todo = {
+                            "description": content,
+                            "due": due,
+                            "labels": labels,
+                            "notes": [],
+                            "details": "",
+                        }
+                        in_details = False
+                        details_lines = []
+                    else:
+                        # Completed todo — clear state without adding to active list
+                        current_todo = None
+                        in_details = False
+                        details_lines = []
+
+                elif current_todo:
+                    # Check for Details section (inline bold format: **Details**)
+                    if stripped == "**Details**":
+                        in_details = True
+                        details_lines = []
+                    elif (
+                        in_details
+                        and stripped
+                        and not stripped.startswith("## ")
+                        and not stripped.startswith("- [")
+                    ):
+                        # Collect details until we hit a top-level section (## ) or a todo item
+                        details_lines.append(raw_line)
+                    elif raw_line.startswith("    ") and not in_details:
+                        # This is a note for the current TODO
+                        current_todo["notes"].append(raw_line.strip())
+
+        if current_todo:
+            if details_lines:
+                current_todo["details"] = "\n".join(details_lines).strip()
+            todos.append(current_todo)
+
+        return todos[:limit]
+
+    @app.get("/api/v1/todos")
+    async def get_todos(request: Request, agent: str = None, limit: int = 100):
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        limit = min(max(1, limit), 200)
+        todo_path = _resolve_todo_file(agent)
+        todos = _parse_todos_from_md(todo_path, limit)
+        return {
+            "todos": todos,
+            "count": len(todos),
+            "agent": agent or "default",
+            "file": str(todo_path),
+        }
+
+    @app.post("/api/v1/todos")
+    async def create_todo(request: Request):
+        """Create a new TODO in the ACTIVE/ folder."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            return {"success": False, "error": "Invalid JSON body"}
+
+        title = (body.get("title") or "").strip()
+        due_date = (body.get("due_date") or "").strip()
+        labels = body.get("labels") or []
+        details = (body.get("details") or "").strip()
+        agent = body.get("agent")
+
+        if not title:
+            return {"success": False, "error": "Title is required"}
+
+        # Reject path traversal and dangerous chars
+        if (
+            "/" in title
+            or "\\" in title
+            or "\0" in title
+            or ".." in title
+            or "\n" in title
+            or "\r" in title
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Invalid title: must not contain"
+                    " path separators, traversal"
+                    " sequences, or control characters"
+                ),
+            }
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {
+                "success": False,
+                "error": "Folder-based TODO dir not found",
+            }
+
+        active_dir = todo_path / "ACTIVE"
+        active_dir.mkdir(parents=True, exist_ok=True)
+
+        target = active_dir / title
+        # Belt-and-suspenders path traversal check
+        resolved = target.resolve()
+        parent = active_dir.resolve()
+        if not resolved.is_relative_to(parent):
+            return {
+                "success": False,
+                "error": "Invalid title: path traversal",
+            }
+
+        if target.exists():
+            return {
+                "success": False,
+                "error": f"TODO {title!r} already exists",
+            }
+
+        # Build file content with headers
+        lines = []
+        if due_date:
+            lines.append(f"DUE: {due_date}")
+        if labels:
+            fmt = ",".join(f"{{{lb}}}" for lb in labels)
+            lines.append(f"LABELS: {fmt}")
+        if details:
+            if lines:
+                lines.append("")
+            lines.append(details)
+
+        file_content = "\n".join(lines) + "\n" if lines else ""
+        target.write_text(file_content)
+
+        return {
+            "success": True,
+            "todo": title,
+            "file": str(target),
+        }
+
+    @app.post("/api/v1/todos/{todo_title}/complete")
+    async def complete_todo(request: Request, todo_title: str):
+        """Mark a TODO as complete by moving it from ACTIVE/ to COMPLETED/."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            body = await request.json()
+            agent = body.get("agent")
+        except Exception:
+            agent = None
+
+        todo_path = _resolve_todo_file(agent)
+        if not todo_path.is_dir():
+            return {"success": False, "error": "Folder-based TODO structure not found"}
+
+        active_dir = todo_path / "ACTIVE"
+        completed_dir = todo_path / "COMPLETED"
+        completed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find the file (exact match or partial)
+        match = None
+        for entry in active_dir.iterdir():
+            if entry.is_file() and (
+                entry.name == todo_title or todo_title in entry.name
+            ):
+                match = entry
+                break
+
+        if not match:
+            return {
+                "success": False,
+                "error": f"TODO '{todo_title}' not found in ACTIVE/",
+            }
+
+        dest = completed_dir / match.name
+        match.rename(dest)
+        return {"success": True, "moved": str(dest), "todo": match.name}
+
+    @app.patch("/api/v1/todos/{todo_title}")
+    async def update_todo_details(request: Request, todo_title: str):
+        """Update a TODO's label, due date, and/or details."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        try:
+            body = await request.json()
+            details = body.get("details")
+            new_label = body.get("label")
+            new_due = body.get("due_date")
+            agent = body.get("agent")
+
+            todo_path = _resolve_todo_file(agent)
+
+            # --- New folder-based structure ---
+            if todo_path.is_dir():
+                active_dir = todo_path / "ACTIVE"
+                match = None
+                for entry in active_dir.iterdir():
+                    if entry.is_file() and (
+                        entry.name == todo_title or todo_title in entry.name
+                    ):
+                        match = entry
+                        break
+                if not match:
+                    return {
+                        "success": False,
+                        "error": f"TODO '{todo_title}' not found in ACTIVE/",
+                    }
+
+                # Parse existing file content
+                existing = match.read_text().splitlines()
+                header_lines = []
+                body_lines = []
+                in_body = False
+                for line in existing:
+                    if not in_body and (
+                        line.startswith("DUE:") or line.startswith("LABELS:")
+                    ):
+                        header_lines.append(line)
+                    else:
+                        in_body = True
+                        body_lines.append(line)
+
+                # Update DUE: header if new_due provided
+                if new_due is not None:
+                    header_lines = [h for h in header_lines if not h.startswith("DUE:")]
+                    if new_due.strip():
+                        header_lines.insert(0, f"DUE: {new_due.strip()}")
+
+                # Update details body if provided
+                if details is not None:
+                    body_lines = ["", details.strip()] if details.strip() else []
+
+                new_content = "\n".join(header_lines)
+                if body_lines:
+                    stripped_body = "\n".join(body_lines).strip()
+                    if stripped_body:
+                        new_content += "\n\n" + stripped_body
+                match.write_text(new_content + "\n")
+
+                # Rename file if label changed
+                result_name = match.name
+                if new_label and new_label.strip():
+                    clean = new_label.strip()
+                    # Reject path traversal and dangerous chars
+                    if (
+                        "/" in clean
+                        or "\\" in clean
+                        or "\0" in clean
+                        or ".." in clean
+                        or "\n" in clean
+                        or "\r" in clean
+                    ):
+                        return {
+                            "success": False,
+                            "error": (
+                                "Invalid label: must not"
+                                " contain path separators,"
+                                " traversal sequences,"
+                                " or control characters"
+                            ),
+                        }
+                    new_path = active_dir / clean
+                    # Belt-and-suspenders: verify resolved
+                    # path is inside active_dir
+                    resolved = new_path.resolve()
+                    parent = active_dir.resolve()
+                    if not resolved.is_relative_to(parent):
+                        return {
+                            "success": False,
+                            "error": "Invalid label:" " path traversal detected",
+                        }
+                    if clean == match.name:
+                        pass  # no rename needed
+                    elif new_path.exists():
+                        lbl = clean
+                        return {
+                            "success": False,
+                            "error": f"A TODO named" f" {lbl!r} already exists",
+                        }
+                    else:
+                        match.rename(new_path)
+                    result_name = clean
+
+                return {
+                    "success": True,
+                    "updated": True,
+                    "todo": result_name,
+                }
+
+            # --- Legacy flat-file structure ---
+            todo_file = todo_path
+            if not todo_file.exists():
+                return {"success": False, "error": "TODO file not found"}
+
+            content = todo_file.read_text()
+            lines = content.split("\n")
+
+            updated_lines = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                updated_lines.append(line)
+
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    stripped = stripped[2:]
+
+                if (
+                    stripped.startswith("[ ]") or stripped.startswith("[X]")
+                ) and todo_title in line:
+                    i += 1
+
+                    while i < len(lines) and lines[i].startswith("    "):
+                        updated_lines.append(lines[i])
+                        i += 1
+
+                    if i < len(lines) and (
+                        lines[i].strip() == "### Details"
+                        or lines[i].strip() == "## Details"
+                    ):
+                        i += 1
+                        while (
+                            i < len(lines) and lines[i] and not lines[i].startswith("#")
+                        ):
+                            i += 1
+
+                    if details and details.strip():
+                        updated_lines.append("")
+                        updated_lines.append("### Details")
+                        updated_lines.append("")
+                        updated_lines.extend(details.split("\n"))
+
+                    continue
+
+                i += 1
+
+            todo_file.write_text("\n".join(updated_lines))
+            return {"success": True, "updated": True, "todo": todo_title}
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+
+    # --- Wee Canvas ───────────────────────────────────────────────────────────
+    # In-memory canvas session state: session_id → {components, connections, action_watchers, pending_actions, name, created_at, last_activity}
+    _canvas_sessions: dict = {}
+    _CANVAS_PERSIST_DIR = Path(SCRIPT_BASE_DIR) / ".canvas-sessions"
+    _CANVAS_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+    _CANVAS_SESSION_TIMEOUT = (
+        int(os.environ.get("CANVAS_SESSION_TIMEOUT_MINUTES", "30")) * 60
+    )
+    _canvas_cleanup_started = False
+
+    def _get_canvas_session(session_id: str) -> dict:
+        now = time.time()
+        if session_id not in _canvas_sessions:
+            _canvas_sessions[session_id] = {
+                "components": [],
+                "connections": set(),
+                "action_watchers": set(),
+                "pending_actions": [],
+                "name": None,
+                "created_at": now,
+                "last_activity": now,
+            }
+        return _canvas_sessions[session_id]
+
+    def _canvas_touch(sess: dict):
+        sess["last_activity"] = time.time()
+
+    def _canvas_persist_to_disk(session_id: str, sess: dict, closed_at: float = None):
+        """Save session state to disk as JSON."""
+        data = {
+            "session_id": session_id,
+            "name": sess.get("name"),
+            "components": sess.get("components", []),
+            "created_at": sess.get("created_at", time.time()),
+            "last_activity": sess.get("last_activity", time.time()),
+            "closed_at": closed_at or time.time(),
+        }
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        path.write_text(json.dumps(data, default=str), encoding="utf-8")
+
+    def _canvas_load_from_disk(session_id: str) -> dict | None:
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _canvas_list_persisted() -> list[dict]:
+        """List all persisted (closed) sessions from disk."""
+        results = []
+        for f in _CANVAS_PERSIST_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                sid = data.get("session_id", f.stem)
+                # Skip sessions that are currently active in memory
+                if sid not in _canvas_sessions:
+                    results.append(data)
+            except Exception:
+                continue
+        return results
+
+    def _canvas_delete_persisted(session_id: str):
+        path = _CANVAS_PERSIST_DIR / f"{session_id}.json"
+        if path.exists():
+            path.unlink()
+
+    async def _canvas_cleanup_loop():
+        """Background task: every 5 min, expire idle sessions to disk."""
+        while True:
+            await asyncio.sleep(300)
+            try:
+                now = time.time()
+                to_expire = []
+                for sid, sess in list(_canvas_sessions.items()):
+                    if (
+                        not sess["connections"]
+                        and (now - sess["last_activity"]) > _CANVAS_SESSION_TIMEOUT
+                    ):
+                        to_expire.append(sid)
+                for sid in to_expire:
+                    sess = _canvas_sessions.pop(sid, None)
+                    if sess and sess.get("components"):
+                        _canvas_persist_to_disk(sid, sess)
+            except Exception:
+                pass
+
+    async def _canvas_broadcast(session: dict, skip_ws, message: dict):
+        payload = json.dumps(message)
+        for conn in list(session["connections"]):
+            if conn is not skip_ws:
+                try:
+                    await conn.send_text(payload)
+                except Exception:
+                    session["connections"].discard(conn)
+                    session["action_watchers"].discard(conn)
+
+    def _canvas_apply_update(components: list, node_id: str, changes: dict) -> bool:
+        for comp in components:
+            if isinstance(comp, dict):
+                if comp.get("id") == node_id:
+                    comp.update(changes)
+                    return True
+                for key in (
+                    "children",
+                    "items",
+                    "columns",
+                    "steps",
+                    "rows",
+                    "metrics",
+                    "fields",
+                ):
+                    children = comp.get(key, [])
+                    if isinstance(children, list) and _canvas_apply_update(
+                        children, node_id, changes
+                    ):
+                        return True
+        return False
+
+    @app.websocket("/canvas/ws")
+    async def canvas_websocket(websocket: WebSocket, session: str = "default"):
+        nonlocal _canvas_cleanup_started
+        if not _canvas_cleanup_started:
+            _canvas_cleanup_started = True
+            asyncio.create_task(_canvas_cleanup_loop())
+
+        await websocket.accept()
+        sess = _get_canvas_session(session)
+        sess["connections"].add(websocket)
+        _canvas_touch(sess)
+
+        # Restore current state for new connections
+        if sess["components"]:
+            try:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "restore",
+                            "components": sess["components"],
+                            "session_id": session,
+                        }
+                    )
+                )
+            except Exception:
+                pass
+
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                _canvas_touch(sess)
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "render":
+                    sess["components"] = data.get("components", [])
+                    await _canvas_broadcast(
+                        sess,
+                        websocket,
+                        {
+                            "type": "render",
+                            "components": sess["components"],
+                            "session_id": session,
+                        },
+                    )
+
+                elif msg_type == "update":
+                    node_id = data.get("node_id")
+                    changes = data.get("changes", {})
+                    _canvas_apply_update(sess["components"], node_id, changes)
+                    await _canvas_broadcast(
+                        sess,
+                        websocket,
+                        {
+                            "type": "update",
+                            "node_id": node_id,
+                            "changes": changes,
+                        },
+                    )
+
+                elif msg_type == "clear":
+                    sess["components"] = []
+                    await _canvas_broadcast(
+                        sess,
+                        websocket,
+                        {
+                            "type": "clear",
+                            "session_id": session,
+                        },
+                    )
+
+                elif msg_type == "action":
+                    sess["pending_actions"].append(data)
+                    for watcher in list(sess["action_watchers"]):
+                        try:
+                            await watcher.send_text(json.dumps(data))
+                        except Exception:
+                            sess["action_watchers"].discard(watcher)
+
+                elif msg_type == "subscribe_actions":
+                    sess["action_watchers"].add(websocket)
+                    for action in list(sess["pending_actions"]):
+                        try:
+                            await websocket.send_text(json.dumps(action))
+                        except Exception:
+                            break
+                    sess["pending_actions"].clear()
+
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            sess["connections"].discard(websocket)
+            sess["action_watchers"].discard(websocket)
+            _canvas_touch(sess)
+            # Clean up empty sessions with no components
+            if not sess["connections"] and not sess["components"]:
+                _canvas_sessions.pop(session, None)
+
+    @app.get("/api/v1/canvas/sessions")
+    async def get_canvas_sessions():
+        """Return list of active and closed canvas sessions."""
+        result = []
+        for sid, sess in _canvas_sessions.items():
+            result.append(
+                {
+                    "session_id": sid,
+                    "name": sess.get("name"),
+                    "component_count": len(sess["components"]),
+                    "connection_count": len(sess["connections"]),
+                    "created_at": sess.get("created_at"),
+                    "last_activity": sess.get("last_activity"),
+                    "status": "active",
+                }
+            )
+        # Include persisted (closed) sessions from disk
+        for data in _canvas_list_persisted():
+            result.append(
+                {
+                    "session_id": data["session_id"],
+                    "name": data.get("name"),
+                    "component_count": len(data.get("components", [])),
+                    "connection_count": 0,
+                    "created_at": data.get("created_at"),
+                    "last_activity": data.get("last_activity"),
+                    "closed_at": data.get("closed_at"),
+                    "status": "closed",
+                }
+            )
+        return {"sessions": result}
+
+    @app.patch("/api/v1/canvas/sessions/{session_id}/name")
+    async def set_canvas_session_name(session_id: str, request: Request):
+        """Set or update the name of a canvas session."""
+        body = await request.json()
+        name = body.get("name", "").strip() or None
+        if session_id in _canvas_sessions:
+            _canvas_sessions[session_id]["name"] = name
+            return {"success": True, "session_id": session_id, "name": name}
+        # Check if it's a persisted session
+        data = _canvas_load_from_disk(session_id)
+        if data:
+            data["name"] = name
+            (_CANVAS_PERSIST_DIR / f"{session_id}.json").write_text(
+                json.dumps(data, default=str), encoding="utf-8"
+            )
+            return {"success": True, "session_id": session_id, "name": name}
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    @app.post("/api/v1/canvas/sessions/{session_id}/restore")
+    async def restore_canvas_session(session_id: str):
+        """Restore a persisted session back into memory."""
+        data = _canvas_load_from_disk(session_id)
+        if not data:
+            if session_id in _canvas_sessions:
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "status": "already_active",
+                }
+            raise HTTPException(status_code=404, detail="Session not found on disk")
+        # Re-create in-memory session
+        _canvas_sessions[session_id] = {
+            "components": data.get("components", []),
+            "connections": set(),
+            "action_watchers": set(),
+            "pending_actions": [],
+            "name": data.get("name"),
+            "created_at": data.get("created_at", time.time()),
+            "last_activity": time.time(),
+        }
+        _canvas_delete_persisted(session_id)
+        return {
+            "success": True,
+            "session_id": session_id,
+            "name": data.get("name"),
+            "status": "restored",
+        }
+
+    @app.post("/api/v1/canvas/sessions/{session_id}/close")
+    async def close_canvas_session(session_id: str):
+        """Explicitly close a session — persist to disk and remove from memory."""
+        sess = _canvas_sessions.pop(session_id, None)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if sess.get("components"):
+            _canvas_persist_to_disk(session_id, sess)
+        # Close all WS connections
+        for conn in list(sess.get("connections", set())):
+            try:
+                await conn.close()
+            except Exception:
+                pass
+        return {"success": True, "session_id": session_id, "status": "closed"}
+
+    @app.get("/api/v1/canvas")
+    async def get_canvas_summary():
+        """Return summary of all canvas sessions."""
+        sessions = {}
+        for sid, sess in _canvas_sessions.items():
+            sessions[sid] = {
+                "components": sess["components"],
+                "connection_count": len(sess["connections"]),
+                "name": sess.get("name"),
+            }
+        return {"sessions": sessions, "count": len(_canvas_sessions)}
+
+    # ── Skills Panel API ──────────────────────────────────────────────────────
+
+    from skill_manager import (
+        apply_update,
+        check_update,
+        delete_origin,
+        delete_skill,
+        get_origin,
+        get_skill,
+        scan_agent_skills,
+        scan_skills,
+        set_origin,
+    )
+
+    @app.get("/api/v1/skills")
+    async def list_skills(agent: Optional[str] = None):
+        """Return installed skills, optionally scoped to an agent.
+
+        If ``?agent=name`` is provided, returns only skills found under
+        that agent's ``.github/skills/`` and ``.claude/skills/`` directories.
+        Otherwise returns all globally installed skills.
+        """
+        if agent:
+            agent_info = session_mgr.AGENTS.get(agent)
+            if not agent_info:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Agent '{agent}' not found",
+                )
+            agent_path = agent_info.get("path", "")
+            if not agent_path:
+                return {"skills": [], "count": 0, "agent": agent}
+            skills = scan_agent_skills(agent_path)
+            return {"skills": skills, "count": len(skills), "agent": agent}
+        skills = scan_skills()
+        return {"skills": skills, "count": len(skills)}
+
+    @app.get("/api/v1/skills/{skill_key:path}")
+    async def get_skill_detail(skill_key: str):
+        """Return detailed info for a single skill."""
+        skill = get_skill(skill_key)
+        if not skill:
+            raise HTTPException(
+                status_code=404, detail=f"Skill '{skill_key}' not found"
+            )
+        return skill
+
+    @app.put("/api/v1/skills/{skill_key:path}/origin")
+    async def update_skill_origin(skill_key: str, request: Request):
+        """Set or update origin metadata for a skill."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        # Validate required fields
+        origin_type = body.get("origin_type", "")
+        if origin_type not in ("git_repo", "website", "local", "unknown"):
+            raise HTTPException(
+                status_code=400,
+                detail="origin_type must be one of: git_repo, website, local, unknown",
+            )
+        result = set_origin(skill_key, body)
+        return {"success": True, "origin": result}
+
+    @app.delete("/api/v1/skills/{skill_key:path}/origin")
+    async def remove_skill_origin(skill_key: str, request: Request):
+        """Remove origin metadata for a skill."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if delete_origin(skill_key):
+            return {"success": True}
+        raise HTTPException(
+            status_code=404, detail="No origin metadata found for this skill"
+        )
+
+    @app.delete("/api/v1/skills/{skill_key:path}")
+    async def remove_skill(skill_key: str, request: Request):
+        """Delete a skill from disk (symlink or directory)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = delete_skill(skill_key)
+        if not result["success"]:
+            raise HTTPException(status_code=404, detail=result["message"])
+        return result
+
+    @app.post("/api/v1/skills/{skill_key:path}/check-update")
+    async def check_skill_update(skill_key: str, request: Request):
+        """Check if updates are available for a skill from its origin."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        result = check_update(skill_key)
+        return result
+
+    @app.post("/api/v1/skills/{skill_key:path}/update")
+    async def trigger_skill_update(skill_key: str, request: Request):
+        """Dispatch a background task to update a skill from its origin.
+
+        This uses the orchestrator background task system so the update
+        is visible in the WebUI Tasks tab.
+        """
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        origin = get_origin(skill_key)
+        if not origin:
+            raise HTTPException(
+                status_code=400, detail="No origin metadata — cannot update"
+            )
+
+        origin_type = origin.get("origin_type", "")
+        if origin_type == "website":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Website-sourced skills must be updated manually. Visit: {origin.get('origin_url', '')}",
+            )
+
+        # Build a prompt for the background task agent
+        skill = get_skill(skill_key)
+        skill_name = skill["name"] if skill else skill_key
+        skill_path = skill["path"] if skill else "unknown"
+
+        prompt = (
+            f"Update the skill '{skill_name}' (key: {skill_key}) from its git origin.\n"
+            f"Local path: {skill_path}\n"
+            f"Origin URL: {origin.get('origin_url', '')}\n"
+            f"Origin path in repo: {origin.get('origin_path', '')}\n\n"
+            f"Steps:\n"
+            f"1. Run: python3 -c \"import sys; sys.path.insert(0, '/opt/n8n-copilot-shim-dev'); "
+            f"from skill_manager import apply_update; import json; "
+            f"r = apply_update('{skill_key}'); print(json.dumps(r, indent=2))\"\n"
+            f"2. Report the result — files changed, any errors, and whether a backup was created.\n"
+            f"3. If the update succeeded, confirm the skill is still valid."
+        )
+
+        # Dispatch as background task
+        bg_body = {
+            "prompt": prompt,
+            "agent": "orchestrator",
+            "runtime": "copilot",
+            "model": "claude-haiku-4.5",
+            "timeout": 600,
+        }
+
+        # Use internal background task creation
+        channel = user.get("channel", "api")
+        identity = user.get("identity", "")
+
+        if bg_task_mgr:
+            import threading
+            from uuid import uuid4
+
+            task_id = f"skill_update_{str(uuid4())[:8]}"
+            session_id = f"skill_{str(uuid4())[:8]}"
+
+            task_record = bg_task_mgr.create_task(
+                task_id=task_id,
+                session_id=session_id,
+                user_identity=identity,
+                channel=channel,
+                agent="orchestrator",
+                runtime="copilot",
+                model="claude-haiku-4.5",
+                prompt=prompt,
+                timeout=600,
+            )
+
+            def _run_update():
+                try:
+                    result = apply_update(skill_key)
+                    bg_task_mgr.complete_task(task_id, json.dumps(result))
+                except Exception as e:
+                    bg_task_mgr.fail_task(task_id, str(e))
+
+            t = threading.Thread(target=_run_update, daemon=True)
+            t.start()
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "message": f"Update task dispatched for '{skill_name}'",
+            }
+        else:
+            # Fallback: run synchronously
+            result = apply_update(skill_key)
+            return {"success": result.get("success", False), "result": result}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ─── Secrets Manager API (F019) ──────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    _SECRET_TOOL_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "secret_tool", "secret_tool.py"
+    )
+
+    @app.get("/api/v1/secrets")
+    async def list_secrets(request: Request):
+        """Return stored secret names (never values). Authenticated."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "list",
+                "--backend",
+                "file",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                detail = (
+                    stdout.decode().strip()
+                    or stderr.decode().strip()
+                    or "secret-tool list failed"
+                )
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+            output = stdout.decode().strip()
+            if not output:
+                names = []
+            else:
+                try:
+                    data = json.loads(output)
+                    names = data if isinstance(data, list) else data.get("names", [])
+                except json.JSONDecodeError:
+                    names = [ln.strip() for ln in output.splitlines() if ln.strip()]
+            return {"secrets": names, "count": len(names)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/v1/secrets")
+    async def store_secret(request: Request):
+        """Store a secret (name + value). Authenticated. Never returns the value."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        value = body.get("value", "")
+        if not name:
+            raise HTTPException(status_code=400, detail="Secret name is required")
+        if not value:
+            raise HTTPException(status_code=400, detail="Secret value is required")
+        # Validate name: alphanumeric, hyphens, underscores, dots only
+
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            raise HTTPException(
+                status_code=400,
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+            )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "set",
+                "--name",
+                name,
+                "--value-stdin",
+                "--backend",
+                "file",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(input=f"{value}\n".encode())
+            if proc.returncode != 0:
+                detail = (
+                    stdout.decode().strip()
+                    or stderr.decode().strip()
+                    or "secret-tool set failed"
+                )
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+            result = json.loads(stdout.decode())
+            # Never return the value
+            return {
+                "status": result.get("status", "success"),
+                "action": result.get("action", "created"),
+                "name": name,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/api/v1/secrets/{name}")
+    async def delete_secret(name: str, request: Request):
+        """Delete a secret by name. Authenticated."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            raise HTTPException(
+                status_code=400,
+                detail="Secret name may only contain letters, digits, hyphens, underscores, and dots",
+            )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "delete",
+                "--name",
+                name,
+                "--backend",
+                "file",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode().strip()
+            if proc.returncode != 0:
+                detail = (
+                    output or stderr.decode().strip() or "secret-tool delete failed"
+                )
+                try:
+                    err = json.loads(detail)
+                    detail = err.get("message", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=404, detail=detail)
+            result = json.loads(output)
+            return {
+                "status": result.get("status", "success"),
+                "action": result.get("action", "deleted"),
+                "name": name,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Keyring Status & Unlock API (Issue #93) ---
+
+    @app.get("/api/v1/secrets/keyring-status")
+    async def keyring_status(request: Request):
+        """Return the current keyring / secret-store lock status."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode().strip()
+            if output:
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    pass
+            return {
+                "status": "unavailable",
+                "message": output or stderr.decode().strip() or "Unknown error",
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @app.post("/api/v1/secrets/keyring-unlock")
+    async def keyring_unlock(request: Request):
+        """Attempt to unlock the keyring with a user-supplied password.
+
+        The password is passed to the secret_tool subprocess via stdin
+        and is never logged or stored.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        password = body.get("password", "")
+        if not password:
+            raise HTTPException(status_code=400, detail="password is required")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                _SECRET_TOOL_PATH,
+                "unlock",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(input=f"{password}\n".encode())
+            output = stdout.decode().strip()
+            if proc.returncode == 0 and output:
+                try:
+                    result = json.loads(output)
+                    return result
+                except json.JSONDecodeError:
+                    pass
+                return {"status": "success"}
+            detail = output or stderr.decode().strip() or "Unlock failed"
+            try:
+                err = json.loads(detail)
+                detail = err.get("message", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=422, detail=detail)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Session Permissions API ---
+    @app.patch("/api/v1/sessions/{session_id}/settings")
+    async def update_session_settings(session_id: str, request: Request):
+        """F027: Update session settings (e.g. silent_mode toggle)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        body = await request.json()
+        _allowed = {"silent_mode"}
+        updated = {}
+        for field in _allowed:
+            if field in body:
+                val = body[field]
+                if field == "silent_mode" and not isinstance(val, bool):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="silent_mode must be boolean",
+                    )
+                session_mgr.update_session_field(session_id, field, val)
+                updated[field] = val
+
+        if not updated:
+            raise HTTPException(
+                status_code=422,
+                detail="No valid settings fields provided",
+            )
+
+        return {"updated": updated, "session_id": session_id}
+
+    @app.get("/api/v1/sessions/{session_id}/permissions")
+    async def get_session_permissions(session_id: str, request: Request):
+        """Return current session permissions (inherited from agent or overridden)."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        perms = data.get("permissions")
+        agent_name = data.get("agent", get_default_agent())
+        agent_cfg = session_mgr.AGENTS.get(agent_name, {})
+        agent_default_perms = agent_cfg.get(
+            "permissions",
+            {
+                "mode": "restricted",
+                "directories": {"allow_read": [], "allow_write": [], "deny": []},
+                "tools": {"allow": ["*"], "deny": []},
+                "network": {"allow_urls": ["*"], "deny_urls": []},
+                "mcp": {"allow": ["*"], "deny": []},
+            },
+        )
+
+        return {
+            "session_id": session_id,
+            "permissions": perms or agent_default_perms,
+            "agent_default_permissions": agent_default_perms,
+            "is_overridden": perms is not None and perms != agent_default_perms,
+        }
+
+    @app.put("/api/v1/sessions/{session_id}/permissions")
+    async def set_session_permissions(session_id: str, request: Request):
+        """Override session-level permissions."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        body = await request.json()
+        valid_modes = ("elevated", "restricted", "sandboxed")
+
+        # Accept either a full permissions object or just a mode string
+        if isinstance(body, dict) and "mode" in body:
+            # If just mode is provided, build full permissions from agent default + new mode
+            new_mode = body["mode"]
+            if new_mode not in valid_modes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid mode. Must be one of: {valid_modes}",
+                )
+
+            # Get current permissions and update mode
+            current_perms = data.get("permissions") or {}
+            if not current_perms:
+                agent_name = data.get("agent", get_default_agent())
+                agent_cfg = session_mgr.AGENTS.get(agent_name, {})
+                current_perms = agent_cfg.get(
+                    "permissions",
+                    {
+                        "mode": "restricted",
+                        "directories": {
+                            "allow_read": [],
+                            "allow_write": [],
+                            "deny": [],
+                        },
+                        "tools": {"allow": ["*"], "deny": []},
+                        "network": {"allow_urls": ["*"], "deny_urls": []},
+                        "mcp": {"allow": ["*"], "deny": []},
+                    },
+                )
+            current_perms["mode"] = new_mode
+            session_mgr.update_session_field(session_id, "permissions", current_perms)
+            return {"updated": True, "permissions": current_perms}
+
+        elif isinstance(body, dict) and "permissions" in body:
+            # Full permissions object provided
+            perms = body["permissions"]
+            if not isinstance(perms, dict) or "mode" not in perms:
+                raise HTTPException(
+                    status_code=400,
+                    detail="permissions must be an object with at least a 'mode' key",
+                )
+            if perms["mode"] not in valid_modes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid mode. Must be one of: {valid_modes}",
+                )
+            session_mgr.update_session_field(session_id, "permissions", perms)
+            return {"updated": True, "permissions": perms}
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must include 'mode' or 'permissions'",
+            )
+
+    @app.get("/api/v1/permissions/templates")
+    async def get_permission_templates(request: Request):
+        """Return available permission templates."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        return {
+            "templates": [
+                {
+                    "mode": "elevated",
+                    "label": "Full Access",
+                    "description": "Agent has unrestricted access to all tools, directories, and network",
+                    "icon": "⚡",
+                },
+                {
+                    "mode": "restricted",
+                    "label": "Restricted",
+                    "description": "Agent uses curated tool and directory allowlists only",
+                    "icon": "🔒",
+                },
+                {
+                    "mode": "sandboxed",
+                    "label": "Sandboxed",
+                    "description": "Agent has no external access — fully isolated environment",
+                    "icon": "🏖️",
+                },
+            ]
+        }
+
+    # --- .env File Editor API ---
+    _env_file_path = Path(SCRIPT_BASE_DIR) / ".env"
+
+    @app.get("/api/v1/settings/env")
+    async def get_env_file(request: Request):
+        """Return .env file contents for editing."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            content = _env_file_path.read_text() if _env_file_path.exists() else ""
+            return {
+                "content": content,
+                "path": str(_env_file_path),
+                "exists": _env_file_path.exists(),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read .env: {e}")
+
+    @app.put("/api/v1/settings/env")
+    async def put_env_file(request: Request):
+        """Save updated .env file contents."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        content = body.get("content", "")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="content must be a string")
+
+        try:
+            # Create backup before overwrite
+            if _env_file_path.exists():
+                backup_path = Path(str(_env_file_path) + ".bak")
+                shutil.copy2(_env_file_path, backup_path)
+
+            _env_file_path.write_text(content)
+            return {
+                "saved": True,
+                "path": str(_env_file_path),
+                "warning": "Changes require a service restart to take effect.",
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
+
+    @app.post("/api/v1/settings/restart-services")
+    async def restart_services(request: Request):
+        """Restart dev services (agent-manager-api-dev, etc.)."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        import subprocess
+
+        services = [
+            "agent-manager-api-dev.service",
+            "task-scheduler-executor-dev.service",
+            "webex-connector-dev.service",
+            "telegram-bot-listener-dev.service",
+        ]
+        results = {}
+        for svc in services:
+            try:
+                proc = subprocess.run(
+                    ["systemctl", "restart", svc],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                results[svc] = (
+                    "restarted"
+                    if proc.returncode == 0
+                    else f"failed: {proc.stderr.strip()}"
+                )
+            except Exception as e:
+                results[svc] = f"error: {e}"
+        return {
+            "results": results,
+            "note": "Services are restarting. The API will briefly disconnect.",
+        }
+
+    # --- Settings & Logs API ──────────────────────────────────────────────────
+
+    _agents_json_path = Path(SCRIPT_BASE_DIR) / "agents.json"
+
+    @app.get("/api/v1/agents-config")
+    async def get_agents_config(request: Request):
+        """Return current agents.json content."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            content = _agents_json_path.read_text()
+            return JSONResponse(content=json.loads(content))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        except json.JSONDecodeError as exc:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "_raw": _agents_json_path.read_text(),
+                    "_parse_error": str(exc),
+                },
+            )
+
+    @app.put("/api/v1/agents-config")
+    async def put_agents_config(request: Request):
+        """Save updated agents.json after validation."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.body()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
+        if not isinstance(data, dict) or "agents" not in data:
+            raise HTTPException(
+                status_code=400, detail="Payload must have an 'agents' key"
+            )
+        if not isinstance(data["agents"], list):
+            raise HTTPException(status_code=400, detail="'agents' must be an array")
+        for idx, ag in enumerate(data["agents"]):
+            if not isinstance(ag, dict):
+                raise HTTPException(
+                    status_code=400, detail=f"agents[{idx}] must be an object"
+                )
+            if "name" not in ag or "path" not in ag:
+                raise HTTPException(
+                    status_code=400, detail=f"agents[{idx}] requires 'name' and 'path'"
+                )
+            mc = ag.get("max_concurrent")
+            if mc is not None:
+                if not isinstance(mc, int) or isinstance(mc, bool) or mc < 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"agents[{idx}].max_concurrent must be an integer >= 1",
+                    )
+        # Backup existing file
+        backup = _agents_json_path.with_suffix(".json.bak")
+        if _agents_json_path.exists():
+            shutil.copy2(str(_agents_json_path), str(backup))
+        _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        print(
+            f"[API] agents.json updated by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
+        # Auto-reload in-memory agent config after writing to disk
+        ok, msg = session_mgr.reload_agents_from_disk()
+        if ok:
+            print(f"[API] Auto-reloaded agents after save — {msg}", file=sys.stderr)
+        else:
+            print(
+                f"[API] Warning: saved to disk but reload failed: {msg}",
+                file=sys.stderr,
+            )
+        return {
+            "status": "saved",
+            "agent_count": len(data["agents"]),
+            "reloaded": ok,
+            "reload_message": msg,
+        }
+
+    @app.post("/api/v1/reload-agents")
+    async def reload_agents_config(request: Request):
+        """Hot-reload the in-memory agents cache from agents.json on disk."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        ok, msg = session_mgr.reload_agents_from_disk()
+        if ok:
+            count = len(session_mgr.AGENTS)
+            print(
+                f"[API] agents.json hot-reloaded by {auth.get('identity', 'unknown')} — {count} agents",
+                file=sys.stderr,
+            )
+            return {"status": "reloaded", "message": msg}
+        else:
+            print(
+                f"[API] Hot-reload failed ({auth.get('identity', 'unknown')}): {msg}",
+                file=sys.stderr,
+            )
+            raise HTTPException(status_code=500, detail=f"Reload failed: {msg}")
+
+    @app.get("/api/v1/logs")
+    async def get_logs(
+        request: Request,
+        service: str = Query("agent-manager-api-dev"),
+        lines: int = Query(200, ge=1, le=5000),
+        search: str = Query(""),
+        since: str = Query(""),
+    ):
+        """Fetch recent journalctl logs for a systemd service."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        allowed_services = {
+            "agent-manager-api-dev",
+            "telegram-bot-listener-dev",
+            "webex-connector-dev",
+            "task-scheduler-executor-dev",
+        }
+        if service not in allowed_services:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Service not allowed. Choose from: {', '.join(sorted(allowed_services))}",
+            )
+        cmd = [
+            "journalctl",
+            "-u",
+            service,
+            "--no-pager",
+            "-n",
+            str(lines),
+            "-o",
+            "short-iso",
+        ]
+        if since:
+            cmd += ["--since", since]
+        if search:
+            cmd += ["--grep", search]
+        try:
+            proc = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=15),
+            )
+            raw = proc.stdout or ""
+            return {
+                "lines": raw.strip().split("\n") if raw.strip() else [],
+                "service": service,
+            }
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="journalctl timed out")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @app.get("/api/v1/logs/stream")
+    async def stream_logs(
+        service: str = Query("agent-manager-api-dev"),
+        token: str = Query(""),
+        request: Request = None,
+    ):
+        """SSE endpoint streaming live journalctl -f output."""
+        # Auth via query param for EventSource (can't set headers)
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing token query parameter")
+        if token.startswith("shared_"):
+            if not auth_mgr.validate_shared_key(token):
+                raise HTTPException(status_code=401, detail="Invalid shared key")
+        elif token.startswith("session_"):
+            if not auth_mgr.validate_session_token(token):
+                raise HTTPException(
+                    status_code=401, detail="Invalid or expired session token"
+                )
+        else:
+            raise HTTPException(status_code=401, detail="Unrecognized token type")
+
+        allowed_services = {
+            "agent-manager-api-dev",
+            "telegram-bot-listener-dev",
+            "webex-connector-dev",
+            "task-scheduler-executor-dev",
+        }
+        if service not in allowed_services:
+            raise HTTPException(status_code=400, detail=f"Service not allowed")
+
+        async def _event_generator():
+            proc = await asyncio.create_subprocess_exec(
+                "journalctl",
+                "-u",
+                service,
+                "-f",
+                "--no-pager",
+                "-o",
+                "short-iso",
+                "-n",
+                "0",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        line = await asyncio.wait_for(
+                            proc.stdout.readline(), timeout=30
+                        )
+                        if line:
+                            text = line.decode("utf-8", errors="replace").rstrip()
+                            yield f"data: {json.dumps({'line': text})}\n\n"
+                        else:
+                            break
+                    except asyncio.TimeoutError:
+                        yield f": keepalive\n\n"
+            finally:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    proc.kill()
+
+        return StreamingResponse(
+            _event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # --- Text-to-Speech ───────────────────────────────────────────────────────
+    _tts_cache_dir = Path("/tmp/webui_tts_cache")
+    _tts_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # TTS character limit — edge-tts handles long texts fine, but we cap at
+    # a reasonable length to avoid abuse and very long synthesis times.
+    _TTS_MAX_CHARS = 10_000
+    _TTS_VOICE = "en-US-AriaNeural"  # default voice
+
+    @app.post("/api/v1/tts")
+    async def text_to_speech(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ):
+        """Generate speech audio from text using edge-tts.
+
+        Request body: { "text": "...", "voice": "en-US-AriaNeural" (optional) }
+        Returns: audio/mpeg stream
+        """
+        auth = await authenticate(
+            request,
+            authorization=authorization,
+            x_user_identity=x_user_identity,
+            x_auth_channel=x_auth_channel,
+        )
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+        text = (body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+
+        if len(text) > _TTS_MAX_CHARS:
+            text = text[:_TTS_MAX_CHARS]
+
+        voice = body.get("voice") or _TTS_VOICE
+
+        # Strip markdown formatting for cleaner speech
+        clean = text
+        # Remove code blocks
+        clean = re.sub(r"```[\s\S]*?```", " code block omitted ", clean)
+        clean = re.sub(r"`[^`]+`", "", clean)
+        # Remove markdown links — keep link text
+        clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)
+        # Remove markdown emphasis markers
+        clean = re.sub(r"[*_]{1,3}", "", clean)
+        # Remove headings markers
+        clean = re.sub(r"^#{1,6}\s*", "", clean, flags=re.MULTILINE)
+        # Remove horizontal rules
+        clean = re.sub(r"^[-*_]{3,}\s*$", "", clean, flags=re.MULTILINE)
+        # Remove HTML tags
+        clean = re.sub(r"<[^>]+>", "", clean)
+        # Collapse whitespace
+        clean = re.sub(r"\n{3,}", "\n\n", clean)
+        clean = clean.strip()
+
+        if not clean:
+            raise HTTPException(
+                status_code=400, detail="Text has no speakable content after cleanup"
+            )
+
+        # Cache key based on text + voice
+        cache_key = hashlib.sha256(f"{voice}:{clean}".encode()).hexdigest()
+        cache_path = _tts_cache_dir / f"{cache_key}.mp3"
+
+        if not cache_path.exists():
+            try:
+                import edge_tts
+
+                communicate = edge_tts.Communicate(clean, voice)
+                await communicate.save(str(cache_path))
+            except Exception as exc:
+                # Clean up partial file
+                cache_path.unlink(missing_ok=True)
+                logging.error(
+                    "[TTS] edge-tts failed for %s: %s",
+                    auth.get("identity", "?"),
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"TTS generation failed: {str(exc)[:200]}",
+                )
+
+        return FileResponse(
+            str(cache_path),
+            media_type="audio/mpeg",
+            filename="speech.mp3",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    @app.get("/api/v1/tts/voices")
+    async def list_tts_voices(
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_user_identity: Optional[str] = Header(None),
+        x_auth_channel: Optional[str] = Header(None),
+    ):
+        """List available TTS voices."""
+        _ = await authenticate(
+            request,
+            authorization=authorization,
+            x_user_identity=x_user_identity,
+            x_auth_channel=x_auth_channel,
+        )
+        try:
+            import edge_tts
+
+            voices = await edge_tts.list_voices()
+            # Return a simplified list — just English voices by default
+            en_voices = [
+                {"name": v["ShortName"], "gender": v["Gender"], "locale": v["Locale"]}
+                for v in voices
+                if v["Locale"].startswith("en-")
+            ]
+            return {"voices": en_voices, "default": _TTS_VOICE}
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to list voices: {str(exc)[:200]}"
+            )
+
+    # --- Per-Agent Memory ─────────────────────────────────────────────────
+
+    class DailyNoteRequest(BaseModel):
+        content: str
+        agent: Optional[str] = None
+
+        @field_validator("content")
+        @classmethod
+        def validate_content(cls, v):
+            if not v or not v.strip():
+                raise ValueError("Content must not be empty")
+            if len(v) > 10000:
+                raise ValueError("Content must be 10,000 characters or less")
+            return v
+
+    @app.post("/api/v1/memory/daily")
+    async def append_daily_note_api(body: DailyNoteRequest, request: Request):
+        """Append a timestamped entry to an agent's daily notes."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from memory.daily import append_daily_note as _append_note
+
+        agent_path = None
+        if body.agent:
+            agent_cfg = session_mgr.AGENTS.get(body.agent)
+            if not agent_cfg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown agent: {body.agent}",
+                )
+            agent_path = agent_cfg.get("path", "")
+        else:
+            orch = session_mgr.AGENTS.get("orchestrator", {})
+            agent_path = orch.get("path", "")
+
+        note_file = _append_note(body.content, agent_path=agent_path)
+        return {
+            "status": "ok",
+            "file": str(note_file),
+            "agent": body.agent or "orchestrator",
+        }
+
+    # --- Memory Promotion ─────────────────────────────────────────────────────
+
+    MEMORY_PROMOTER_SCRIPT = Path(
+        "/opt/foster-skills/memory-promoter/memory_promoter.py"
+    )
+
+    class PromoteMemoryRequest(BaseModel):
+        agent: Optional[str] = None
+
+    @app.post("/api/v1/memory/promote")
+    async def promote_memory(body: PromoteMemoryRequest, request: Request):
+        """Trigger memory promotion for a single agent (or orchestrator).
+
+        Spawns memory_promoter.py with the appropriate WEE_AGENT_DIR env var.
+        When agent is omitted, promotes orchestrator memory (/opt/memories/).
+        When agent is provided, looks up the agent path from agents.json.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        agent_name = body.agent or "orchestrator"
+        if body.agent:
+            agent_cfg = session_mgr.AGENTS.get(body.agent)
+            if not agent_cfg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown agent: {body.agent}",
+                )
+            agent_path = agent_cfg.get("path", "")
+        else:
+            orch = session_mgr.AGENTS.get("orchestrator", {})
+            agent_path = orch.get("path", "")
+
+        if not MEMORY_PROMOTER_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promoter script not found: {MEMORY_PROMOTER_SCRIPT}",
+            )
+
+        env = os.environ.copy()
+        if agent_path:
+            env["WEE_AGENT_DIR"] = agent_path
+
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [sys.executable, str(MEMORY_PROMOTER_SCRIPT)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                ),
+            )
+            return {
+                "status": "ok",
+                "agent": agent_name,
+                "agent_path": agent_path,
+                "stdout": result.stdout[-2000:] if result.stdout else "",
+                "stderr": result.stderr[-1000:] if result.stderr else "",
+                "returncode": result.returncode,
+            }
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Memory promotion timed out for agent: {agent_name}",
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Memory promotion failed for {agent_name}: {exc}",
+            )
+
+    @app.post("/api/v1/memory/promote-all")
+    async def promote_all_agents_memory(request: Request):
+        """Trigger memory promotion for ALL agents defined in agents.json.
+
+        Iterates over every agent in the config and runs memory_promoter.py
+        for each one, including the orchestrator.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+
+        if not MEMORY_PROMOTER_SCRIPT.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promoter script not found: {MEMORY_PROMOTER_SCRIPT}",
+            )
+
+        agents = session_mgr.AGENTS
+        if not agents:
+            return {"status": "ok", "results": [], "message": "No agents configured"}
+
+        results = []
+        for agent_name, agent_cfg in agents.items():
+            agent_path = agent_cfg.get("path", "")
+            env = os.environ.copy()
+            if agent_path:
+                env["WEE_AGENT_DIR"] = agent_path
+
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda env=env: subprocess.run(
+                        [sys.executable, str(MEMORY_PROMOTER_SCRIPT)],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=env,
+                    ),
+                )
+                results.append(
+                    {
+                        "agent": agent_name,
+                        "agent_path": agent_path,
+                        "status": "ok" if result.returncode == 0 else "error",
+                        "returncode": result.returncode,
+                        "stdout": result.stdout[-500:] if result.stdout else "",
+                        "stderr": result.stderr[-500:] if result.stderr else "",
+                    }
+                )
+            except subprocess.TimeoutExpired:
+                results.append(
+                    {
+                        "agent": agent_name,
+                        "agent_path": agent_path,
+                        "status": "timeout",
+                    }
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "agent": agent_name,
+                        "agent_path": agent_path,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
+
+        ok_count = sum(1 for r in results if r["status"] == "ok")
+        return {
+            "status": "ok",
+            "total": len(results),
+            "succeeded": ok_count,
+            "failed": len(results) - ok_count,
+            "results": results,
+        }
+
+    # ── Themes API (F025) ─────────────────────────────────────────────
+
+    @app.get("/api/v1/themes")
+    async def list_themes(request: Request):
+        """List built-in and custom themes."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        themes = list(_BUILTIN_THEMES)
+        if _themes_dir.exists():
+            for css_file in sorted(_themes_dir.glob("*.css")):
+                name = css_file.stem
+                if name == "custom" or name.startswith("."):
+                    continue
+                if any(t["name"] == name for t in themes):
+                    continue
+                themes.append(
+                    {
+                        "name": name,
+                        "label": name.replace("-", " ").replace("_", " ").title(),
+                        "description": "Custom theme",
+                        "builtin": False,
+                        "css": css_file.read_text(encoding="utf-8"),
+                    }
+                )
+        return {"themes": themes, "count": len(themes)}
+
+        # --- AI Media ─────────────────────────────────────────────────────────────
+
+    _ai_media_dir = Path("/tmp/webui_ai_media")
+    _ai_media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/ai-media", StaticFiles(directory=str(_ai_media_dir)), name="ai_media")
+
+    # --- Static WebUI — MUST BE LAST ---
+    _webui_dist = Path(__file__).parent / "webui" / "dist"
+    if _webui_dist.exists():
+        app.mount(
+            "/ui", StaticFiles(directory=str(_webui_dist), html=True), name="webui"
+        )
+
+    _static_dir = Path(__file__).parent / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    return app
+
+
+def start_api_server():
+    """Load dotenv, create the FastAPI app, and run uvicorn."""
+    try:
+        from dotenv import load_dotenv
+
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        load_dotenv(env_path)
+    except ImportError:
+        pass
+
+    import uvicorn
+
+    app = create_api_app()
+    port = int(
+        os.environ.get("API_PORT", "8001")
+    )  # DEV: default 8001 to avoid collision with prod
+    host = os.environ.get("API_HOST", "127.0.0.1")
+
+    # SSL support — set SSL_CERTFILE and SSL_KEYFILE env vars to enable HTTPS
+    # In development (APP_ENV=DEV) prefer HTTP even if cert files exist to avoid surprising TLS-only bindings.
+    ssl_certfile = os.environ.get("SSL_CERTFILE")
+    ssl_keyfile = os.environ.get("SSL_KEYFILE")
+    ssl_kwargs = {}
+    proto = "http"
+    if (
+        ssl_certfile
+        and ssl_keyfile
+        and os.path.isfile(ssl_certfile)
+        and os.path.isfile(ssl_keyfile)
+    ):
+        # Only enable HTTPS when not in DEV, unless FORCE_SSL is explicitly set.
+        app_env = os.environ.get("APP_ENV", "").upper()
+        force_ssl = os.environ.get("FORCE_SSL", "") in ("1", "true", "True", "TRUE")
+        if app_env != "DEV" or force_ssl:
+            ssl_kwargs = {"ssl_certfile": ssl_certfile, "ssl_keyfile": ssl_keyfile}
+            proto = "https"
+        else:
+            print(
+                "[API] SSL cert/key found but APP_ENV=DEV — serving HTTP for development. Set FORCE_SSL=1 to force HTTPS.",
+                file=sys.stderr,
+            )
+
+    # Support comma-separated hosts (e.g. "127.0.0.1,100.x.x.x" for Tailscale + localhost).
+    # When multiple hosts are specified, run each in a background thread and block on the last.
+    hosts = [h.strip() for h in host.split(",") if h.strip()]
+    if len(hosts) > 1:
+        import threading
+
+        threads = []
+        for h in hosts[:-1]:
+            print(f"[API] Listening on {proto}://{h}:{port}", file=sys.stderr)
+            t = threading.Thread(
+                target=uvicorn.run,
+                kwargs={"app": app, "host": h, "port": port, **ssl_kwargs},
+                daemon=True,
+            )
+            t.start()
+            threads.append(t)
+        print(f"[API] Listening on {proto}://{hosts[-1]}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=hosts[-1], port=port, **ssl_kwargs)
+    else:
+        print(f"[API] Listening on {proto}://{host}:{port}", file=sys.stderr)
+        uvicorn.run(app, host=host, port=port, **ssl_kwargs)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="AI Session Wrapper for N8N Integration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Execute a prompt with default settings
+  %(prog)s "What is the status of the cluster?"
+  
+  # Set agent via CLI
+  %(prog)s --agent devops "Check server status"
+  
+  # Set model and runtime via CLI
+  %(prog)s --runtime gemini --model gemini-1.5-pro "Analyze this code"
+  
+  # Use custom configuration file
+  %(prog)s --config my-agents.json "What can you do?"
+  
+  # List available agents
+  %(prog)s --list-agents
+  
+  # List available agents with custom config
+  %(prog)s --list-agents --config my-agents.json
+  
+  # List available models for current runtime
+  %(prog)s --list-models
+  
+  # List available runtimes
+  %(prog)s --list-runtimes
+  
+  # Combine multiple options
+  %(prog)s --agent family --runtime claude --model sonnet "Find recipes"
+  
+  # Backwards compatible: positional arguments
+  %(prog)s "What's the weather?" my_session my-config.json
+""",
+    )
+
+    # Positional arguments (for backwards compatibility)
+    parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="The prompt to execute (required unless using --list-* options)",
+    )
+    parser.add_argument(
+        "session_id",
+        nargs="?",
+        default="default",
+        help="N8N session ID (default: 'default')",
+    )
+
+    # Configuration file - can be positional or named
+    parser.add_argument(
+        "config_file_positional",
+        nargs="?",
+        help=argparse.SUPPRESS,  # Hide from help as we have --config below
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        dest="config_file",
+        help="Path to agents.json configuration file",
+    )
+
+    # Agent options
+    agent_group = parser.add_argument_group("agent options")
+    agent_group.add_argument(
+        "--agent",
+        metavar="NAME",
+        help="Set the agent to use (e.g., devops, family, projects)",
+    )
+    agent_group.add_argument(
+        "--list-agents", action="store_true", help="List all available agents and exit"
+    )
+
+    # Model options
+    model_group = parser.add_argument_group("model options")
+    model_group.add_argument(
+        "--model", metavar="NAME", help="Set the model to use (e.g., gpt-5, sonnet)"
+    )
+    model_group.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List all available models for current runtime and exit",
+    )
+
+    # Runtime options
+    runtime_group = parser.add_argument_group("runtime options")
+    runtime_group.add_argument(
+        "--runtime",
+        metavar="NAME",
+        choices=[
+            "copilot",
+            "copilot-sdk",
+            "opencode",
+            "claude",
+            "claude-sdk",
+            "gemini",
+            "codex",
+            "devin",
+            "cursor",
+        ],
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
+    )
+    runtime_group.add_argument(
+        "--list-runtimes",
+        action="store_true",
+        help="List all available runtimes and exit",
+    )
+
+    # Claude mode options
+    claude_group = parser.add_argument_group("claude options")
+    claude_group.add_argument(
+        "--mode",
+        metavar="MODE",
+        choices=["elevated", "restricted", "sandboxed"],
+        help="Set permission mode: elevated (auto-approve), restricted (default), or sandboxed (read-only)",
+    )
+
+    args = parser.parse_args()
+
+    # Handle backwards compatibility: if config_file_positional is provided, use it
+    if args.config_file_positional and not args.config_file:
+        args.config_file = args.config_file_positional
+
+    # Initialize manager
+    manager = SessionManager(
+        args.config_file, app_env=os.environ.get("APP_ENV", "PROD").upper()
+    )
+
+    # Apply agent setting first (so list commands use the correct agent context).
+    # Runtime is applied AFTER agent so an explicit --runtime overrides the
+    # agent's primary_runtime default (issue: agent set resets session runtime).
+    if args.agent:
+        result = manager.execute(f'/agent set "{args.agent}"', args.session_id)
+        _check_command_result(result, ["Unknown agent", "Error"])
+
+    # Apply runtime setting after agent (overrides agent primary_runtime if both given)
+    if args.runtime:
+        result = manager.execute(f"/runtime set {args.runtime}", args.session_id)
+        _check_command_result(result, ["Unknown runtime", "Error"])
+
+    # Handle list commands (these don't require a prompt but may use runtime/agent settings)
+    if args.list_agents:
+        output = manager.execute("/agent list", args.session_id)
+        print(output)
+        sys.exit(0)
+
+    if args.list_models:
+        output = manager.execute("/model list", args.session_id)
+        print(output)
+        sys.exit(0)
+
+    if args.list_runtimes:
+        output = manager.execute("/runtime list", args.session_id)
+        print(output)
+        sys.exit(0)
+
+    # If no prompt provided and no list command, show error
+    if not args.prompt:
+        parser.error("prompt is required unless using --list-* options")
+
+    # Apply model setting if provided (after list commands since we don't need it for lists)
+    if args.model:
+        result = manager.execute(f'/model set "{args.model}"', args.session_id)
+        _check_command_result(result, ["Unknown model", "Error"])
+
+    # Set mode if provided (will be used by run_claude to set --permission-mode)
+    if args.mode:
+        manager.mode = args.mode
+
+    # Execute the main prompt
+    output = manager.execute(args.prompt, args.session_id)
+    print(output)
+
+
+if __name__ == "__main__":
+    if "--api" in sys.argv:
+        start_api_server()
+    else:
+        main()
