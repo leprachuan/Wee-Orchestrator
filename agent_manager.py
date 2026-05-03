@@ -159,6 +159,145 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
     return sanitized
 
 
+def _codex_item_name(item: dict) -> str:
+    """Return a UI-friendly tool/event name for a Codex transport item."""
+    if not isinstance(item, dict):
+        return "codex_event"
+    item_type = str(item.get("type") or "codex_event").strip() or "codex_event"
+    if item_type == "command_execution" or item.get("command"):
+        return "shell"
+    return str(item.get("name") or item_type)
+
+
+def _codex_item_text_value(value) -> str:
+    """Normalize a Codex item field to a display string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _codex_item_input(item: dict) -> str:
+    """Extract the most useful input summary from a Codex transport item."""
+    if not isinstance(item, dict):
+        return ""
+    for field in ("command", "input", "arguments", "args", "path", "prompt"):
+        value = _codex_item_text_value(item.get(field))
+        if value:
+            return value
+    return ""
+
+
+def _codex_item_output(item: dict) -> str:
+    """Extract the most useful output summary from a Codex transport item."""
+    if not isinstance(item, dict):
+        return ""
+    for field in ("aggregated_output", "output", "result", "content", "text"):
+        value = _codex_item_text_value(item.get(field))
+        if value:
+            return value
+    return ""
+
+
+def _parse_codex_transport_line(
+    line: str, seen_item_ids: Optional[set] = None
+) -> Optional[list]:
+    """Parse one Codex JSONL transport line into text/tool UI events.
+
+    Returns:
+    - ``None`` when the line is not a Codex JSON transport frame.
+    - ``[]`` when the frame is structured metadata that should not render as text.
+    - A list of ``(channel, payload)`` tuples for assistant text/tool events.
+    """
+    stripped = (line or "").strip()
+    if not stripped.startswith("{"):
+        return None
+
+    try:
+        event = json.loads(stripped)
+    except (ValueError, TypeError):
+        return None
+
+    event_type = event.get("type", "")
+    if event_type in (
+        "thread.started",
+        "thread.completed",
+        "turn.started",
+        "turn.completed",
+        "response.started",
+        "response.completed",
+    ):
+        return []
+
+    if event_type not in ("item.started", "item.completed"):
+        return []
+
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return []
+
+    item_type = item.get("type", "")
+    if item_type == "agent_message":
+        if event_type != "item.completed":
+            return []
+        text = item.get("text", "")
+        if not isinstance(text, str) or not text:
+            return []
+        return [("chunk", text)]
+
+    item_id = str(item.get("id") or f"codex_{item_type or 'event'}")
+    tool_name = _codex_item_name(item)
+    tool_input = _codex_item_input(item)
+    tool_output = _codex_item_output(item)
+    tool_events = []
+
+    already_seen = seen_item_ids is not None and item_id in seen_item_ids
+    if not already_seen:
+        tool_events.append(
+            (
+                "tool_call",
+                {
+                    "event": "detected",
+                    "id": item_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                    "runtime": "codex",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        )
+        if seen_item_ids is not None:
+            seen_item_ids.add(item_id)
+
+    if event_type == "item.completed":
+        is_error = bool(
+            item.get("is_error")
+            or item.get("error")
+            or str(item.get("status", "")).lower() in ("error", "failed", "failure")
+        )
+        tool_events.append(
+            (
+                "tool_call",
+                {
+                    "event": "completed",
+                    "id": item_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                    "output": tool_output,
+                    "is_error": is_error,
+                    "runtime": "codex",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        )
+
+    return tool_events
+
+
 def _resolve_silent_default(channel: str) -> bool:
     """Resolve silent_mode default from WEE_VERBOSE env var or channel.
 
@@ -4898,6 +5037,40 @@ You can mention an agent in your prompt and it will auto-delegate:
             return "elevated"
         return "restricted"
 
+    def _clean_tool_result_json_from_text(self, text: str) -> str:
+        """Strip machine-readable tool-result JSON from assistant-visible text."""
+        if not isinstance(text, str) or not text:
+            return text
+
+        def _looks_like_tool_result_blob(candidate: str) -> bool:
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                return False
+            if not isinstance(parsed, dict):
+                return False
+            tool_keys = {
+                "exit_code",
+                "status",
+                "aggregated_output",
+                "stdout",
+                "stderr",
+                "command",
+                "duration_ms",
+            }
+            return bool(tool_keys.intersection(parsed.keys()))
+
+        stripped = text.strip()
+        if _looks_like_tool_result_blob(stripped):
+            return ""
+
+        cleaned = re.sub(
+            r"\{[^{}]*\"(?:exit_code|status|aggregated_output|stdout|stderr|command|duration_ms)\"[^{}]*\}",
+            "",
+            text,
+        )
+        return cleaned.strip()
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
@@ -5123,7 +5296,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ):
                         _text = _event["item"].get("text", "")
                         if _text:
-                            jsonl_texts.append(_text)
+                            _text = self._clean_tool_result_json_from_text(_text)
+                            if _text:
+                                jsonl_texts.append(_text)
                 except (ValueError, KeyError):
                     continue
 
@@ -6399,6 +6574,7 @@ User Request:
                     _claude_text_block_count = 0  # track text blocks for separators
                     _active_tool_calls = {}  # index → {id, name, input_parts}
                     _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
+                    _codex_seen_item_ids = set()
                     try:
                         for line in process.stdout:
                             stdout_chunks.append(line)
@@ -6683,43 +6859,21 @@ User Request:
                                     # exec is invoked with --json. Parse assistant text
                                     # here so the WebUI streams human-readable content
                                     # instead of raw thread/turn metadata.
-                                    if _line_stripped.startswith("{"):
-                                        try:
-                                            _cx_obj = _json.loads(_line_stripped)
-                                        except (ValueError, KeyError):
-                                            _cx_obj = None
-                                        if _cx_obj:
-                                            _cx_type = _cx_obj.get("type", "")
-                                            if (
-                                                _cx_type == "item.completed"
-                                                and isinstance(
-                                                    _cx_obj.get("item"), dict
+                                    _cx_events = _parse_codex_transport_line(
+                                        _line_stripped, _codex_seen_item_ids
+                                    )
+                                    if _cx_events is not None:
+                                        for _cx_kind, _cx_data in _cx_events:
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    _cx_kind, _cx_data
                                                 )
-                                                and _cx_obj["item"].get("type")
-                                                == "agent_message"
-                                            ):
-                                                _cx_text = _cx_obj["item"].get(
-                                                    "text", ""
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    (_cx_kind, _cx_data),
                                                 )
-                                                if _cx_text:
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", _cx_text
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", _cx_text),
-                                                        )
-                                                continue
-                                            if _cx_type in (
-                                                "thread.started",
-                                                "thread.completed",
-                                                "turn.started",
-                                                "turn.completed",
-                                                "item.started",
-                                            ):
-                                                continue
+                                        continue
 
                                     # Codex exec tool call patterns
                                     import re as _re_tc

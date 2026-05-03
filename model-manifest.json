@@ -1,73 +1,80 @@
 {
-  "source": "manually verified from Codex CLI model picker 2026-04-26",
-  "last_updated": "2026-05-02T14:45:51.551247Z",
-  "runtimes": {
-    "copilot": [
-      "auto",
-      "gpt-5.4",
-      "gpt-5.5",
-      "gpt-5.3-codex",
-      "gpt-5.2-codex",
-      "gpt-5.2",
-      "gpt-5.4-mini",
-      "gpt-5-mini",
-      "gpt-4.1",
-      "claude-sonnet-4.6",
-      "claude-sonnet-4.5",
-      "claude-haiku-4.5",
-      "claude-opus-4.7",
-      "claude-sonnet-4"
-    ],
-    "codex": [
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex",
-      "gpt-5.2"
-    ],
-    "copilot-sdk": [
-      "auto",
-      "gpt-5.4",
-      "gpt-5.5",
-      "gpt-5.3-codex",
-      "gpt-5.2-codex",
-      "gpt-5.2",
-      "gpt-5.4-mini",
-      "gpt-5-mini",
-      "gpt-4.1",
-      "claude-sonnet-4.6",
-      "claude-sonnet-4.5",
-      "claude-haiku-4.5",
-      "claude-opus-4.7",
-      "claude-sonnet-4"
-    ],
-    "claude-sdk": [
-      "claude-sonnet-4.6",
-      "claude-sonnet-4.5",
-      "claude-haiku-4.5",
-      "claude-opus-4.7",
-      "claude-sonnet-4"
-    ],
-    "openai": [
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex",
-      "gpt-5.2"
-    ],
-    "opencode": [
-      "openai-compatible/mistral-7b-instruct-v0.1"
-    ],
-    "qwen": [
-      "qwen-32k"
-    ],
-    "gemini": [
-      "gemini-1.5",
-      "gemini-1.5-pro"
-    ],
-    "ollama": [
-      "qwen3.5-64k:latest"
-    ]
-  },
-  "notes": "This file centralizes runtime->model lists. Services and UI should read this file instead of hard-coded lists. Update and PR from /opt/n8n-copilot-shim/model-manifest.json."
+    "source": "manually verified from Codex CLI model picker 2026-04-26",
+    "last_updated": "2026-05-02T14:45:51.551247Z",
+    "runtimes": {
+        "copilot": [
+            "auto",
+            "gpt-5.4",
+            "gpt-5.5",
+            "gpt-5.3-codex",
+            "gpt-5.2-codex",
+            "gpt-5.2",
+            "gpt-5.4-mini",
+            "gpt-5-mini",
+            "gpt-4.1",
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "claude-haiku-4.5",
+            "claude-opus-4.7",
+            "claude-sonnet-4"
+        ],
+        "codex": [
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex",
+            "gpt-5.2"
+        ],
+        "copilot-sdk": [
+            "auto",
+            "gpt-5.4",
+            "gpt-5.5",
+            "gpt-5.3-codex",
+            "gpt-5.2-codex",
+            "gpt-5.2",
+            "gpt-5.4-mini",
+            "gpt-5-mini",
+            "gpt-4.1",
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "claude-haiku-4.5",
+            "claude-opus-4.7",
+            "claude-sonnet-4"
+        ],
+        "claude-sdk": [
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "claude-haiku-4.5",
+            "claude-opus-4.7",
+            "claude-sonnet-4"
+        ],
+        "openai": [
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex",
+            "gpt-5.2"
+        ],
+        "opencode": [
+            "openai-compatible/mistral-7b-instruct-v0.1"
+        ],
+        "qwen": [
+            "qwen-32k"
+        ],
+        "gemini": [
+            "gemini-1.5",
+            "gemini-1.5-pro"
+        ],
+        "ollama": [
+            "qwen3.5-64k:latest"
+        ],
+        "wee": [
+            "qwen/qwen3.6-72b",
+            "qwen/qwen3.6-14b",
+            "qwen/qwen3.6-32b",
+            "qwen/qwen3.6-7b",
+            "qwen/qwen3.6-flash"
+        ]
+    },
+    "notes": "This file centralizes runtime->model lists. Services and UI should read this file instead of hard-coded lists. Update and PR from /opt/n8n-copilot-shim/model-manifest.json."
 }

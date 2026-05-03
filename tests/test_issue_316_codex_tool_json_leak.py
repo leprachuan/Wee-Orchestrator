@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -19,6 +20,7 @@ os.environ.setdefault("APP_ENV", "DEV")
 os.environ.setdefault("API_PORT", "9316")
 
 from agent_manager import SessionManager
+from session_manager_components import StreamBuffer
 
 
 def _make_sm():
@@ -139,6 +141,75 @@ class TestIssue316CodexToolResultLeakage(unittest.TestCase):
                 # Should be preserved
                 self.assertIn(input_text.split(json.dumps({"exit_code": 0}))[0] if json.dumps({"exit_code": 0}) in input_text else input_text, 
                              result or input_text, f"Failed for input: {input_text}")
+
+    def test_command_execution_frames_become_tool_events_not_text_chunks(self):
+        """Codex command_execution frames must render as tool events, not raw JSON text."""
+        session_id = f"test-316-{threading.get_ident()}"
+        buf = StreamBuffer()
+        self.sm._stream_buffers[session_id] = buf
+        self.sm._stream_queues[session_id] = (MagicMock(), MagicMock())
+
+        codex_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "abc123"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_74",
+                        "type": "command_execution",
+                        "command": "/bin/bash -lc 'curl -sk https://127.0.0.1:8000/api/v1/health'",
+                        "aggregated_output": '{"status":"ok"}',
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item_75",
+                        "type": "agent_message",
+                        "text": "API health check passed.",
+                    },
+                }
+            ),
+        ]
+        output_text = "\n".join(codex_lines) + "\n"
+        script = (
+            "import sys; " f"sys.stdout.write({output_text!r}); " "sys.stdout.flush()"
+        )
+        cmd = ["python3", "-c", script]
+
+        with (
+            patch.object(self.sm, "track_running_query"),
+            patch.object(self.sm, "update_query_output"),
+        ):
+            self.sm._execute_subprocess_with_tracking(
+                cmd=cmd,
+                cwd="/tmp",
+                timeout=30,
+                runtime="codex",
+                agent="test-agent",
+                prompt="test prompt",
+                n8n_session_id=session_id,
+            )
+
+        self.sm._stream_buffers.pop(session_id, None)
+        self.sm._stream_queues.pop(session_id, None)
+
+        chunk_text = " ".join(str(data) for kind, data in buf.chunks if kind == "chunk")
+        tool_events = [data for kind, data in buf.chunks if kind == "tool_call"]
+
+        self.assertIn("API health check passed.", chunk_text)
+        self.assertNotIn("command_execution", chunk_text)
+        self.assertNotIn("aggregated_output", chunk_text)
+        self.assertGreaterEqual(len(tool_events), 2)
+        self.assertEqual(tool_events[0]["name"], "shell")
+        self.assertEqual(tool_events[0]["event"], "detected")
+        self.assertEqual(tool_events[-1]["event"], "completed")
+        self.assertIn("curl -sk https://127.0.0.1:8000/api/v1/health", tool_events[0]["input"])
+        self.assertIn('{"status":"ok"}', tool_events[-1]["output"])
 
 
 if __name__ == '__main__':
