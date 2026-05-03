@@ -4874,10 +4874,17 @@ You can mention an agent in your prompt and it will auto-delegate:
     ) -> str:
         """Resolve effective permission mode from session data with backward compatibility.
 
-        Priority: prompt_mode (if not default) > permissions.mode > yolo_mode (legacy) > 'restricted'
+        Priority: prompt_mode (if not default) > WEE_ELEVATED/WEE_SANDBOXED env > permissions.mode > yolo_mode (legacy) > 'restricted'
         """
         if prompt_mode != "restricted":
             return prompt_mode
+        
+        # Check environment variables (set by scheduler executor for elevated/sandboxed modes)
+        if os.environ.get("WEE_ELEVATED", "").lower() in ("true", "1"):
+            return "elevated"
+        if os.environ.get("WEE_SANDBOXED", "").lower() in ("true", "1"):
+            return "sandboxed"
+        
         perms = (
             session_data.get("permissions") or {}
         )  # Handle None from session template
