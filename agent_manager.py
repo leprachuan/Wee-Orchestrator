@@ -3741,6 +3741,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         "openai/gpt-4.1",
         "openai/gpt-4.1-mini",
         "deepseek/deepseek-v3.2",
+        "qwen/qwen3.6-flash",
         "qwen/qwen3.6-plus",
         "mistralai/mistral-small-2603",
         "cohere/command-r-plus-08-2024",
@@ -3792,6 +3793,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "openrouter/deepseek/deepseek-v3.2",
                 "DeepSeek V3.2 via OpenRouter",
                 ["or-deepseek"],
+            ),
+            (
+                "openrouter/qwen/qwen3.6-flash",
+                "Qwen 3.6 Flash via OpenRouter",
+                ["qwen3.6-flash", "qwen-flash"],
             ),
         ],
         "Wee Native (OpenRouter Free)": [
