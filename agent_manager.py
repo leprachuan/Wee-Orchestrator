@@ -10097,10 +10097,14 @@ User Request:
         )
 
         # Handle session ID mapping for runtimes that auto-generate IDs
+        # Codex is included here: it creates sessions with its own UUID that differs
+        # from the pre-generated UUID in the session map, so we must capture the real
+        # session ID after each new run for resume to work correctly on the next turn.
         if not can_resume and current_runtime in (
             "copilot",
             "opencode",
             "gemini",
+            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
