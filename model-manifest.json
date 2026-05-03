@@ -1,6 +1,6 @@
 {
     "source": "manually verified from Codex CLI model picker 2026-04-26",
-    "last_updated": "2026-05-02T14:45:51.551247Z",
+    "last_updated": "2026-05-03T00:00:00Z",
     "runtimes": {
         "copilot": [
             "auto",
@@ -69,6 +69,7 @@
             "qwen3.5-64k:latest"
         ],
         "wee": [
+            "openrouter/auto",
             "qwen/qwen3.6-72b",
             "qwen/qwen3.6-14b",
             "qwen/qwen3.6-32b",

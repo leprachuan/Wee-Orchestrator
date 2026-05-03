@@ -39,8 +39,8 @@ class TestIssue287AgentPermissionMode(unittest.TestCase):
                 "permissions": {"mode": "restricted"}
             },
             {
-                "name": "wee-qa",
-                "path": "/opt/wee-qa",
+                "name": "wee-dev",
+                "path": "/opt/wee-dev",
                 "primary_runtime": "codex",
                 "primary_model": "gpt-5.4-mini",
                 "permissions": {"mode": "elevated"}  # This is the key: wee-qa needs elevated
@@ -70,7 +70,7 @@ class TestIssue287AgentPermissionMode(unittest.TestCase):
     def test_wee_qa_inherits_elevated_permission_mode(self):
         """Test that wee-qa background task gets elevated permission from agents.json"""
         # Simulate the permission mode resolution logic from create_background_task()
-        agent = "wee-qa"
+        agent = "wee-dev"
         agent_config = self.session_mgr.AGENTS.get(agent, {})
         dispatch_config = agent_config.get("dispatch_config", {})
         
@@ -98,7 +98,7 @@ class TestIssue287AgentPermissionMode(unittest.TestCase):
 
     def test_explicit_permission_mode_overrides_agent_config(self):
         """Test that explicit permission_mode in request overrides agent config"""
-        agent = "wee-qa"
+        agent = "wee-dev"
         agent_config = self.session_mgr.AGENTS.get(agent, {})
         dispatch_config = agent_config.get("dispatch_config", {})
         body_permission_mode = "restricted"  # Explicitly set to override

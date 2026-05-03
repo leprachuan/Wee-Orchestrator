@@ -35,10 +35,10 @@ class TestPerAgentNotifications(unittest.TestCase):
     def test_set_and_get_agent_pref(self):
         """Test setting and getting per-agent preferences."""
         # Set preference for wee-qa to "off"
-        self.notif_mgr.set_agent_pref("user123", "wee-qa", "off")
+        self.notif_mgr.set_agent_pref("user123", "wee-dev", "off")
 
         # Verify it was stored
-        pref = self.notif_mgr.get_agent_pref("user123", "wee-qa")
+        pref = self.notif_mgr.get_agent_pref("user123", "wee-dev")
         self.assertEqual(pref, "off")
 
         # Verify other agents default to "on"
@@ -53,13 +53,13 @@ class TestPerAgentNotifications(unittest.TestCase):
         self.assertTrue(self.notif_mgr.is_agent_muted("user123", "research"))
 
         # wee-qa should NOT be muted (default "on")
-        self.assertFalse(self.notif_mgr.is_agent_muted("user123", "wee-qa"))
+        self.assertFalse(self.notif_mgr.is_agent_muted("user123", "wee-dev"))
 
     def test_get_all_agent_prefs(self):
         """Test retrieving all agent preferences for a user."""
         # Set multiple preferences
         self.notif_mgr.set_agent_pref("user456", "research", "off")
-        self.notif_mgr.set_agent_pref("user456", "wee-qa", "on")
+        self.notif_mgr.set_agent_pref("user456", "wee-dev", "on")
         self.notif_mgr.set_agent_pref("user456", "smarthome", "off")
 
         # Get all preferences
@@ -67,7 +67,7 @@ class TestPerAgentNotifications(unittest.TestCase):
 
         # Verify all are present
         self.assertEqual(all_prefs.get("research"), "off")
-        self.assertEqual(all_prefs.get("wee-qa"), "on")
+        self.assertEqual(all_prefs.get("wee-dev"), "on")
         self.assertEqual(all_prefs.get("smarthome"), "off")
 
     def test_get_all_agent_prefs_empty(self):
@@ -133,10 +133,10 @@ class TestPerAgentNotifications(unittest.TestCase):
         self.notif_mgr.set_user_pref("oldstyle_user", "telegram", "off")
 
         # Now set agent-specific pref
-        self.notif_mgr.set_agent_pref("oldstyle_user", "wee-qa", "on")
+        self.notif_mgr.set_agent_pref("oldstyle_user", "wee-dev", "on")
 
         # Agent pref should take precedence
-        self.assertFalse(self.notif_mgr.is_agent_muted("oldstyle_user", "wee-qa"))
+        self.assertFalse(self.notif_mgr.is_agent_muted("oldstyle_user", "wee-dev"))
 
         # User global should still be "off"
         self.assertTrue(self.notif_mgr.is_muted("oldstyle_user"))

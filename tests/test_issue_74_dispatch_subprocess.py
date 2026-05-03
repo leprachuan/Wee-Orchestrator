@@ -91,7 +91,7 @@ def test_dispatch_via_subprocess_calls_agent_manager(disp, tmp_path):
         mock_proc = MagicMock()
         mock_proc.pid = 99
         mock_popen.return_value = mock_proc
-        disp.dispatch_via_subprocess("wee-qa", "my prompt", "claude-sonnet-4.6", 1800)
+        disp.dispatch_via_subprocess("wee-dev", "my prompt", "claude-sonnet-4.6", 1800)
     cmd = mock_popen.call_args[0][0]
     assert any("agent_manager.py" in str(a) for a in cmd)
 
@@ -185,45 +185,7 @@ def test_dispatch_wee_dev_uses_opus_model(disp, sample_item):
     assert captured["model"] == "claude-opus-4.6"
 
 
-# dispatch_wee_qa tests
-
-
-def test_dispatch_wee_qa_returns_pid_dict(disp, sample_item):
-    with (
-        patch.object(disp, "DRY_RUN", False),
-        patch.object(disp, "dispatch_via_subprocess", return_value=3003),
-    ):
-        result = disp.dispatch_wee_qa(sample_item)
-    assert "pid" in result
-    assert result["pid"] == 3003
-
-
-def test_dispatch_wee_qa_no_background_task_api(disp, sample_item):
-    with (
-        patch.object(disp, "DRY_RUN", False),
-        patch.object(disp, "dispatch_via_subprocess", return_value=4004),
-        patch.object(disp, "api_request") as mock_api,
-    ):
-        disp.dispatch_wee_qa(sample_item)
-    mock_api.assert_not_called()
-
-
-def test_dispatch_wee_qa_uses_sonnet_model(disp, sample_item):
-    captured = {}
-
-    def fake_dispatch(agent, prompt, model, timeout, session_id=None):
-        captured["model"] = model
-        captured["agent"] = agent
-        return 999
-
-    with (
-        patch.object(disp, "DRY_RUN", False),
-        patch.object(disp, "dispatch_via_subprocess", side_effect=fake_dispatch),
-    ):
-        disp.dispatch_wee_qa(sample_item)
-
-    assert captured["agent"] == "wee-qa"
-    assert captured["model"] == "claude-sonnet-4.6"
+# dispatch_wee_qa tests removed — wee-qa consolidated into wee-dev
 
 
 # has_running tests
@@ -243,14 +205,7 @@ def test_has_running_wee_dev_with_dead_pid(disp, tmp_lock):
     assert disp.has_running_wee_dev_task() is False
 
 
-def test_has_running_wee_qa_with_alive_pid(disp, tmp_lock):
-    disp.LOCK_PATH.write_text(json.dumps({"wee_qa_pid": os.getpid()}))
-    assert disp.has_running_wee_qa_task() is True
-
-
-def test_has_running_wee_qa_no_pid_key(disp, tmp_lock):
-    disp.LOCK_PATH.write_text(json.dumps({"wee_dev_pid": os.getpid()}))
-    assert disp.has_running_wee_qa_task() is False
+# Tests for wee_qa_pid removed — wee-qa consolidated into wee-dev
 
 
 # Lock file / no-API-POST tests
@@ -266,14 +221,7 @@ def test_dispatch_wee_dev_result_has_pid_not_task_id(disp, sample_item):
     assert "pid" in result
 
 
-def test_dispatch_wee_qa_result_has_pid_not_task_id(disp, sample_item):
-    with (
-        patch.object(disp, "DRY_RUN", False),
-        patch.object(disp, "dispatch_via_subprocess", return_value=7777),
-    ):
-        result = disp.dispatch_wee_qa(sample_item)
-    assert "task_id" not in result
-    assert "pid" in result
+# Test for dispatch_wee_qa removed — wee-qa consolidated into wee-dev
 
 
 def test_background_tasks_url_not_posted_to(disp, sample_item):
@@ -290,7 +238,6 @@ def test_background_tasks_url_not_posted_to(disp, sample_item):
         patch.object(disp, "api_request", side_effect=fake_api),
     ):
         disp.dispatch_wee_dev(sample_item)
-        disp.dispatch_wee_qa(sample_item)
 
     bg_url = disp.BACKGROUND_TASKS_URL
     assert (

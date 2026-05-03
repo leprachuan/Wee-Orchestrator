@@ -7,8 +7,8 @@ the background task is dispatched.  The synthesized _dispatch_config in
 create_background_task() only copied runtime/model/fallback fields,
 causing perm_mode to fall through to "restricted".
 
-Symptom: wee-qa (declared elevated) ran codex in the default sandbox,
-which blocked SSH to the dev host.
+Symptom: An agent declared elevated ran in the default sandbox,
+blocking operations like SSH to the dev host.
 
 Fix: include permission_mode and yolo in the synthesized _dispatch_config
 when building it from the new schema.
@@ -55,12 +55,12 @@ class TestNewSchemaPermissionPropagation(unittest.TestCase):
                 {
                     "agents": [
                         {
-                            # Mirrors the real wee-qa entry: new schema +
+                            # Mirrors the real wee-dev entry: new schema +
                             # top-level permission_mode/yolo (no
                             # dispatch_config block).
-                            "name": "wee-qa",
-                            "description": "QA agent",
-                            "path": "/opt/wee-qa",
+                            "name": "wee-dev",
+                            "description": "Wee engineering agent",
+                            "path": "/opt/wee-dev",
                             "primary_runtime": "codex",
                             "primary_model": "gpt-5.4",
                             "fallback_runtime": "copilot",
@@ -114,7 +114,7 @@ class TestNewSchemaPermissionPropagation(unittest.TestCase):
 
     def test_top_level_yolo_true_promotes_to_elevated(self):
         """yolo:true at top level on new-schema agent → elevated."""
-        data = self._post({"prompt": "test", "agent": "wee-qa"})
+        data = self._post({"prompt": "test", "agent": "wee-dev"})
         self.assertEqual(
             data.get("permission_mode"),
             "elevated",
@@ -134,7 +134,7 @@ class TestNewSchemaPermissionPropagation(unittest.TestCase):
 
     def test_body_yolo_false_overrides_agent_elevated(self):
         """body.yolo=False must override agent-level yolo:true."""
-        data = self._post({"prompt": "test", "agent": "wee-qa", "yolo": False})
+        data = self._post({"prompt": "test", "agent": "wee-dev", "yolo": False})
         self.assertEqual(data.get("permission_mode"), "restricted")
 
     def test_body_permission_mode_overrides_agent(self):

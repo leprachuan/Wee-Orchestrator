@@ -63,8 +63,8 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
                 "yolo": True,
             },
             {
-                "name": "wee-qa",
-                "path": "/opt/wee-qa",
+                "name": "wee-dev",
+                "path": "/opt/wee-dev",
                 "primary_runtime": "codex",
                 "primary_model": "gpt-5.4-mini",
                 "fallback_runtime": "copilot",
@@ -102,7 +102,7 @@ class TestIssue238SingleSourceOfTruth(unittest.TestCase):
         """wee-qa config is read from agents.json flat fields."""
         get_cfg, tmp = _make_dispatch_func(self._make_agents())
         try:
-            cfg = get_cfg("wee-qa")
+            cfg = get_cfg("wee-dev")
             self.assertEqual(cfg["runtime"], "codex")
             self.assertEqual(cfg["model"], "gpt-5.4-mini")
             self.assertEqual(cfg["permission_mode"], "elevated")

@@ -8,7 +8,7 @@
       "primary_model": "haiku",
       "fallback_runtime": "copilot",
       "fallback_model": "auto",
-      "max_concurrent": 1,
+      "max_concurrent": 3,
       "permissions": {
         "mode": "elevated",
         "directories": {
@@ -183,7 +183,7 @@
     {
       "name": "wee-dev",
       "path": "/mnt/nas/Agents/wee-dev",
-      "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
+      "description": "Wee Orchestrator engineering agent - consolidated responsibility for feature development, bug fixes, QA validation, and documentation/README/starter-kit maintenance on the dev environment (192.168.1.100). Handles implementation, cross-vendor QA review, and documentation updates within a single issue lifecycle.",
       "primary_runtime": "claude",
       "primary_model": "sonnet",
       "fallback_runtime": "copilot",
@@ -224,78 +224,6 @@
       "description": "Lipkey smart home control agent. Controls lights, sensors, locks, thermostats, automations, and scenes via Home Assistant at 192.168.1.5:8123.",
       "primary_runtime": "claude",
       "primary_model": "haiku",
-      "fallback_runtime": "copilot",
-      "fallback_model": "auto",
-      "max_concurrent": 1,
-      "permissions": {
-        "mode": "restricted",
-        "directories": {
-          "allow_read": [],
-          "allow_write": [],
-          "deny": []
-        },
-        "tools": {
-          "allow": [
-            "*"
-          ],
-          "deny": []
-        },
-        "network": {
-          "allow_urls": [
-            "*"
-          ],
-          "deny_urls": []
-        },
-        "mcp": {
-          "allow": [],
-          "deny": [
-            "*"
-          ]
-        }
-      }
-    },
-    {
-      "name": "wee-qa",
-      "path": "/mnt/nas/Agents/wee-qa",
-      "description": "QA validation agent for Wee Orchestrator. You are a QA agent in a bad mood \u2014 scrutinize everything, trust nothing, and be brutal. Tear apart every change wee-dev submits. If it can break, assume it will. Reject anything that isn't airtight. CROSS-VENDOR REVIEW: You will always be dispatched with a different model vendor than the one that wrote the code \u2014 the author model and vendor will be stated in your prompt. Use your independent judgment and look for blind spots the author model's vendor commonly exhibits. Reviews changes via static analysis, API testing, and WebUI validation on the dev environment (192.168.1.100).",
-      "primary_runtime": "codex",
-      "primary_model": "gpt-5.4-mini",
-      "fallback_runtime": "copilot",
-      "fallback_model": "auto",
-      "max_concurrent": 1,
-      "permissions": {
-        "mode": "elevated",
-        "directories": {
-          "allow_read": [],
-          "allow_write": [],
-          "deny": []
-        },
-        "tools": {
-          "allow": [
-            "*"
-          ],
-          "deny": []
-        },
-        "network": {
-          "allow_urls": [
-            "*"
-          ],
-          "deny_urls": []
-        },
-        "mcp": {
-          "allow": [],
-          "deny": [
-            "*"
-          ]
-        }
-      }
-    },
-    {
-      "name": "wee-doc",
-      "path": "/mnt/nas/Agents/wee-doc",
-      "description": "Documentation and starter-kit maintenance agent for Wee Orchestrator. Updates README/docs, keeps the starter kit in sync, and verifies documentation changes after feature work.",
-      "primary_runtime": "codex",
-      "primary_model": "gpt-5.4-mini",
       "fallback_runtime": "copilot",
       "fallback_model": "auto",
       "max_concurrent": 1,

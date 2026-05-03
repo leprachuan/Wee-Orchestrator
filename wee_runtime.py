@@ -611,7 +611,7 @@ _WEE_TOOLS = [
             "description": (
                 "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
                 "Use for delegating work to specialized agents: devops, email-triage, "
-                "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
+                "family-knowledge, research, wee-dev. Supports runtime/model "
                 "overrides. Returns task_id for background mode or result for quick mode."
             ),
             "parameters": {

@@ -3196,12 +3196,10 @@ function renderJobEditForm(job, container) {
     } catch (err) {
       schedToast('Update failed: ' + err.message, 'error');
     }
+  }, {
+    fallbackRuntime: job?.fallback_runtime || '',
+    fallbackModel: job?.fallback_model || '',
   });
-  // M-1: pre-populate fallback fields when editing an existing job
-  const fbRtEl = document.getElementById('sched-fallback-runtime');
-  const fbModelEl = document.getElementById('sched-fallback-model');
-  if (fbRtEl && job && job.fallback_runtime) fbRtEl.value = job.fallback_runtime;
-  if (fbModelEl) populateFallbackModelDropdown(fbModelEl, fbRtEl?.value || '', job?.fallback_model || '');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3463,7 +3461,9 @@ async function populateFallbackRuntimeDropdown(selectEl, current = '') {
 }
 
 async function populateFallbackModelDropdown(selectEl, runtime = '', current = '') {
-  const selectedRuntime = runtime || document.getElementById('sched-fallback-runtime')?.value || 'copilot';
+  const form = selectEl?.closest('form');
+  const runtimeEl = form?.querySelector('#sched-fallback-runtime');
+  const selectedRuntime = runtime || runtimeEl?.value || 'copilot';
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   try {
     const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(selectedRuntime)}`);
@@ -3482,12 +3482,26 @@ async function populateFallbackModelDropdown(selectEl, runtime = '', current = '
   }
 }
 
-function wireJobForm(container, onSubmit) {
-  // Populate fallback dropdowns (Issue #159)
-  const fbRtEl = document.getElementById('sched-fallback-runtime');
-  const fbModelEl = document.getElementById('sched-fallback-model');
-  if (fbRtEl) populateFallbackRuntimeDropdown(fbRtEl);
-  if (fbModelEl) populateFallbackModelDropdown(fbModelEl);
+function wireJobForm(container, onSubmit, options = {}) {
+  // Populate fallback dropdowns with the current saved values before async
+  // options loading completes, otherwise edit-mode selections can be reset.
+  const fbRtEl = container.querySelector('#sched-fallback-runtime');
+  const fbModelEl = container.querySelector('#sched-fallback-model');
+  const currentFallbackRuntime = options.fallbackRuntime || '';
+  const currentFallbackModel = options.fallbackModel || '';
+  if (fbRtEl) {
+    populateFallbackRuntimeDropdown(fbRtEl, currentFallbackRuntime).then(() => {
+      if (fbModelEl) {
+        populateFallbackModelDropdown(
+          fbModelEl,
+          fbRtEl.value || currentFallbackRuntime,
+          currentFallbackModel,
+        );
+      }
+    });
+  } else if (fbModelEl) {
+    populateFallbackModelDropdown(fbModelEl, '', currentFallbackModel);
+  }
   if (fbRtEl && fbModelEl) {
     fbRtEl.addEventListener('change', () => populateFallbackModelDropdown(fbModelEl, fbRtEl.value));
   }
@@ -3599,8 +3613,8 @@ function wireJobForm(container, onSubmit) {
       payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
-      const fbRt = document.getElementById('sched-fallback-runtime')?.value || '';
-      const fbModel = document.getElementById('sched-fallback-model')?.value || '';
+      const fbRt = container.querySelector('#sched-fallback-runtime')?.value || '';
+      const fbModel = container.querySelector('#sched-fallback-model')?.value || '';
       payload.fallback_runtime = fbRt;
       payload.fallback_model = fbModel;
     } else {
