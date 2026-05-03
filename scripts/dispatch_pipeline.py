@@ -425,7 +425,8 @@ def run_pipeline() -> None:
             return
 
         # Timeout exceeded — re-dispatch
-        log(f"Re-dispatching stalled #{item['number']} (no running task after {mins:.1f}min)")
+        mins_str = f"{mins:.1f}min" if mins is not None else "unknown time"
+        log(f"Re-dispatching stalled #{item['number']} (no running task after {mins_str})")
         add_label(item["number"], "wee-dev:in-progress")
         try:
             dispatch_wee_dev(item, state)

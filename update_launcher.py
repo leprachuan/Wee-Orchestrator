@@ -14,10 +14,12 @@ def launch_update() -> int:
 
     Returns the PID of the detached process.
     """
-    script = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "update_orchestrator.sh"
-    )
-    log = "/tmp/wee-update.log"
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(repo_dir, "update_orchestrator.sh")
+    
+    # Auto-detect environment from repo dir name (same logic as update_orchestrator.sh)
+    is_dev = repo_dir.endswith("-dev")
+    log = "/tmp/wee-update.log" if is_dev else "/tmp/wee-update-prod.log"
 
     with open(log, "w") as out:
         proc = subprocess.Popen(
