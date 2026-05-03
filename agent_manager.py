@@ -4958,6 +4958,75 @@ You can mention an agent in your prompt and it will auto-delegate:
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         return text.strip()
 
+    def _clean_tool_result_json_from_text(self, text: str) -> str:
+        """Remove tool result JSON that leaked into agent message text.
+
+        Issue #316: When Codex agent_message.text contains JSON from tool results
+        (e.g., {"exit_code":0,"status":"completed"}), filter it out to prevent
+        leaking raw JSON into the chat transcript.
+        """
+        import json as _json_clean
+
+        if not text or not isinstance(text, str):
+            return text
+
+        text_stripped = text.strip()
+        if not text_stripped:
+            return text
+
+        # Case 1: Entire text is JSON - definitely a tool result that leaked
+        if (text_stripped.startswith("{") or text_stripped.startswith("[")) and (
+            text_stripped.endswith("}") or text_stripped.endswith("]")
+        ):
+            try:
+                _json_clean.loads(text_stripped)
+                # It's valid JSON - filter it out entirely
+                return ""
+            except (ValueError, _json_clean.JSONDecodeError):
+                pass
+
+        # Case 2: Contains tool-result-like JSON patterns - filter those lines
+        if any(
+            key in text.lower()
+            for key in ["exit_code", "status", "completed", "stdout", "stderr"]
+        ):
+            # Try to extract only non-JSON lines
+            parts = []
+            for line in text.split("\n"):
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+
+                # Skip lines that are pure JSON
+                if line_stripped.startswith("{") or line_stripped.startswith("["):
+                    try:
+                        _json_clean.loads(line_stripped)
+                        continue  # This is JSON, skip it
+                    except (ValueError, _json_clean.JSONDecodeError):
+                        pass
+
+                # Skip lines with JSON key-value patterns
+                if re.search(
+                    r'"[^"]*"\s*:\s*(?:\d+|true|false|null|"[^"]*")',
+                    line_stripped,
+                ):
+                    # Looks like JSON - check if it has tool result keys
+                    if any(
+                        k in line_stripped.lower()
+                        for k in ["exit_code", "status", "completed", "stdout"]
+                    ):
+                        continue  # Skip this JSON line
+
+                parts.append(line)
+
+            if parts:
+                return "\n".join(parts).strip()
+            # If all lines were filtered, return empty
+            return ""
+
+        return text
+
+
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
 
@@ -5257,7 +5326,10 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ):
                         _text = _event["item"].get("text", "")
                         if _text:
-                            jsonl_texts.append(_text)
+                            # Issue #316: Clean tool result JSON from agent message text
+                            _text = self._clean_tool_result_json_from_text(_text)
+                            if _text:  # Only append if text remains after cleaning
+                                jsonl_texts.append(_text)
                 except (ValueError, KeyError):
                     continue
 
