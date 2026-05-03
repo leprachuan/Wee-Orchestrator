@@ -614,6 +614,7 @@ class TaskSchedulerExecutor:
             "copilot": "gpt-4.1",
             "gemini": "gemini-1.5-pro",
             "opencode": "gpt-4o",
+            "wee": "ollama/qwen3",
         }
         model = (
             model_override or job.get("model") or _default_models.get(runtime, "sonnet")
