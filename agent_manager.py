@@ -3756,6 +3756,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 ["qwen3.5-64k", "qwen3.5"],
             ),
             (
+                "ollama/qwen3.5-4b-64k:latest",
+                "Ollama Qwen 3.5 4B 64K (local)",
+                ["qwen3.5-4b-64k", "qwen3.5-4b"],
+            ),
+            (
                 "ollama/granite3.3-tuned",
                 "Ollama Granite 3.3 Tuned (local)",
                 ["granite", "granite3.3"],
