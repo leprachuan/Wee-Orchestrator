@@ -17004,8 +17004,9 @@ Examples:
             "codex",
             "devin",
             "cursor",
+            "wee",
         ],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee)",  # noqa: E501
     )
     runtime_group.add_argument(
         "--list-runtimes",
