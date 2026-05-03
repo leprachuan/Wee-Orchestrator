@@ -3187,11 +3187,6 @@ function renderJobEditForm(job, container) {
       schedToast('Update failed: ' + err.message, 'error');
     }
   });
-  // M-1: pre-populate fallback fields when editing an existing job
-  const fbRtEl = document.getElementById('sched-fallback-runtime');
-  const fbModelEl = document.getElementById('sched-fallback-model');
-  if (fbRtEl && job && job.fallback_runtime) fbRtEl.value = job.fallback_runtime;
-  if (fbModelEl) populateFallbackModelDropdown(fbModelEl, fbRtEl?.value || '', job?.fallback_model || '');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3329,14 +3324,14 @@ function buildJobForm(job) {
         <div style="margin-top:8px">
           <div class="form-group">
             <label>Fallback Runtime</label>
-            <select class="glass-input glass-select" id="sched-fallback-runtime" name="fallback_runtime">
+            <select class="glass-input glass-select" id="sched-fallback-runtime" name="fallback_runtime" data-current="${escHtml(job?.fallback_runtime ?? '')}">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used if primary runtime fails (rate limit, auth error, timeout)</small>
           </div>
           <div class="form-group">
             <label>Fallback Model</label>
-            <select class="glass-input glass-select" id="sched-fallback-model" name="fallback_model">
+            <select class="glass-input glass-select" id="sched-fallback-model" name="fallback_model" data-current="${escHtml(job?.fallback_model ?? '')}">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used with fallback runtime</small>
@@ -3442,7 +3437,7 @@ async function populateFallbackRuntimeDropdown(selectEl, current = '') {
   } catch (e) {
     // Keep the conservative fallback list when the API is unavailable.
   }
-  current = current || selectEl.value;
+  current = current || selectEl.dataset.current || selectEl.value;
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   runtimes.forEach(r => {
     const opt = document.createElement('option');
@@ -3454,6 +3449,7 @@ async function populateFallbackRuntimeDropdown(selectEl, current = '') {
 
 async function populateFallbackModelDropdown(selectEl, runtime = '', current = '') {
   const selectedRuntime = runtime || document.getElementById('sched-fallback-runtime')?.value || 'copilot';
+  current = current || selectEl.dataset.current || '';
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   try {
     const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(selectedRuntime)}`);
@@ -3476,8 +3472,13 @@ function wireJobForm(container, onSubmit) {
   // Populate fallback dropdowns (Issue #159)
   const fbRtEl = document.getElementById('sched-fallback-runtime');
   const fbModelEl = document.getElementById('sched-fallback-model');
-  if (fbRtEl) populateFallbackRuntimeDropdown(fbRtEl);
-  if (fbModelEl) populateFallbackModelDropdown(fbModelEl);
+  if (fbRtEl) {
+    populateFallbackRuntimeDropdown(fbRtEl).then(() => {
+      if (fbModelEl) populateFallbackModelDropdown(fbModelEl, fbRtEl.value, fbModelEl.dataset.current || '');
+    });
+  } else if (fbModelEl) {
+    populateFallbackModelDropdown(fbModelEl);
+  }
   if (fbRtEl && fbModelEl) {
     fbRtEl.addEventListener('change', () => populateFallbackModelDropdown(fbModelEl, fbRtEl.value));
   }
