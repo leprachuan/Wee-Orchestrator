@@ -5209,9 +5209,12 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         try:
             # Execute the command with the configured timeout
+            # Use shlex.split() to safely parse command without shell injection
+            import shlex
+            argv = shlex.split(command, posix=True)
             result = subprocess.run(
-                command,
-                shell=True,
+                argv,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=self.command_timeout,
@@ -12456,12 +12459,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         try:
+            import shlex
+            argv = shlex.split(command, posix=True)
             result = _sp.run(
-                command,
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                shell=True,
+                shell=False,
                 cwd=working_dir,
             )
 
