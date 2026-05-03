@@ -10952,6 +10952,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         services = {
             "telegram": f"telegram-bot-listener{env_suffix}.service",
             "webex": f"webex-connector{env_suffix}.service",
+            "api": f"agent-manager-api{env_suffix}.service",
+            "scheduler": f"task-scheduler-executor{env_suffix}.service",
         }
 
         results = {}
