@@ -1022,6 +1022,90 @@ def check_runtime_available(runtime: str) -> bool:
     return False
 
 
+
+class DisabledRuntimesManager:
+    """Manages a persistent list of disabled runtimes stored in JSON config."""
+
+    _CONFIG_FILE = "disabled_runtimes.json"
+
+    def __init__(self, config_dir: str = None):
+        if config_dir is None:
+            config_dir = os.path.join(os.path.dirname(__file__), "config")
+        self._config_dir = config_dir
+        self._config_path = os.path.join(config_dir, self._CONFIG_FILE)
+        self._disabled: List[str] = []
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            with open(self._config_path) as f:
+                data = json.load(f)
+            self._disabled = sorted(data.get("disabled", []))
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._disabled = []
+
+    def _save(self) -> None:
+        os.makedirs(self._config_dir, exist_ok=True)
+        with open(self._config_path, "w") as f:
+            json.dump({"disabled": sorted(self._disabled)}, f, indent=2)
+
+    def get_disabled(self) -> List[str]:
+        """Return sorted list of disabled runtime IDs."""
+        return list(self._disabled)
+
+    def is_disabled(self, runtime_id: str) -> bool:
+        """Return True if the given runtime is disabled."""
+        return runtime_id in self._disabled
+
+    def disable(self, runtime_id: str) -> bool:
+        """Disable a runtime. Returns True if newly disabled, False if already disabled."""
+        if runtime_id in self._disabled:
+            return False
+        self._disabled.append(runtime_id)
+        self._disabled = sorted(self._disabled)
+        self._save()
+        return True
+
+    def enable(self, runtime_id: str) -> bool:
+        """Enable a runtime. Returns True if newly enabled, False if already enabled."""
+        if runtime_id not in self._disabled:
+            return False
+        self._disabled.remove(runtime_id)
+        self._save()
+        return True
+
+    def set_disabled(self, runtime_ids: List[str]) -> None:
+        """Replace the entire disabled list."""
+        self._disabled = sorted(runtime_ids)
+        self._save()
+
+
+_disabled_runtimes_manager: "DisabledRuntimesManager | None" = None
+
+
+def get_disabled_runtimes_manager() -> DisabledRuntimesManager:
+    """Return the singleton DisabledRuntimesManager instance."""
+    global _disabled_runtimes_manager
+    if _disabled_runtimes_manager is None:
+        _disabled_runtimes_manager = DisabledRuntimesManager()
+    return _disabled_runtimes_manager
+
+
+def get_all_runtimes() -> List[Dict[str, str]]:
+    """Return all known runtimes regardless of availability or disabled state."""
+    return [
+        {"id": "copilot", "label": "copilot"},
+        {"id": "copilot-sdk", "label": "copilot-sdk", "icon": "🤖"},
+        {"id": "opencode", "label": "opencode"},
+        {"id": "claude", "label": "claude"},
+        {"id": "claude-sdk", "label": "claude-sdk", "icon": "🧠"},
+        {"id": "gemini", "label": "gemini"},
+        {"id": "codex", "label": "codex"},
+        {"id": "devin", "label": "devin"},
+        {"id": "cursor", "label": "cursor", "icon": "🖱️"},
+        {"id": "wee", "label": "wee", "icon": "🍀"},
+    ]
+
 def get_available_runtimes() -> List[Dict[str, str]]:
     """Get list of available runtimes on this system.
 
@@ -3749,6 +3833,11 @@ You can mention an agent in your prompt and it will auto-delegate:
     WEE_MODELS = {
         "Wee Native (Ollama)": [
             ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
+            (
+                "ollama/gemma4-e2b-128k:latest",
+                "Ollama Gemma 4 E2B 128K Context (local)",
+                ["gemma4-e2b-128k", "gemma4-128k"],
+            ),
             ("ollama/qwen3", "Ollama Qwen 3 (local)", ["qwen3", "qwen"]),
             (
                 "ollama/qwen3.5-64k:latest",
