@@ -261,7 +261,7 @@
       "primary_runtime": "codex",
       "primary_model": "gpt-5.4-mini",
       "fallback_runtime": "copilot",
-      "fallback_model": "claude-sonnet-4.6",
+      "fallback_model": "auto",
       "max_concurrent": 1,
       "permissions": {
         "mode": "elevated",
