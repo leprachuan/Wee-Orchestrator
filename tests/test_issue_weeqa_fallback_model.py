@@ -6,6 +6,9 @@ Fix: Change wee-qa fallback_model to "auto" so it's compatible with copilot runt
 """
 import json
 import unittest
+from pathlib import Path
+
+_AGENTS_JSON = Path(__file__).parent.parent / 'agents.json'
 
 
 class TestWeeQAFallbackModel(unittest.TestCase):
@@ -13,7 +16,7 @@ class TestWeeQAFallbackModel(unittest.TestCase):
 
     def test_weeqa_fallback_model_is_auto(self):
         """Verify wee-qa fallback_model is 'auto' not 'claude-sonnet-4.6'"""
-        with open('/opt/n8n-copilot-shim-dev/agents.json', 'r') as f:
+        with open(_AGENTS_JSON, 'r') as f:
             agents = json.load(f)
         
         # Find wee-qa agent
@@ -32,7 +35,7 @@ class TestWeeQAFallbackModel(unittest.TestCase):
     
     def test_all_agents_copilot_fallback_use_compatible_models(self):
         """Verify all agents with copilot fallback use compatible model names"""
-        with open('/opt/n8n-copilot-shim-dev/agents.json', 'r') as f:
+        with open(_AGENTS_JSON, 'r') as f:
             agents = json.load(f)
         
         for agent in agents['agents']:

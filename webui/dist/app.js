@@ -1476,11 +1476,17 @@ function looksLikeCodexTransportFrames(text) {
     trimmed.includes('"type":"thread.started"') ||
     trimmed.includes('"type":"turn.started"') ||
     trimmed.includes('"type":"turn.completed"') ||
+    trimmed.includes('"type":"item.started"') ||
     trimmed.includes('"type":"item.completed"') ||
+    trimmed.includes('"type":"response.started"') ||
+    trimmed.includes('"type":"response.completed"') ||
     trimmed.includes('"type": "thread.started"') ||
     trimmed.includes('"type": "turn.started"') ||
     trimmed.includes('"type": "turn.completed"') ||
+    trimmed.includes('"type": "item.started"') ||
     trimmed.includes('"type": "item.completed"')
+    || trimmed.includes('"type": "response.started"') ||
+    trimmed.includes('"type": "response.completed"')
   );
 }
 
@@ -1513,15 +1519,19 @@ function normalizeCodexStreamText(text) {
         evt.type === 'thread.completed' ||
         evt.type === 'turn.started' ||
         evt.type === 'turn.completed' ||
-        evt.type === 'item.started'
+        evt.type === 'item.started' ||
+        evt.type === 'response.started' ||
+        evt.type === 'response.completed'
       ) {
         continue;
       }
+      // Any other structured Codex transport frame is operational metadata
+      // and must not render as raw JSON in the transcript.
+      continue;
     } catch {
       out.push(line);
       continue;
     }
-    out.push(line);
   }
   return out.join('\n');
 }
