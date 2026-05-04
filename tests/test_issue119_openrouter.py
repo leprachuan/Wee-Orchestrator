@@ -256,6 +256,16 @@ class TestGetModelFromName:
         result = mgr.get_model_from_name("or-gpt-4.1", "wee")
         assert result == "openrouter/openai/gpt-4.1"
 
+    def test_openrouter_free_exact_id(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("openrouter/free", "wee")
+        assert result == "openrouter/free"
+
+    def test_openrouter_free_alias(self, mgr):
+        self._reset_cache(mgr)
+        result = mgr.get_model_from_name("or-free", "wee")
+        assert result == "openrouter/free"
+
     def test_unknown_model_returns_none(self, mgr):
         self._reset_cache(mgr)
         result = mgr.get_model_from_name("nonexistent-model-xyz", "wee")

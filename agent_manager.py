@@ -3857,6 +3857,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         ],
         "Wee Native (OpenRouter)": [
             (
+                "openrouter/auto",
+                "Auto Router (OpenRouter)",
+                ["openrouter-auto", "or-auto", "auto"],
+            ),
+            (
                 "openrouter/meta-llama/llama-4-maverick",
                 "Llama 4 Maverick via OpenRouter",
                 ["llama-4-maverick", "maverick"],
@@ -3884,6 +3889,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             ),
         ],
         "Wee Native (OpenRouter Free)": [
+            (
+                "openrouter/free",
+                "Free Auto Router (OpenRouter)",
+                ["openrouter-free", "or-free", "free"],
+            ),
             (
                 "openrouter/google/gemma-3-27b-it:free",
                 "Gemma 3 27B FREE via OpenRouter",
