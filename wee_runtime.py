@@ -80,6 +80,53 @@ _WEE_TOOLS = [
 ]
 
 
+def fetch_openrouter_pricing():
+    """Fetch OpenRouter model pricing from API and cache it."""
+    try:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            try:
+                import keyring
+                api_key = keyring.get_password("openrouter", "api_key")
+            except:
+                pass
+        
+        if not api_key:
+            return {}
+        
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": "Bearer " + api_key},
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read())
+        
+        pricing = {}
+        for model in data.get("data", []):
+            model_id = model.get("id", "")
+            pricing[model_id] = {
+                "prompt": float(model.get("pricing", {}).get("prompt", 0) or 0),
+                "completion": float(model.get("pricing", {}).get("completion", 0) or 0),
+            }
+        return pricing
+    except Exception as e:
+        return {}
+
+def calculate_openrouter_cost(model_id: str, prompt_tokens: int, completion_tokens: int, pricing_cache: dict = None):
+    """Calculate estimated cost for OpenRouter API call."""
+    if pricing_cache is None:
+        pricing_cache = fetch_openrouter_pricing()
+    
+    if model_id not in pricing_cache:
+        return None
+    
+    p = pricing_cache[model_id]
+    if p["prompt"] == 0 and p["completion"] == 0:
+        return None
+    
+    cost = (prompt_tokens * p["prompt"] + completion_tokens * p["completion"]) / 1000
+    return f"${cost:.6f}"
+
 def execute_tool(func_name: str, func_args: dict) -> str:
     """Execute a tool call in the wee standalone runtime.
 
@@ -1688,13 +1735,35 @@ def main():
             create_kwargs["temperature"] = args.temperature
 
         try:
+            usage_info = {}
+            pricing_cache = {}
+            if "openrouter" in (api_base or "").lower():
+                pricing_cache = fetch_openrouter_pricing()
+            
             stream = client.chat.completions.create(**create_kwargs)
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     sys.stdout.write(chunk.choices[0].delta.content)
                     sys.stdout.flush()
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    usage_info = {
+                        "prompt_tokens": getattr(chunk.usage, 'prompt_tokens', 0),
+                        "completion_tokens": getattr(chunk.usage, 'completion_tokens', 0),
+                        "total_tokens": getattr(chunk.usage, 'total_tokens', 0),
+                    }
             sys.stdout.write("\n")
             sys.stdout.flush()
+            
+            # Output usage metadata if available
+            if usage_info and (usage_info.get('prompt_tokens', 0) or usage_info.get('completion_tokens', 0)):
+                print(f"[Wee Usage] prompt_tokens={usage_info.get('prompt_tokens', 0)} completion_tokens={usage_info.get('completion_tokens', 0)} total={usage_info.get('total_tokens', 0)}", file=sys.stderr)
+                
+                # Check for OpenRouter and calculate cost
+                if "openrouter" in (api_base or "").lower() and pricing_cache:
+                    or_model_id = model.replace("openrouter/", "") if "openrouter/" in model else model
+                    cost = calculate_openrouter_cost(or_model_id, usage_info.get("prompt_tokens", 0), usage_info.get("completion_tokens", 0), pricing_cache)
+                    if cost:
+                        print(f"[Wee Cost] {cost}", file=sys.stderr)
         except KeyboardInterrupt:
             sys.exit(130)
         except Exception as e:

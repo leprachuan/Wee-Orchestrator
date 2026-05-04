@@ -9210,6 +9210,62 @@ User Request:
         tracker.context_window = int(usage.get("context_window", context_window) or 0)
         return tracker
 
+    def _wee_fetch_openrouter_pricing(self):
+        """Fetch and cache OpenRouter model pricing."""
+        if hasattr(self, '_openrouter_pricing_cache'):
+            return self._openrouter_pricing_cache
+        
+        try:
+            import urllib.request
+            import json
+            
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                try:
+                    import keyring
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except:
+                    pass
+            
+            if not api_key:
+                self._openrouter_pricing_cache = {}
+                return {}
+            
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            
+            pricing = {}
+            for model in data.get("data", []):
+                model_id = model.get("id", "")
+                pricing[model_id] = {
+                    "prompt": float(model.get("pricing", {}).get("prompt", 0) or 0),
+                    "completion": float(model.get("pricing", {}).get("completion", 0) or 0),
+                }
+            
+            self._openrouter_pricing_cache = pricing
+            return pricing
+        except Exception:
+            self._openrouter_pricing_cache = {}
+            return {}
+
+    def _wee_calculate_openrouter_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int):
+        """Calculate estimated cost for OpenRouter API call."""
+        pricing_cache = self._wee_fetch_openrouter_pricing()
+        
+        if model_id not in pricing_cache:
+            return None
+        
+        p = pricing_cache[model_id]
+        if p["prompt"] == 0 and p["completion"] == 0:
+            return None
+        
+        cost = (prompt_tokens * p["prompt"] + completion_tokens * p["completion"]) / 1000
+        return f"${cost:.6f}"
+
     def _wee_build_meta(
         self,
         api_base: str,
@@ -9283,6 +9339,14 @@ User Request:
             meta["cost_label"] = "local"
         elif "openrouter" in api_base_lower and ":free" in (model or "").lower():
             meta["cost_label"] = "free"
+        elif "openrouter" in api_base_lower and last_usage:
+            # Calculate OpenRouter cost for paid models
+            prompt_tokens = int(last_usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(last_usage.get("completion_tokens", 0) or 0)
+            if prompt_tokens > 0 or completion_tokens > 0:
+                cost = self._wee_calculate_openrouter_cost(model, prompt_tokens, completion_tokens)
+                if cost:
+                    meta["cost_label"] = cost
 
         return usage_state, meta
 
