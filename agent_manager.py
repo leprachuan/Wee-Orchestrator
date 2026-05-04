@@ -9137,6 +9137,12 @@ User Request:
             '  Call: python tool with {"code": "your python code here"}\n'
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
+            "**search** -- Query SearXNG for web search results.\n"
+            '  Call: search tool with {"q": "your query", "count": 5, "format": "text"}\n'
+            "  Use for: finding information online, web searches, research\n"
+            "  Parameters: q (required, search query), count (optional, 1-20, default 5), format (optional, 'json' or 'text')\n"
+            "  Env: WEE_SEARXNG_URL (default: http://localhost:8888)\n"
+            "\n"
             "CRITICAL RULES:\n"
             "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
             "2. For delegating work to other agents: use call_agent\n"
