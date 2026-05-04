@@ -7623,11 +7623,24 @@ User Request:
 
                     elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
                         tool_name = "tool"
+                        tool_output = ""
+                        tool_is_error = False
                         if hasattr(event, "data"):
                             tool_name = (
                                 getattr(event.data, "name", None)
                                 or getattr(event.data, "tool_name", None)
                                 or "tool"
+                            )
+                            _raw_out = (
+                                getattr(event.data, "output", None)
+                                or getattr(event.data, "result", None)
+                                or getattr(event.data, "content", None)
+                                or ""
+                            )
+                            tool_output = str(_raw_out)[:500] if _raw_out else ""
+                            tool_is_error = bool(
+                                getattr(event.data, "is_error", False)
+                                or getattr(event.data, "error", False)
                             )
                         tc_evt = {
                             "event": "completed",
@@ -7635,6 +7648,8 @@ User Request:
                             "name": str(tool_name),
                             "input": "",
                             "output": tool_output,
+                            "is_error": tool_is_error,
+                            "status": "error" if tool_is_error else "completed",
                             "runtime": "copilot-sdk",
                             "timestamp": time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
@@ -7929,11 +7944,7 @@ User Request:
                                     "id": block.tool_use_id
                                     or f"tc_claude-sdk_{_tool_call_counter[0]}",
                                     "name": "tool",
-                                    "output": (
-                                        str(block.content)[:500]
-                                        if block.content
-                                        else ""
-                                    ),
+                                    "output": str(_block_content)[:500] if _block_content else "",
                                     "status": (
                                         "error"
                                         if getattr(block, "is_error", False)
@@ -10246,10 +10257,14 @@ User Request:
         )
 
         # Handle session ID mapping for runtimes that auto-generate IDs
+        # Codex is included here: it creates sessions with its own UUID that differs
+        # from the pre-generated UUID in the session map, so we must capture the real
+        # session ID after each new run for resume to work correctly on the next turn.
         if not can_resume and current_runtime in (
             "copilot",
             "opencode",
             "gemini",
+            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
@@ -11112,6 +11127,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         services = {
             "telegram": f"telegram-bot-listener{env_suffix}.service",
             "webex": f"webex-connector{env_suffix}.service",
+            "api": f"agent-manager-api{env_suffix}.service",
+            "scheduler": f"task-scheduler-executor{env_suffix}.service",
         }
 
         results = {}
@@ -17154,8 +17171,9 @@ Examples:
             "codex",
             "devin",
             "cursor",
+            "wee",
         ],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor)",
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee)",  # noqa: E501
     )
     runtime_group.add_argument(
         "--list-runtimes",

@@ -3337,14 +3337,14 @@ function buildJobForm(job) {
         <div style="margin-top:8px">
           <div class="form-group">
             <label>Fallback Runtime</label>
-            <select class="glass-input glass-select" id="sched-fallback-runtime" name="fallback_runtime">
+            <select class="glass-input glass-select" id="sched-fallback-runtime" name="fallback_runtime" data-current="${escHtml(job?.fallback_runtime ?? '')}">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used if primary runtime fails (rate limit, auth error, timeout)</small>
           </div>
           <div class="form-group">
             <label>Fallback Model</label>
-            <select class="glass-input glass-select" id="sched-fallback-model" name="fallback_model">
+            <select class="glass-input glass-select" id="sched-fallback-model" name="fallback_model" data-current="${escHtml(job?.fallback_model ?? '')}">
               <option value="">None (no fallback)</option>
             </select>
             <small>Used with fallback runtime</small>
@@ -3450,7 +3450,7 @@ async function populateFallbackRuntimeDropdown(selectEl, current = '') {
   } catch (e) {
     // Keep the conservative fallback list when the API is unavailable.
   }
-  current = current || selectEl.value;
+  current = current || selectEl.dataset.current || selectEl.value;
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   runtimes.forEach(r => {
     const opt = document.createElement('option');
@@ -3464,6 +3464,7 @@ async function populateFallbackModelDropdown(selectEl, runtime = '', current = '
   const form = selectEl?.closest('form');
   const runtimeEl = form?.querySelector('#sched-fallback-runtime');
   const selectedRuntime = runtime || runtimeEl?.value || 'copilot';
+  current = current || selectEl.dataset.current || '';
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   try {
     const data = await apiRequest('GET', `/models?runtime=${encodeURIComponent(selectedRuntime)}`);
