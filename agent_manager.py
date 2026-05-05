@@ -8764,6 +8764,7 @@ User Request:
         collected_output = []
         _tool_call_counter = 0
         MAX_TOOL_ROUNDS = 10
+        WEE_TOOL_OUTPUT_CAP = 8_000  # Issue #336: cap tool output fed back to model
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
@@ -8942,11 +8943,15 @@ User Request:
                         stream_buffer.push("tool_call", tc_done_event)
 
                     # Append tool result to conversation for next round
+                    # Issue #336: cap output to prevent model context overflow
+                    _raw = tool_result or "No output"
+                    if len(_raw) > WEE_TOOL_OUTPUT_CAP:
+                        _raw = _raw[:WEE_TOOL_OUTPUT_CAP] + "\n[...output truncated at " + str(WEE_TOOL_OUTPUT_CAP) + " chars]"
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tc_id,
-                            "content": tool_result or "No output",
+                            "content": _raw,
                         }
                     )
 
