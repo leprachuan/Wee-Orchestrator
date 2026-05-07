@@ -12703,8 +12703,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         try:
-            import shlex
-            argv = shlex.split(command, posix=True)
+            from scheduler.executor import _split_command_args
+            argv = _split_command_args(command)
             result = _sp.run(
                 argv,
                 capture_output=True,
@@ -12744,7 +12744,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             sched = _get_scheduler()
             task_rec = bg_task_mgr.get_task(task_id)
             success = task_rec and task_rec.get("status") == "completed"
-            sched._save_result(
+            sched.save_result(
                 job_id,
                 job_name,
                 success=success,
@@ -12752,7 +12752,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error=(task_rec or {}).get("error", ""),
             )
             status_label = "succeeded" if success else "failed"
-            sched._log_job(job_id, f"Run Now (command mode) {status_label}")
+            sched._log(job_id, f"Run Now (command mode) {status_label}")
         except Exception as exc:
             logger.warning(
                 f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
