@@ -70,6 +70,9 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    if DRY_RUN:
+        log("[dry-run] Would write pipeline state")
+        return
     PIPELINE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(PIPELINE_STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
@@ -152,6 +155,9 @@ def get_issue_status(item: dict) -> str:
 
 def add_label(issue_number: int, label: str) -> None:
     """Add label to issue."""
+    if DRY_RUN:
+        log(f"[dry-run] Would add label '{label}' to #{issue_number}")
+        return
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number),
          "--repo", REPO,
@@ -162,6 +168,9 @@ def add_label(issue_number: int, label: str) -> None:
 
 def remove_label(issue_number: int, label: str) -> None:
     """Remove label from issue."""
+    if DRY_RUN:
+        log(f"[dry-run] Would remove label '{label}' from #{issue_number}")
+        return
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number),
          "--repo", REPO,
@@ -172,6 +181,10 @@ def remove_label(issue_number: int, label: str) -> None:
 
 def add_comment(issue_number: int, body: str) -> None:
     """Add comment to issue."""
+    if DRY_RUN:
+        preview = body.replace("\n", " ")[:120]
+        log(f"[dry-run] Would comment on #{issue_number}: {preview}")
+        return
     subprocess.run(
         ["gh", "issue", "comment", str(issue_number),
          "--repo", REPO,
@@ -182,6 +195,9 @@ def add_comment(issue_number: int, body: str) -> None:
 
 def close_issue(issue_number: int) -> None:
     """Close issue."""
+    if DRY_RUN:
+        log(f"[dry-run] Would close #{issue_number}")
+        return
     subprocess.run(
         ["gh", "issue", "close", str(issue_number),
          "--repo", REPO],
@@ -191,6 +207,9 @@ def close_issue(issue_number: int) -> None:
 
 def ensure_labels_exist() -> None:
     """Create required labels if they don't exist."""
+    if DRY_RUN:
+        log("[dry-run] Would ensure required GitHub labels exist")
+        return
     for label, color in REQUIRED_LABELS.items():
         subprocess.run(
             ["gh", "label", "create", label,
