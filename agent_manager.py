@@ -159,6 +159,49 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
     return sanitized
 
 
+# ---------------------------------------------------------------------------
+# SSH command sanitization (Issue #113)
+# ---------------------------------------------------------------------------
+
+_SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
+
+def _wee_sanitize_bash_command(command: str) -> str:
+    """Inject ``-o StrictHostKeyChecking=accept-new`` into ssh/scp/sftp commands.
+
+    Prevents interactive known_hosts prompts that block non-interactive runs.
+    Idempotent: already-flagged commands are returned unchanged.
+    """
+    if not command:
+        return command
+    if "StrictHostKeyChecking" in command:
+        return command
+
+    def _inject(m: re.Match) -> str:
+        return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+    return _SSH_BIN_RE.sub(_inject, command, count=0)
+
+
+def _wee_anti_hallucination_prompt() -> str:
+    """Return the anti-hallucination system prompt fragment for Wee runtime.
+
+    [CRITICAL RULES — read before every response]
+    1. NEVER fabricate command output. Run every command that you claim to run.
+    2. Report the EXACT error message you receive — no paraphrasing.
+    3. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to
+       avoid interactive host-key prompts that will block the session.
+    4. Label any illustrative snippet: EXAMPLE (not real output).
+    """
+    return (
+        "\n\n[CRITICAL RULES — read before every response]\n"
+        "1. NEVER fabricate command output. Run every command you claim to run.\n"
+        "2. Report the EXACT error message you receive — no paraphrasing.\n"
+        "3. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new``.\n"
+        "4. Label any illustrative snippet: EXAMPLE (not real output).\n"
+    )
+
+
 def _resolve_silent_default(channel: str) -> bool:
     """Resolve silent_mode default from WEE_VERBOSE env var or channel.
 
@@ -8638,6 +8681,8 @@ User Request:
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
         context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
+        # Issue #113: Inject anti-hallucination rules and SSH sanitization guidance.
+        context_prompt = context_prompt + _wee_anti_hallucination_prompt()
 
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
@@ -9562,6 +9607,7 @@ User Request:
                 command = func_args.get("command", "")
                 if not command:
                     return "Error: No command provided"
+                command = _wee_sanitize_bash_command(command)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
