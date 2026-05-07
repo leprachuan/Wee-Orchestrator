@@ -205,7 +205,7 @@ class TelegramConnector(BaseConnector):
     def _safe_file_dirs(self):
         """Allowed download directories for Telegram file sends."""
         return [
-            Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve(),
+            Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/telegram_downloads")).resolve(),
             Path("/tmp/webui_ai_media").resolve(),
         ]
 
@@ -844,7 +844,7 @@ class TelegramConnector(BaseConnector):
             file_path = file_info["result"]["file_path"]
 
             # Create downloads directory in repo
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
+            downloads_dir = Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/telegram_downloads"))
             downloads_dir.mkdir(exist_ok=True)
 
             # Download file
@@ -871,7 +871,7 @@ class TelegramConnector(BaseConnector):
     def cleanup_files(self, user_id: int):
         """Clean up downloaded files for user"""
         try:
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
+            downloads_dir = Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/telegram_downloads"))
             if downloads_dir.exists():
                 for file in downloads_dir.glob(f"{user_id}_*"):
                     file.unlink()

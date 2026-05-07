@@ -144,7 +144,7 @@ class WebEXConnector(BaseConnector):
     def _safe_file_dirs(self):
         """Allowed download directories for WebEX file sends."""
         return [
-            Path("/opt/n8n-copilot-shim-dev/webex_downloads").resolve(),
+            Path(os.environ.get("WEBEX_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/webex_downloads")).resolve(),
             Path("/tmp/webui_ai_media").resolve(),
         ]
 
@@ -726,7 +726,7 @@ class WebEXConnector(BaseConnector):
 
             if response.status_code == 200:
                 # Create downloads directory
-                downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                downloads_dir = Path(os.environ.get("WEBEX_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/webex_downloads"))
                 downloads_dir.mkdir(exist_ok=True)
 
                 # Extract filename from Content-Disposition header
@@ -772,7 +772,7 @@ class WebEXConnector(BaseConnector):
                 )
                 if response.status_code == 200:
                     # Repeat save logic above
-                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                    downloads_dir = Path(os.environ.get("WEBEX_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/webex_downloads"))
                     downloads_dir.mkdir(exist_ok=True)
 
                     filename = "file"
@@ -843,7 +843,7 @@ class WebEXConnector(BaseConnector):
                                 logger.debug(f"Failed to clean up temp file: {e}")
 
                     # Clean up downloaded files in webex_downloads/
-                    downloads_dir = Path("/opt/n8n-copilot-shim-dev/webex_downloads")
+                    downloads_dir = Path(os.environ.get("WEBEX_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/webex_downloads"))
                     if downloads_dir.exists():
                         for file in downloads_dir.glob("*_*"):
                             try:
