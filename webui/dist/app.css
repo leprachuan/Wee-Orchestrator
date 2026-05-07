@@ -7224,3 +7224,75 @@ html, body {
   color: var(--text-muted);
   margin-top: 2px;
 }
+
+/* ── Mobile Bot Token Settings ──────────────────────────────────────────── */
+.asf-mobile-bots-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+.asf-info-banner {
+  background: rgba(96,165,250,0.12);
+  border: 1px solid rgba(96,165,250,0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.asf-bot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.asf-bot-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.asf-bot-icon { font-size: 16px; }
+.asf-bot-name { font-weight: 500; }
+.asf-bot-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.asf-bot-badge--configured {
+  background: rgba(74,222,128,0.15);
+  color: #4ade80;
+}
+.asf-bot-badge--unconfigured {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-muted);
+}
+.asf-bot-token-form {
+  margin-top: 8px;
+  padding: 10px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.asf-bot-token-input {
+  width: 100%;
+  margin-bottom: 8px;
+  font-family: monospace;
+  font-size: 12px;
+}
+.asf-bot-form-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.asf-bot-form-status {
+  margin-top: 6px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.asf-bot-form-status--ok    { color: #4ade80; background: rgba(74,222,128,0.1); }
+.asf-bot-form-status--error { color: #f87171; background: rgba(248,113,113,0.1); }

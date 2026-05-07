@@ -16462,6 +16462,227 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             raise HTTPException(status_code=500, detail=f"Reload failed: {msg}")
 
+
+
+    # --- Per-agent Bot Token Management API ---
+
+    _VALID_BOT_CHANNELS = frozenset({"telegram", "webex"})
+
+    @app.get("/api/v1/agents/{agent_name}/bots/{channel}/token-status")
+    async def get_agent_bot_token_status(
+        agent_name: str, channel: str, request: Request
+    ):
+        """Return configured/not-configured status for an agent bot token.
+
+        Never returns the plaintext token value.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        try:
+            data = json.loads(_agents_json_path.read_text())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        agents = data.get("agents", [])
+        agent = next((a for a in agents if a.get("name") == agent_name), None)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        bots = agent.get("bots") or {}
+        ch_cfg = bots.get(channel) or {}
+        secret_name = ch_cfg.get("token_secret") or ""
+        configured = bool(secret_name)
+        return {
+            "agent": agent_name,
+            "channel": channel,
+            "configured": configured,
+            "secret_name": secret_name if configured else None,
+            "allowed_users": ch_cfg.get("allowed_users") or [],
+        }
+
+    @app.put("/api/v1/agents/{agent_name}/bots/{channel}/token")
+    async def set_agent_bot_token(
+        agent_name: str, channel: str, request: Request
+    ):
+        """Store a bot token securely and update agents.json with the secret reference.
+
+        Body: {"token": "<bot_token>", "allowed_users": ["123456"]}
+        The token value is never returned or logged.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        body = await request.json()
+        token_value = body.get("token", "").strip()
+        allowed_users = body.get("allowed_users", None)
+        if not token_value:
+            raise HTTPException(status_code=400, detail="'token' is required")
+
+        secret_name = f"wee.agent.{agent_name}.{channel}.bot_token"
+
+        # Store the token securely via secret_tool
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            _SECRET_TOOL_PATH,
+            "set",
+            "--name",
+            secret_name,
+            "--value-stdin",
+            "--backend",
+            "file",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate(input=f"{token_value}\n".encode())
+        if proc.returncode != 0:
+            detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool set failed"
+            try:
+                err = json.loads(detail)
+                detail = err.get("message", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=detail)
+
+        # Update agents.json to reference the secret name
+        try:
+            data = json.loads(_agents_json_path.read_text())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        agents = data.get("agents", [])
+        agent_idx = next(
+            (i for i, a in enumerate(agents) if a.get("name") == agent_name), None
+        )
+        if agent_idx is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent = agents[agent_idx]
+        if not isinstance(agent.get("bots"), dict):
+            agent["bots"] = {}
+        if not isinstance(agent["bots"].get(channel), dict):
+            agent["bots"][channel] = {}
+        agent["bots"][channel]["token_secret"] = secret_name
+        if allowed_users is not None:
+            agent["bots"][channel]["allowed_users"] = [str(u) for u in allowed_users]
+
+        agents[agent_idx] = agent
+        data["agents"] = agents
+
+        backup = _agents_json_path.with_suffix(".json.bak")
+        if _agents_json_path.exists():
+            shutil.copy2(str(_agents_json_path), str(backup))
+        _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        print(
+            f"[API] Bot token set for agent '{agent_name}' channel '{channel}'"
+            f" by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
+        ok, msg = session_mgr.reload_agents_from_disk()
+        if ok:
+            print(f"[API] Auto-reloaded agents after bot token update — {msg}", file=sys.stderr)
+        return {
+            "status": "configured",
+            "agent": agent_name,
+            "channel": channel,
+            "secret_name": secret_name,
+            "reloaded": ok,
+        }
+
+    @app.delete("/api/v1/agents/{agent_name}/bots/{channel}/token")
+    async def delete_agent_bot_token(
+        agent_name: str, channel: str, request: Request
+    ):
+        """Remove a bot token: deletes the secret and clears the agents.json bots entry."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        try:
+            data = json.loads(_agents_json_path.read_text())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        agents = data.get("agents", [])
+        agent_idx = next(
+            (i for i, a in enumerate(agents) if a.get("name") == agent_name), None
+        )
+        if agent_idx is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent = agents[agent_idx]
+        bots = agent.get("bots") or {}
+        ch_cfg = bots.get(channel) or {}
+        secret_name = ch_cfg.get("token_secret") or ""
+
+        # Delete from secret store (best-effort)
+        if secret_name:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    _SECRET_TOOL_PATH,
+                    "delete",
+                    "--name",
+                    secret_name,
+                    "--backend",
+                    "file",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+            except Exception as exc:
+                print(
+                    f"[API] Warning: failed to delete secret '{secret_name}': {exc}",
+                    file=sys.stderr,
+                )
+
+        # Remove the channel block from agents.json
+        if channel in bots:
+            del bots[channel]
+        if not bots:
+            agent.pop("bots", None)
+        else:
+            agent["bots"] = bots
+        agents[agent_idx] = agent
+        data["agents"] = agents
+
+        backup = _agents_json_path.with_suffix(".json.bak")
+        if _agents_json_path.exists():
+            shutil.copy2(str(_agents_json_path), str(backup))
+        _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        print(
+            f"[API] Bot token removed for agent '{agent_name}' channel '{channel}'"
+            f" by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
+        ok, _ = session_mgr.reload_agents_from_disk()
+        return {
+            "status": "removed",
+            "agent": agent_name,
+            "channel": channel,
+            "reloaded": ok,
+        }
+
     @app.get("/api/v1/logs")
     async def get_logs(
         request: Request,

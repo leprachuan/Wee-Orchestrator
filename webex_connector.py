@@ -1471,6 +1471,57 @@ class WebEXConnector(BaseConnector):
         self.disconnect_rabbitmq()
 
 
+def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.json") -> Optional[str]:
+    """Resolve the orchestrator bot token from agents.json via secret_tool.
+
+    Reads agents.json, finds the 'orchestrator' agent, and resolves
+    bots.<channel>.token_secret from the file-backend secret store.
+
+    Returns the token string or None (caller falls back to env/config).
+    Never logs the actual token value.
+    """
+    try:
+        agents_path = Path(agents_json)
+        if not agents_path.exists():
+            agents_path = Path(__file__).resolve().parent / "agents.json"
+        if not agents_path.exists():
+            return None
+        data = json.loads(agents_path.read_text())
+        agents = data.get("agents", [])
+        orch = next((a for a in agents if a.get("name") == "orchestrator"), None)
+        if not orch:
+            return None
+        bots = orch.get("bots") or {}
+        ch_cfg = bots.get(channel) or {}
+        secret_name = ch_cfg.get("token_secret", "").strip()
+        if not secret_name:
+            return None
+        secret_tool_path = Path(__file__).resolve().parent / "secret_tool" / "secret_tool.py"
+        if not secret_tool_path.exists():
+            logger.warning("secret_tool.py not found at %s — cannot resolve orchestrator bot token", secret_tool_path)
+            return None
+        import subprocess as _subprocess
+        result = _subprocess.run(
+            [sys.executable, str(secret_tool_path), "get", "--name", secret_name, "--backend", "file"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            try:
+                parsed = json.loads(output)
+                if parsed.get("status") == "success":
+                    return parsed.get("credential") or parsed.get("value")
+            except Exception:
+                if output:
+                    return output
+        logger.warning("Failed to resolve orchestrator webex token (secret=%s)", secret_name)
+    except Exception as exc:
+        logger.warning("Error resolving orchestrator bot token: %s", exc)
+    return None
+
+
 def main():
     """Main entry point for WebEX connector"""
     import argparse
@@ -1485,6 +1536,11 @@ def main():
         "--config",
         default="webex_config.json",
         help="Configuration file path",
+    )
+    parser.add_argument(
+        "--agents-json",
+        default="agents.json",
+        help="Path to agents.json (used to resolve orchestrator bot token from Settings)",
     )
     parser.add_argument(
         "--allow-user",
@@ -1521,12 +1577,25 @@ def main():
         print(f"Allowed users: {allowed if allowed else 'None (all users allowed)'}")
         return
 
+    # Token resolution priority:
+    # 1. Settings-backed token (agents.json bots.webex.token_secret via secret_tool)
+    # 2. CLI --token / WEBEX_BOT_TOKEN env var (migration fallback)
+    # 3. webex_config.json token field (handled inside WebEXConnector.__init__)
+    settings_token = _resolve_orchestrator_bot_token("webex", args.agents_json)
+    token = settings_token or args.token
+
     # Start connector
-    if not args.token:
-        print("Error: WebEX bot token required (--token or WEBEX_BOT_TOKEN env var)")
+    if not token:
+        print(
+            "Error: WebEX bot token required (--token, WEBEX_BOT_TOKEN env var,"
+            " or configure via Settings panel)"
+        )
         sys.exit(1)
 
-    connector = WebEXConnector(args.token, args.config)
+    if settings_token:
+        print("[INFO] Using orchestrator WebEx bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
+
+    connector = WebEXConnector(token, args.config)
     connector.listen_to_queue()
 
 

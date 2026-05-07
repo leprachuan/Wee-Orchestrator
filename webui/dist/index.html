@@ -702,6 +702,62 @@
         </div><!-- /Permissions -->
 
 
+
+        <!-- Mobile Bots Section -->
+        <div class="asf-section" id="asf-mobile-bots-section">
+          <div class="asf-section-title">📱 Mobile Bots</div>
+          <p class="asf-mobile-bots-desc">Configure per-agent Telegram and WebEx bot tokens. Tokens are stored in the secure keyring and never shown in plaintext.</p>
+
+          <!-- Orchestrator note -->
+          <div id="asf-mobile-bots-orchestrator-note" class="asf-info-banner hidden">
+            ℹ️ This is the orchestrator agent — its bot handles <strong>/agent set</strong> and general routing. Per-agent bots are pinned to their assigned agent only.
+          </div>
+
+          <!-- Telegram bot row -->
+          <div class="asf-bot-row">
+            <div class="asf-bot-label">
+              <span class="asf-bot-icon">✈️</span>
+              <span class="asf-bot-name">Telegram</span>
+              <span id="asf-tg-status-badge" class="asf-bot-badge asf-bot-badge--unconfigured">not configured</span>
+            </div>
+            <div class="asf-bot-controls" id="asf-tg-controls">
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-tg-update">Set Token</button>
+            </div>
+          </div>
+          <!-- Telegram token input (hidden by default) -->
+          <div id="asf-tg-token-form" class="asf-bot-token-form hidden">
+            <input id="asf-tg-token-input" type="password" class="glass-input asf-bot-token-input" placeholder="Paste Telegram bot token…" autocomplete="new-password" />
+            <div class="asf-bot-form-actions">
+              <button type="button" class="btn btn-primary btn-xs" id="btn-tg-save">Save</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-tg-cancel">Cancel</button>
+              <button type="button" class="btn btn-danger-ghost btn-xs" id="btn-tg-remove">Remove</button>
+            </div>
+            <div id="asf-tg-form-status" class="asf-bot-form-status hidden"></div>
+          </div>
+
+          <!-- WebEx bot row -->
+          <div class="asf-bot-row" style="margin-top:12px;">
+            <div class="asf-bot-label">
+              <span class="asf-bot-icon">💬</span>
+              <span class="asf-bot-name">WebEx</span>
+              <span id="asf-wx-status-badge" class="asf-bot-badge asf-bot-badge--unconfigured">not configured</span>
+            </div>
+            <div class="asf-bot-controls" id="asf-wx-controls">
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-wx-update">Set Token</button>
+            </div>
+          </div>
+          <!-- WebEx token input (hidden by default) -->
+          <div id="asf-wx-token-form" class="asf-bot-token-form hidden">
+            <input id="asf-wx-token-input" type="password" class="glass-input asf-bot-token-input" placeholder="Paste WebEx bot token…" autocomplete="new-password" />
+            <div class="asf-bot-form-actions">
+              <button type="button" class="btn btn-primary btn-xs" id="btn-wx-save">Save</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-wx-cancel">Cancel</button>
+              <button type="button" class="btn btn-danger-ghost btn-xs" id="btn-wx-remove">Remove</button>
+            </div>
+            <div id="asf-wx-form-status" class="asf-bot-form-status hidden"></div>
+          </div>
+        </div>
+
         <!-- .env File Editor -->
         <div class="asf-section">
           <div class="asf-section-title">🔧 Environment Configuration (.env)</div>

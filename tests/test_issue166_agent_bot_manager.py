@@ -31,13 +31,42 @@ class TestResolveSecret:
     @patch("agent_bot_manager.SECRET_TOOL_PATH")
     @patch("subprocess.run")
     def test_resolve_secret_success(self, mock_run, mock_path):
+        # secret_tool returns "credential" (not "value") for all backends
         mock_path.exists.return_value = True
         mock_run.return_value = MagicMock(
             returncode=0,
-            stdout=json.dumps({"status": "success", "value": "tok123"}),
+            stdout=json.dumps({"status": "success", "credential": "tok123"}),
             stderr="",
         )
         assert resolve_secret("MY_SECRET") == "tok123"
+
+    @patch("agent_bot_manager.SECRET_TOOL_PATH")
+    @patch("subprocess.run")
+    def test_resolve_secret_success_legacy_value_key(self, mock_run, mock_path):
+        # Backwards compat: also accept "value" key if credential is absent
+        mock_path.exists.return_value = True
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"status": "success", "value": "tok456"}),
+            stderr="",
+        )
+        assert resolve_secret("MY_SECRET") == "tok456"
+
+    @patch("agent_bot_manager.SECRET_TOOL_PATH")
+    @patch("subprocess.run")
+    def test_resolve_secret_uses_file_backend(self, mock_run, mock_path):
+        # Ensure we call --backend file (matches the Settings API storage backend)
+        mock_path.exists.return_value = True
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"status": "success", "credential": "tok789"}),
+            stderr="",
+        )
+        resolve_secret("MY_SECRET")
+        call_args = mock_run.call_args[0][0]
+        assert "--backend" in call_args
+        backend_idx = call_args.index("--backend")
+        assert call_args[backend_idx + 1] == "file"
 
     @patch("agent_bot_manager.SECRET_TOOL_PATH")
     @patch("subprocess.run")
@@ -1050,3 +1079,179 @@ class TestAllowedUsersInheritance:
                     mgr._check_reload()
                     bot = mgr._telegram_bots["smarthome"]
                     assert bot.allowed_users == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #339: /agent set is orchestrator-only; non-orchestrator bots reject it
+# ---------------------------------------------------------------------------
+
+
+class TestIssue339AgentSetRestriction:
+    """Non-orchestrator agent bots must reject /agent set with a clear message."""
+
+    def _make_telegram_bot(self, agent="wee-dev"):
+        return TelegramAgentBot(
+            agent_name=agent,
+            token="fake",
+            api_url="http://x:8000",
+            api_shared_key="k",
+        )
+
+    def _make_webex_bot(self, agent="wee-dev"):
+        return WebExAgentBot(
+            agent_name=agent,
+            token="fake",
+            api_url="http://x:8000",
+            api_shared_key="k",
+        )
+
+    def test_telegram_agent_set_blocked(self):
+        bot = self._make_telegram_bot()
+        resp = bot._handle_slash_command("/agent set orchestrator", 1, 2)
+        assert resp is not None
+        assert "disabled" in resp.lower() or "dedicated" in resp.lower()
+
+    def test_telegram_agent_set_space_variant_blocked(self):
+        bot = self._make_telegram_bot()
+        # /agent set with extra spaces — cmd is "/agent" after split
+        resp = bot._handle_slash_command("/agent  set  research", 1, 2)
+        assert resp is not None
+
+    def test_telegram_agent_set_any_subcommand_blocked(self):
+        bot = self._make_telegram_bot()
+        # Any /agent subcommand is blocked
+        resp = bot._handle_slash_command("/agent list", 1, 2)
+        assert resp is not None
+        assert "disabled" in resp.lower() or "dedicated" in resp.lower()
+
+    def test_telegram_agent_set_message_mentions_agent(self):
+        bot = self._make_telegram_bot(agent="smarthome")
+        resp = bot._handle_slash_command("/agent set orchestrator", 1, 2)
+        assert resp is not None
+        assert "smarthome" in resp
+
+    @patch("requests.post")
+    def test_webex_agent_command_blocked(self, mock_post):
+        bot = self._make_webex_bot()
+        bot._handle_message({"roomId": "r1", "personId": "p1", "text": "/agent set orchestrator"})
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args[1]
+        msg_text = call_kwargs.get("json", {}).get("markdown", "")
+        assert "disabled" in msg_text.lower() or "dedicated" in msg_text.lower()
+
+    @patch("requests.post")
+    def test_webex_agent_set_case_insensitive(self, mock_post):
+        bot = self._make_webex_bot()
+        bot._handle_message({"roomId": "r1", "personId": "p1", "text": "/Agent Set foo"})
+        mock_post.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Issue #339: orchestrator token resolution from agents.json/secret_tool
+# ---------------------------------------------------------------------------
+
+
+class TestIssue339OrchestratorTokenResolution:
+    """Verify telegram_connector._resolve_orchestrator_bot_token() reads agents.json
+    and resolves the orchestrator token from the file backend secret store."""
+
+    def _make_agents_json(self, agents, tmpdir):
+        path = os.path.join(tmpdir, "agents.json")
+        with open(path, "w") as f:
+            json.dump({"agents": agents}, f)
+        return path
+
+    def test_returns_none_when_agents_json_missing(self):
+        from telegram_connector import _resolve_orchestrator_bot_token
+        result = _resolve_orchestrator_bot_token("telegram", "/nonexistent/agents.json")
+        assert result is None
+
+    def test_returns_none_when_orchestrator_has_no_bots(self):
+        from telegram_connector import _resolve_orchestrator_bot_token
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [{"name": "orchestrator", "path": "/opt/"}], tmpdir
+            )
+            result = _resolve_orchestrator_bot_token("telegram", path)
+            assert result is None
+
+    def test_returns_none_when_no_token_secret(self):
+        from telegram_connector import _resolve_orchestrator_bot_token
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [{"name": "orchestrator", "path": "/opt/", "bots": {"telegram": {}}}], tmpdir
+            )
+            result = _resolve_orchestrator_bot_token("telegram", path)
+            assert result is None
+
+    @patch("subprocess.run")
+    def test_resolves_token_from_secret_tool(self, mock_run):
+        from telegram_connector import _resolve_orchestrator_bot_token
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"status": "success", "credential": "tg_token_abc"}),
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "orchestrator",
+                        "path": "/opt/",
+                        "bots": {
+                            "telegram": {"token_secret": "wee.agent.orchestrator.telegram.bot_token"}
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            # Patch secret_tool_path to exist
+            with patch("pathlib.Path.exists", return_value=True):
+                result = _resolve_orchestrator_bot_token("telegram", path)
+            assert result == "tg_token_abc"
+
+    @patch("subprocess.run")
+    def test_resolves_webex_token(self, mock_run):
+        from webex_connector import _resolve_orchestrator_bot_token
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"status": "success", "credential": "wx_token_xyz"}),
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "orchestrator",
+                        "path": "/opt/",
+                        "bots": {
+                            "webex": {"token_secret": "wee.agent.orchestrator.webex.bot_token"}
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            with patch("pathlib.Path.exists", return_value=True):
+                result = _resolve_orchestrator_bot_token("webex", path)
+            assert result == "wx_token_xyz"
+
+    @patch("subprocess.run")
+    def test_falls_back_when_secret_tool_fails(self, mock_run):
+        from telegram_connector import _resolve_orchestrator_bot_token
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._make_agents_json(
+                [
+                    {
+                        "name": "orchestrator",
+                        "path": "/opt/",
+                        "bots": {
+                            "telegram": {"token_secret": "wee.agent.orchestrator.telegram.bot_token"}
+                        },
+                    }
+                ],
+                tmpdir,
+            )
+            with patch("pathlib.Path.exists", return_value=True):
+                result = _resolve_orchestrator_bot_token("telegram", path)
+            assert result is None

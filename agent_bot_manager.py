@@ -42,6 +42,9 @@ DEFAULT_API_SHARED_KEY = os.getenv("API_SHARED_KEY", "")
 def resolve_secret(secret_name: str) -> Optional[str]:
     """Resolve a secret value from keyring via secret_tool.py.
 
+    Uses the 'file' backend to match the backend used by the Settings API
+    when storing bot tokens (PUT /agents/{name}/bots/{channel}/token).
+
     Returns the secret value or None if resolution fails.
     Never logs the actual secret value.
     """
@@ -57,7 +60,7 @@ def resolve_secret(secret_name: str) -> Optional[str]:
                 "--name",
                 secret_name,
                 "--backend",
-                "pass",
+                "file",
             ],
             capture_output=True,
             text=True,
@@ -68,7 +71,8 @@ def resolve_secret(secret_name: str) -> Optional[str]:
             try:
                 data = json.loads(output)
                 if data.get("status") == "success":
-                    return data["value"]
+                    # All secret_tool backends return the value under "credential"
+                    return data.get("credential") or data.get("value")
             except json.JSONDecodeError:
                 if output:
                     return output
