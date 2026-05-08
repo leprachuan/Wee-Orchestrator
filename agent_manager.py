@@ -8804,10 +8804,41 @@ User Request:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_agent",
+                    "description": (
+                        "Delegate a task to a specialized sub-agent. "
+                        "Use mode='background' for long-running tasks (returns task ID). "
+                        "Use mode='quick' to wait for the result inline."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent": {
+                                "type": "string",
+                                "description": "Agent name (e.g. orchestrator, research, devops, wee-dev)",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "The task or question to send to the agent",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["quick", "background"],
+                                "description": "quick=wait for result, background=dispatch and return task ID",
+                            },
+                        },
+                        "required": ["agent", "prompt"],
+                    },
+                },
+            },
         ]
 
         collected_output = []
         _tool_call_counter = 0
+        _last_tool_names: set = set()  # Issue #343: track names of tools called in last round
         MAX_TOOL_ROUNDS = 10
         WEE_TOOL_OUTPUT_CAP = 8_000  # Issue #336: cap tool output fed back to model
 
@@ -8914,6 +8945,21 @@ User Request:
 
                 # No tool calls — we have the final answer
                 if not tool_calls_acc:
+                    # Issue #343: When call_agent was the last tool and model returns
+                    # empty synthesis, surface the task dispatch result as confirmation.
+                    if not content_text.strip() and "call_agent" in _last_tool_names:
+                        _tool_msgs = [
+                            m["content"] for m in messages if m.get("role") == "tool"
+                        ]
+                        if _tool_msgs:
+                            content_text = _tool_msgs[-1]
+                            print(
+                                "[Wee Native] Empty synthesis after call_agent — "
+                                "surfacing task dispatch result",
+                                file=sys.stderr,
+                            )
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": content_text})
                     collected_output.append(content_text)
                     messages.append({"role": "assistant", "content": content_text})
                     break
@@ -8999,6 +9045,9 @@ User Request:
                             "content": _raw,
                         }
                     )
+
+                # Issue #343: record which tools were called in this round
+                _last_tool_names = {tc["function"]["name"] for tc in assistant_tool_calls}
 
             else:
                 # All MAX_TOOL_ROUNDS had tool calls with no final text
@@ -9631,12 +9680,100 @@ User Request:
                     else:
                         return f"✗ Failed with exit code: {result.returncode}"
                 return output.strip()
+            elif func_name == "call_agent":
+                # Issue #343: Delegate to sub-agent via orchestrator API
+                return self._wee_call_agent(func_args)
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python, call_agent"
         except subprocess.TimeoutExpired:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+
+    def _wee_call_agent(self, func_args: dict) -> str:
+        # Issue #343: Handle call_agent tool calls from the wee agentic loop.
+        # Dispatches to the Wee Orchestrator background-tasks API (mode=background)
+        # or query API (mode=quick).  Uses environment variables for API URL/token,
+        # falling back to the same defaults as wee_runtime._call_agent_handler.
+        import ssl
+        import urllib.error
+        import urllib.request
+        import json as _json
+
+        agent = func_args.get("agent", "").strip()
+        prompt = func_args.get("prompt", "").strip()
+        mode = func_args.get("mode", "background").strip().lower()
+
+        if not agent:
+            return "Error: call_agent requires 'agent' parameter"
+        if not prompt:
+            return "Error: call_agent requires 'prompt' parameter"
+        if mode not in ("quick", "background"):
+            mode = "background"
+
+        if "WEE_ORCHESTRATOR_API" in os.environ:
+            api_url = os.environ["WEE_ORCHESTRATOR_API"]
+        else:
+            host = os.environ.get("WEE_ORCHESTRATOR_HOST", "127.0.0.1")
+            port = os.environ.get("WEE_ORCHESTRATOR_PORT", "8001")
+            protocol = "http" if host in ("127.0.0.1", "localhost") else "https"
+            api_url = f"{protocol}://{host}:{port}"
+
+        token = os.environ.get(
+            "WEE_ORCHESTRATOR_TOKEN",
+            "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU",
+        )
+
+        agent_cfg = self.AGENTS.get(agent, {})
+        runtime = agent_cfg.get("primary_runtime", "copilot")
+        model = agent_cfg.get("primary_model", "claude-haiku-4.5")
+
+        if mode == "background":
+            endpoint = "/api/v1/background-tasks"
+            http_timeout = 10
+            task_data = {
+                "prompt": prompt, "agent": agent,
+                "runtime": runtime, "model": model, "timeout": 1800,
+            }
+        else:
+            endpoint = "/api/v1/query"
+            http_timeout = 120
+            task_data = {
+                "prompt": prompt, "agent": agent,
+                "runtime": runtime, "model": model, "timeout": 90,
+            }
+
+        url = f"{api_url}{endpoint}"
+        req = urllib.request.Request(url, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {token}")
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            with urllib.request.urlopen(
+                req, data=_json.dumps(task_data).encode(),
+                context=ctx, timeout=http_timeout,
+            ) as response:
+                result = _json.loads(response.read().decode())
+                if mode == "background":
+                    task_id = result.get("id") or result.get("task_id", "unknown")
+                    return (
+                        f"Task dispatched to {agent} agent.\n"
+                        f"Task ID: {task_id}\n"
+                        f"Check status: /background status {task_id}"
+                    )
+                else:
+                    resp_text = result.get("response") or result.get("result") or str(result)
+                    return f"Response from {agent}:\n{resp_text}"
+        except urllib.error.HTTPError as e:
+            return f"Error: call_agent HTTP {e.code} — {e.reason}"
+        except urllib.error.URLError as e:
+            return f"Error: call_agent network error — {str(e)[:80]}"
+        except Exception as e:
+            return f"Error: call_agent failed — {str(e)[:100]}"
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
