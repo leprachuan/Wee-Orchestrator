@@ -18,6 +18,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Optional
 
 # Configure handoff logging
@@ -51,6 +52,9 @@ _handoff_logger = _setup_handoff_logger()
 class SessionHandoff:
     MAX_TRANSCRIPT_MESSAGES = 50
     MAX_SUMMARY_MESSAGES = 20
+    # Retry config for flush-timing race
+    HISTORY_RETRY_ATTEMPTS = 3
+    HISTORY_RETRY_DELAY = 0.5  # seconds between retries
 
     def __init__(self):
         home = os.path.expanduser("~")
@@ -157,13 +161,45 @@ class SessionHandoff:
         )
 
         # Chat history is indexed by n8n_session_id, not the internal copilot session_id
-        messages = self._get_session_messages(n8n_session_id)
-        if not messages:
+        messages = self._get_session_messages_with_retry(n8n_session_id)
+        history_unavailable = not messages
+        if history_unavailable:
             _handoff_logger.warning(
-                f"No chat history found for n8n_session={n8n_session_id}. "
-                f"Handoff cancelled."
+                f"No chat history found for n8n_session={n8n_session_id} after "
+                f"{self.HISTORY_RETRY_ATTEMPTS} retries. "
+                f"Writing fallback handoff note so the new runtime is informed."
             )
-            return None
+
+        if history_unavailable:
+            # Write a minimal fallback note so the new runtime always has context
+            switched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            fallback_lines = [
+                "## Runtime Handoff Summary",
+                f"**Previous Runtime:** {prev_runtime} | **New Runtime:** {new_runtime}",
+                f"**Switched At:** {switched_at}",
+                "",
+                "> **Note:** Chat history could not be read at handoff time (likely a",
+                "> flush-timing issue). No conversation context is available from the",
+                "> previous runtime. Ask the user to recap if needed.",
+            ]
+            out_dir = self._session_state_path(new_session_id)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            handoff_path = out_dir / "handoff.md"
+            handoff_path.write_text("\n".join(fallback_lines), encoding="utf-8")
+            meta = {
+                "prev_runtime": prev_runtime,
+                "new_runtime": new_runtime,
+                "transcript_path": "",
+                "switched_at": switched_at,
+            }
+            (out_dir / "handoff_meta.json").write_text(
+                json.dumps(meta, indent=2), encoding="utf-8"
+            )
+            _handoff_logger.info(
+                f"HANDOFF FALLBACK WRITTEN: {handoff_path} "
+                f"(history unavailable for n8n_session={n8n_session_id})"
+            )
+            return str(handoff_path)
 
         recent = messages[-self.MAX_SUMMARY_MESSAGES :]
         switched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -326,6 +362,25 @@ class SessionHandoff:
 
     def _session_state_path(self, session_id: str) -> Path:
         return self.session_state_dir / session_id
+
+    def _get_session_messages_with_retry(self, session_id: str) -> list:
+        """Retry _get_session_messages to handle chat-history flush timing."""
+        for attempt in range(self.HISTORY_RETRY_ATTEMPTS):
+            messages = self._get_session_messages(session_id)
+            if messages:
+                if attempt > 0:
+                    _handoff_logger.info(
+                        f"Chat history available after {attempt} retries "
+                        f"(n8n_session={session_id})"
+                    )
+                return messages
+            if attempt < self.HISTORY_RETRY_ATTEMPTS - 1:
+                _handoff_logger.debug(
+                    f"Chat history not yet available for n8n_session={session_id} "
+                    f"(attempt {attempt + 1}/{self.HISTORY_RETRY_ATTEMPTS}), retrying..."
+                )
+                time.sleep(self.HISTORY_RETRY_DELAY)
+        return []
 
     def _get_session_messages(self, session_id: str) -> list:
         """Scan chat-history.json for the matching session_id, return its messages."""
