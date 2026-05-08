@@ -5866,12 +5866,14 @@ Example skill structure:
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
 
+⚠️ IMPORTANT: NEVER guess or construct image URLs from memory. You MUST call WebFetch (or an equivalent browse tool) to retrieve the page and extract an actual src URL before using Option A. If you cannot confirm the URL returns a valid image (e.g. WebFetch is unavailable or the fetch failed), do NOT include an image at all — a missing image is always better than a broken link. Constructing plausible-looking URLs without fetching them is not acceptable.
+
 How to get images:
-1. Use WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp.
+1. Call WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp. You MUST perform this fetch — do not skip it.
    Example: WebFetch("https://en.wikipedia.org/wiki/Snort_(software)") then read the page to extract a real image src URL.
 2. Return the image using one of these methods:
 
-   Option A — Direct external URL (simplest, use when URL is publicly accessible):
+   Option A — Direct external URL (only use after WebFetch confirms the URL is real and accessible):
    ![Description of image](https://actual-direct-image-url.jpg)
 
    Option B — Download locally for reliability (use when image may be behind a CDN or require headers):
