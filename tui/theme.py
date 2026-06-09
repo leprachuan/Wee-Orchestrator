@@ -1,6 +1,17 @@
-"""TUI Theme and styling"""
+"""TUI Theme and styling — Nord-inspired dark palette"""
 
 from rich.style import Style
+
+# Nord palette
+NORD = {
+    "accent":        "#88C0D0",  # ice blue — focus/highlights
+    "success":       "#A3BE8C",  # forest green — running/active
+    "warn":          "#EBCB8B",  # sandy yellow — pending/idle
+    "error":         "#BF616A",  # muted red — failed/error
+    "border":        "#4C566A",  # muted gray-blue — panel borders
+    "bg_subtle":     "#3B4252",  # panel backgrounds
+    "text_muted":    "#D8DEE9",  # light gray
+}
 
 # Agent color mapping (matching WebUI)
 AGENT_COLORS = {
@@ -13,25 +24,27 @@ AGENT_COLORS = {
     "smarthome": "bright_cyan",
 }
 
-# Status colors
+# Status colors — Nord palette
 STATUS_COLORS = {
-    "running": "green",
-    "idle": "yellow",
-    "completed": "blue",
-    "error": "red",
-    "queued": "white",
-    "stopped": "red",
+    "running":   NORD["success"],
+    "active":    NORD["success"],
+    "idle":      NORD["warn"],
+    "queued":    NORD["warn"],
+    "completed": NORD["accent"],
+    "error":     NORD["error"],
+    "failed":    NORD["error"],
+    "stopped":   NORD["error"],
 }
 
 # Styles
 STYLES = {
-    "header": Style(bold=True, color="bright_white", bgcolor="blue"),
-    "status_bar": Style(color="white", bgcolor="dark_slate_gray3"),
-    "session_active": Style(color="green", bold=True),
-    "session_idle": Style(color="yellow"),
-    "input_focus": Style(bgcolor="dark_slate_gray1", color="bright_white"),
-    "error": Style(color="red", bold=True),
-    "success": Style(color="green", bold=True),
+    "header":         Style(bold=True, color="bright_white", bgcolor="blue"),
+    "status_bar":     Style(color=NORD["text_muted"], bgcolor=NORD["bg_subtle"]),
+    "session_active": Style(color=NORD["success"], bold=True),
+    "session_idle":   Style(color=NORD["warn"]),
+    "input_focus":    Style(bgcolor=NORD["bg_subtle"], color="bright_white"),
+    "error":          Style(color=NORD["error"], bold=True),
+    "success":        Style(color=NORD["success"], bold=True),
 }
 
 

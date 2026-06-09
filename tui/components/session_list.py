@@ -12,6 +12,7 @@ class SessionListPanel(Static):
     """Scrollable session list panel"""
 
     sessions: reactive[list] = reactive([])
+    active_session_id: reactive[str] = reactive("")
 
     def render(self):
         """Render session list"""
@@ -29,18 +30,21 @@ class SessionListPanel(Static):
                 agent = session.get("agent", "—")
                 status = session.get("status", "unknown")
                 status_icon = (
-                    "[green]●[/green]"
+                    "[bold #A3BE8C]●[/bold #A3BE8C]"
                     if status in ("active", "running")
-                    else "[yellow]○[/yellow]" if status == "idle" else "[red]✗[/red]"
+                    else "[bold #EBCB8B]○[/bold #EBCB8B]"
+                    if status == "idle"
+                    else "[bold #BF616A]✗[/bold #BF616A]"
                 )
-                table.add_row(short_id, agent, f"{status_icon} {status}")
+                # Dim rows that aren't the currently active session
+                row_style = "bold" if sid == self.active_session_id else "dim"
+                table.add_row(
+                    short_id, agent, f"{status_icon} {status}",
+                    style=row_style,
+                )
 
         return Panel(table, title="[bold]Sessions[/bold]", expand=False, width=30)
 
     async def update_sessions(self, sessions: List[Dict[str, Any]]) -> None:
-        """Update the displayed session list.
-
-        Args:
-            sessions: List of session dicts from the API
-        """
+        """Update the displayed session list."""
         self.sessions = sessions
