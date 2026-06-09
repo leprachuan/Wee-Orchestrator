@@ -8,7 +8,7 @@ class TaskQueuePanel(DataTable):
 
     def on_mount(self) -> None:
         self.border_title = "Tasks"
-        self.add_columns("Task ID", "Agent", "Status")
+        self.add_columns("Task ID", "Agent")
         self.cursor_type = "row"
         self.show_cursor = True
 
@@ -28,7 +28,7 @@ class TaskQueuePanel(DataTable):
         self.clear()
 
         if not tasks:
-            self.add_row("(no tasks)", "", "", key="__empty__")
+            self.add_row("(no tasks)", "", key="__empty__")
             return
 
         for task in tasks[:max_rows]:
@@ -36,7 +36,6 @@ class TaskQueuePanel(DataTable):
             self.add_row(
                 tid[:12],
                 task.get("agent", ""),
-                task.get("status", "queued"),
                 key=tid or None,
             )
 
