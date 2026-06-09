@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import DataTable, Header, Input, Static
+from textual.widgets import Header, Input, Static
 
 from tui.api.client import WeeAPIClient
 from tui.components.chat_panel import ChatPanel
@@ -19,57 +19,40 @@ from tui.components.task_queue import TaskQueuePanel
 from tui.config import config
 
 
-class CurrentSessionPanel(Static):
-    """Right-side current session info panel"""
+class ControlPanel(Static):
+    """Right-side control panel"""
 
     def on_mount(self) -> None:
-        self.border_title = "Current Session"
+        self.border_title = "Controls"
 
     def render(self):
-        """Render current session info, reading live state from WeeTUI app"""
+        """Render control info, reading live state from WeeTUI app"""
         try:
             app = self.app
             agent = getattr(app, "current_agent", "orchestrator")
             runtime = getattr(app, "current_runtime", "copilot")
             model = getattr(app, "current_model", "claude-haiku-4.5")
-            session_id = getattr(app, "current_session_id", None)
-            session_label = session_id[:8] + "..." if session_id else "(none)"
-            inspecting = getattr(app, "inspecting_task_id", None)
         except Exception:
-            agent, runtime, model, session_label, inspecting = "orchestrator", "copilot", "claude-haiku-4.5", "(none)", None
+            agent, runtime, model = "orchestrator", "copilot", "claude-haiku-4.5"
 
-        lines = (
-            f"[bold]Agent:[/bold]   [cyan]{agent}[/cyan]\n"
-            f"[bold]Runtime:[/bold] [magenta]{runtime}[/magenta]\n"
-            f"[bold]Model:[/bold]   [green]{model}[/green]\n"
-            f"[bold]Timeout:[/bold] [yellow]60s[/yellow]\n"
-            f"[bold]Session:[/bold] [white]{session_label}[/white]"
-        )
-        if inspecting:
-            lines += f"\n[bold]Inspect:[/bold] [#88C0D0]{inspecting[:12]}[/#88C0D0]"
-        return lines
-
-
-class ShortcutsPanel(Static):
-    """Bottom-left keyboard shortcuts and commands reference"""
-
-    def on_mount(self) -> None:
-        self.border_title = "Shortcuts"
-
-    def render(self):
         return (
-            "[bold]Keys[/bold]\n"
-            "Tab      next panel\n"
-            "Ctrl+N   new session\n"
-            "Ctrl+S   send\n"
-            "Ctrl+Q   quit\n"
-            "Escape   exit inspector\n\n"
-            "[bold]Commands[/bold]\n"
-            "/agent <name>\n"
-            "/model <name>\n"
-            "/runtime <name>\n"
-            "/timeout <sec>\n"
-            "/bg <prompt>"
+            f"[bold #88C0D0]🍀 Wee Orchestrator[/bold #88C0D0]\n\n"
+            f"[bold]Current Settings[/bold]\n\n"
+            f"Agent: [cyan]{agent}[/cyan]\n"
+            f"Runtime: [magenta]{runtime}[/magenta]\n"
+            f"Model: [green]{model}[/green]\n"
+            f"Timeout: [yellow]60s[/yellow]\n\n"
+            f"[bold]Keyboard Shortcuts[/bold]\n"
+            f"Tab - Focus next\n"
+            f"Shift+Tab - Focus prev\n"
+            f"Ctrl+N - New session\n"
+            f"Ctrl+S - Send prompt\n"
+            f"Ctrl+Q - Quit\n\n"
+            f"[bold]Commands[/bold]\n"
+            f"/agent <name>\n"
+            f"/model <name>\n"
+            f"/runtime <name>\n"
+            f"/timeout <sec>\n"
         )
 
 
@@ -98,8 +81,7 @@ class InputField(Input):
 class WeeTUI(App):
     """Main Wee TUI Application"""
 
-    TITLE = "🍀 Wee Orchestrator"
-    SUB_TITLE = "Terminal UI"
+    TITLE = "Wee TUI - Terminal UI for Wee Orchestrator"
 
     CSS = """
     Screen {
@@ -108,20 +90,17 @@ class WeeTUI(App):
     }
 
     /* Layout proportions */
-    #main              { height: 1fr; }
-    #left              { width: 30; }
-    #sessions          { height: 1fr; }
-    #shortcuts         { height: auto; }
-    #center            { width: 1fr; }
-    #right             { width: 38; }
-    #current_session   { height: auto; }
-    #status_panel      { height: auto; }
-    #tasks             { height: 1fr; }
-    #chat              { height: 1fr; }
+    #main         { height: 1fr; }
+    #sessions     { width: 30; }
+    #center       { width: 1fr; }
+    #right        { width: 38; }
+    #controls     { height: auto; }
+    #status_panel { height: 9; }
+    #tasks        { height: 1fr; }
+    #chat         { height: 1fr; }
 
     /* Panel borders — rounded + Nord muted gray-blue */
-    SessionListPanel, ServiceStatusPanel, ChatPanel, TaskQueuePanel,
-    CurrentSessionPanel, ShortcutsPanel {
+    SessionListPanel, ServiceStatusPanel, ChatPanel, TaskQueuePanel, ControlPanel {
         border: round #4C566A;
         padding: 0 1;
     }
@@ -159,7 +138,6 @@ class WeeTUI(App):
         Binding("ctrl+s", "send_prompt", "Send", show=False),
         Binding("tab", "focus_next", "Next", show=False),
         Binding("shift+tab", "focus_previous", "Prev", show=False),
-        Binding("escape", "exit_inspector", "Back", show=False),
     ]
 
     def __init__(self, **kwargs):
@@ -169,25 +147,21 @@ class WeeTUI(App):
         self.current_agent = "orchestrator"
         self.current_runtime = "copilot"
         self.current_model = "claude-haiku-4.5"
-        self._sessions_cache: list = []
-        self.inspecting_task_id: Optional[str] = None
-        self._inspector_timer = None
+        self.current_timeout = 60
 
     def compose(self) -> ComposeResult:
         """Compose the UI layout"""
         yield Header()
 
         with Horizontal(id="main"):
-            with Vertical(id="left"):
-                yield SessionListPanel(id="sessions")
-                yield ShortcutsPanel(id="shortcuts")
+            yield SessionListPanel(id="sessions")
 
             with Vertical(id="center"):
                 yield ChatPanel(id="chat")
                 yield InputField(id="input", name="prompt")
 
             with Vertical(id="right"):
-                yield CurrentSessionPanel(id="current_session")
+                yield ControlPanel(id="controls")
                 yield ServiceStatusPanel(id="status_panel")
                 yield TaskQueuePanel(id="tasks")
 
@@ -217,31 +191,13 @@ class WeeTUI(App):
             await self.api_client.close()
 
     async def initialize_api(self) -> None:
-        """Establish persistent API connection and create initial session"""
+        """Establish persistent API connection"""
         try:
             await self.api_client.connect()
             logging.info("API client connected")
-            await self._ensure_session()
         except Exception as e:
             logging.error(f"Failed to connect API client: {e}")
             self.notify(f"❌ API Error: {e}", severity="error", timeout=10)
-
-    async def _ensure_session(self) -> None:
-        """Create a session if one doesn't exist"""
-        if self.current_session_id:
-            return
-        try:
-            session_id = await self.api_client.create_session(
-                runtime=self.current_runtime,
-                model=self.current_model,
-                agent=self.current_agent,
-            )
-            self.current_session_id = session_id
-            await self.refresh_sessions()
-            await self.refresh_display()
-        except Exception as e:
-            logging.error(f"Session init error: {e}")
-            self.notify(f"❌ Could not create session: {e}", severity="error")
 
     async def refresh_data_loop(self) -> None:
         """Refresh data periodically"""
@@ -259,7 +215,6 @@ class WeeTUI(App):
         """Refresh session list from API"""
         try:
             sessions = await self.api_client.get_sessions()
-            self._sessions_cache = sessions
             panel = self.query_one("#sessions", SessionListPanel)
             await panel.update_sessions(sessions)
         except Exception as e:
@@ -283,129 +238,6 @@ class WeeTUI(App):
         except Exception as e:
             logging.error(f"Service status error: {e}")
 
-    async def refresh_display(self) -> None:
-        """Refresh the current session panel display"""
-        try:
-            self.query_one("#current_session", CurrentSessionPanel).refresh()
-        except Exception:
-            pass
-
-    # ── Row selection (sessions + tasks) ──────────────────────────────────────
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle row selection from any DataTable."""
-        table_id = event.control.id
-
-        if table_id == "sessions":
-            session_id = str(event.row_key.value) if event.row_key.value else ""
-            if session_id and session_id not in ("__empty__", "__unknown__"):
-                self.run_worker(self._load_session(session_id))
-
-        elif table_id == "tasks":
-            task_id = str(event.row_key.value) if event.row_key.value else ""
-            if task_id and task_id not in ("__empty__",):
-                self.run_worker(self._inspect_task(task_id))
-
-    # ── Session loading ────────────────────────────────────────────────────────
-
-    async def _load_session(self, session_id: str) -> None:
-        """Switch active session and load its transcript into the chat panel."""
-        try:
-            if not self.api_client:
-                self.notify("❌ API client not initialized", severity="error")
-                return
-
-            # Exit inspector mode when switching to a session
-            self._cancel_inspector_timer()
-            self.inspecting_task_id = None
-
-            self.current_session_id = session_id
-
-            # Update agent from cached session data if available
-            for s in self._sessions_cache:
-                sid = s.get("session_id", s.get("id", ""))
-                if sid == session_id:
-                    if s.get("agent"):
-                        self.current_agent = s["agent"]
-                    if s.get("runtime"):
-                        self.current_runtime = s["runtime"]
-                    if s.get("model"):
-                        self.current_model = s["model"]
-                    break
-
-            await self.refresh_display()
-
-            # Load transcript
-            messages = await self.api_client.get_session_messages(session_id)
-            chat = self.query_one("#chat", ChatPanel)
-            await chat.load_transcript(messages)
-
-            self.notify(f"📂 Loaded session {session_id[:8]}...", timeout=3)
-        except Exception as e:
-            logging.error(f"Load session error: {e}")
-            self.notify(f"❌ Failed to load session: {e}", severity="error")
-
-    # ── Task inspector ─────────────────────────────────────────────────────────
-
-    async def _inspect_task(self, task_id: str) -> None:
-        """Enter inspector mode for the given task."""
-        self._cancel_inspector_timer()
-        self.inspecting_task_id = task_id
-        await self._refresh_task_inspector()
-
-    async def _refresh_task_inspector(self) -> None:
-        """Fetch task details and update the chat panel; re-schedule if still running."""
-        if not self.inspecting_task_id:
-            return
-        try:
-            if not self.api_client or not self.api_client.client:
-                return
-            task = await self.api_client.get_background_task(self.inspecting_task_id)
-            # Guard: user may have exited inspector while awaiting
-            if not self.inspecting_task_id:
-                return
-            chat = self.query_one("#chat", ChatPanel)
-            await chat.show_task_inspector(task)
-            await self.refresh_display()
-
-            if task.get("status") == "running":
-                self._inspector_timer = self.set_timer(2.5, self._refresh_task_inspector)
-        except Exception as e:
-            logging.error(f"Task inspector refresh error: {e}")
-            self.notify(f"❌ Failed to fetch task: {e}", severity="error")
-
-    def _cancel_inspector_timer(self) -> None:
-        """Cancel any pending inspector auto-refresh timer."""
-        if self._inspector_timer is not None:
-            try:
-                self._inspector_timer.stop()
-            except Exception:
-                pass
-            self._inspector_timer = None
-
-    # ── Actions ────────────────────────────────────────────────────────────────
-
-    def action_exit_inspector(self) -> None:
-        """Exit task inspector and return to normal chat view."""
-        if not self.inspecting_task_id:
-            return
-        self._cancel_inspector_timer()
-        self.inspecting_task_id = None
-        self.run_worker(self._restore_session_view())
-
-    async def _restore_session_view(self) -> None:
-        """Restore chat panel to current session transcript after exiting inspector."""
-        await self.refresh_display()
-        chat = self.query_one("#chat", ChatPanel)
-        if self.current_session_id and self.api_client and self.api_client.client:
-            try:
-                messages = await self.api_client.get_session_messages(self.current_session_id)
-                await chat.load_transcript(messages)
-            except Exception:
-                await chat.load_transcript([])
-        else:
-            await chat.load_transcript([])
-
     def action_new_session(self) -> None:
         """Create a new session"""
         self.run_worker(self._new_session_async())
@@ -428,13 +260,12 @@ class WeeTUI(App):
             self.current_session_id = session_id
             self.notify(f"✅ New session: {session_id[:8]}...")
             await self.refresh_sessions()
-            await self.refresh_display()
         except Exception as e:
             logging.error(f"Session creation error: {e}")
             self.notify(f"❌ Failed to create session: {e}", severity="error")
 
     def action_send_prompt(self) -> None:
-        """Send prompt via session stream API"""
+        """Send prompt as a background task"""
         input_widget = self.query_one("#input", InputField)
         prompt = input_widget.value.strip()
 
@@ -444,15 +275,11 @@ class WeeTUI(App):
         input_widget.value = ""
         self.run_worker(self._send_prompt_async(prompt))
 
-    def on_input_submitted(self, event) -> None:
-        """Send prompt when user presses Enter in the input field."""
-        self.action_send_prompt()
-
     async def _send_prompt_async(self, prompt: str) -> None:
-        """Send prompt via session stream API or handle slash commands"""
+        """Dispatch prompt as a background task or handle commands"""
         try:
-            if not self.api_client or not self.api_client.client:
-                self.notify("⏳ Still connecting to API — try again in a moment", severity="warning")
+            if not self.api_client:
+                self.notify("❌ API client not initialized", severity="error")
                 return
 
             if prompt.startswith("/"):
@@ -466,24 +293,18 @@ class WeeTUI(App):
                     if arg:
                         self.current_agent = arg
                         await chat_panel.add_message("system", f"✅ Agent set to: {arg}")
-                        await self.refresh_display()
-                        await self._new_session_async()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /agent <name>")
                 elif command == "/model":
                     if arg:
                         self.current_model = arg
                         await chat_panel.add_message("system", f"✅ Model set to: {arg}")
-                        await self.refresh_display()
-                        await self._new_session_async()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /model <name>")
                 elif command == "/runtime":
                     if arg:
                         self.current_runtime = arg
                         await chat_panel.add_message("system", f"✅ Runtime set to: {arg}")
-                        await self.refresh_display()
-                        await self._new_session_async()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /runtime <name>")
                 elif command == "/timeout":
@@ -496,41 +317,25 @@ class WeeTUI(App):
                             await chat_panel.add_message("system", "❌ Timeout must be a number")
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /timeout <seconds>")
-                elif command == "/bg":
-                    if arg:
-                        task_id = await self.api_client.create_background_task(
-                            prompt=arg,
-                            agent=self.current_agent,
-                            runtime=self.current_runtime,
-                            model=self.current_model,
-                        )
-                        await chat_panel.add_message("system", f"✅ Background task dispatched: {task_id}")
-                    else:
-                        await chat_panel.add_message("system", "❌ Usage: /bg <prompt>")
                 else:
                     await chat_panel.add_message("system", f"❌ Unknown command: {command}")
                 return
 
-            # Ensure we have a session before sending
-            if not self.current_session_id:
-                await self._ensure_session()
-            if not self.current_session_id:
-                self.notify("❌ No active session", severity="error")
-                return
-
+            logging.info(f"Sending prompt (len={len(prompt)})")
+            task_id = await self.api_client.create_background_task(
+                prompt=prompt,
+                agent=self.current_agent,
+                runtime=self.current_runtime,
+                model=self.current_model,
+            )
             chat_panel = self.query_one("#chat", ChatPanel)
             await chat_panel.add_message("user", prompt)
-
-            logging.info(f"Sending prompt to session {self.current_session_id} (len={len(prompt)})")
-            response = await self.api_client.stream_session(
-                session_id=self.current_session_id,
-                prompt=prompt,
-            )
-            await chat_panel.add_message("assistant", response)
-
+            await chat_panel.add_message("assistant", f"✅ Task dispatched: {task_id}")
         except Exception as e:
-            logging.error(f"Prompt send error: {e}")
-            self.notify(f"❌ Error sending prompt: {e}", severity="error")
+            import traceback
+            tb = traceback.format_exc()
+            logging.error(f"Prompt send error: {e}\n{tb}")
+            self.notify(f"❌ Error: {e}", severity="error")
 
 
 def main():
