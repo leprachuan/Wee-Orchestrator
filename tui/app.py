@@ -444,6 +444,10 @@ class WeeTUI(App):
         input_widget.value = ""
         self.run_worker(self._send_prompt_async(prompt))
 
+    def on_input_submitted(self, event) -> None:
+        """Send prompt when user presses Enter in the input field."""
+        self.action_send_prompt()
+
     async def _send_prompt_async(self, prompt: str) -> None:
         """Send prompt via session stream API or handle slash commands"""
         try:
