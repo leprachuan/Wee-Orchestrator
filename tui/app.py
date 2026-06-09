@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Header, Input, Static
+from textual.widgets import DataTable, Header, Input, Static
 
 from tui.api.client import WeeAPIClient
 from tui.components.chat_panel import ChatPanel
@@ -32,12 +32,15 @@ class ControlPanel(Static):
             agent = getattr(app, "current_agent", "orchestrator")
             runtime = getattr(app, "current_runtime", "copilot")
             model = getattr(app, "current_model", "claude-haiku-4.5")
+            session_id = getattr(app, "current_session_id", None)
+            session_label = session_id[:8] + "..." if session_id else "(none)"
         except Exception:
-            agent, runtime, model = "orchestrator", "copilot", "claude-haiku-4.5"
+            agent, runtime, model, session_label = "orchestrator", "copilot", "claude-haiku-4.5", "(none)"
 
         return (
             f"[bold #88C0D0]🍀 Wee Orchestrator[/bold #88C0D0]\n\n"
             f"[bold]Current Settings[/bold]\n\n"
+            f"Session: [white]{session_label}[/white]\n"
             f"Agent: [cyan]{agent}[/cyan]\n"
             f"Runtime: [magenta]{runtime}[/magenta]\n"
             f"Model: [green]{model}[/green]\n"
@@ -147,6 +150,7 @@ class WeeTUI(App):
         self.current_agent = "orchestrator"
         self.current_runtime = "copilot"
         self.current_model = "claude-haiku-4.5"
+        self._sessions_cache: list = []
 
     def compose(self) -> ComposeResult:
         """Compose the UI layout"""
@@ -214,6 +218,7 @@ class WeeTUI(App):
         """Refresh session list from API"""
         try:
             sessions = await self.api_client.get_sessions()
+            self._sessions_cache = sessions
             panel = self.query_one("#sessions", SessionListPanel)
             await panel.update_sessions(sessions)
         except Exception as e:
@@ -237,6 +242,58 @@ class WeeTUI(App):
         except Exception as e:
             logging.error(f"Service status error: {e}")
 
+    async def refresh_display(self) -> None:
+        """Refresh the controls panel display"""
+        try:
+            self.query_one("#controls", ControlPanel).refresh()
+        except Exception:
+            pass
+
+    # ── Session selection ──────────────────────────────────────────────────────
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle session row selection from the sessions DataTable."""
+        if event.control.id != "sessions":
+            return
+        session_id = str(event.row_key.value) if event.row_key.value else ""
+        if session_id and session_id not in ("__empty__", "__unknown__"):
+            self.run_worker(self._load_session(session_id))
+
+    async def _load_session(self, session_id: str) -> None:
+        """Switch active session and load its transcript into the chat panel."""
+        try:
+            if not self.api_client:
+                self.notify("❌ API client not initialized", severity="error")
+                return
+
+            self.current_session_id = session_id
+
+            # Update agent from cached session data if available
+            for s in self._sessions_cache:
+                sid = s.get("session_id", s.get("id", ""))
+                if sid == session_id:
+                    if s.get("agent"):
+                        self.current_agent = s["agent"]
+                    if s.get("runtime"):
+                        self.current_runtime = s["runtime"]
+                    if s.get("model"):
+                        self.current_model = s["model"]
+                    break
+
+            await self.refresh_display()
+
+            # Load transcript
+            messages = await self.api_client.get_session_messages(session_id)
+            chat = self.query_one("#chat", ChatPanel)
+            await chat.load_transcript(messages)
+
+            self.notify(f"📂 Loaded session {session_id[:8]}...", timeout=3)
+        except Exception as e:
+            logging.error(f"Load session error: {e}")
+            self.notify(f"❌ Failed to load session: {e}", severity="error")
+
+    # ── Actions ────────────────────────────────────────────────────────────────
+
     def action_new_session(self) -> None:
         """Create a new session"""
         self.run_worker(self._new_session_async())
@@ -259,6 +316,7 @@ class WeeTUI(App):
             self.current_session_id = session_id
             self.notify(f"✅ New session: {session_id[:8]}...")
             await self.refresh_sessions()
+            await self.refresh_display()
         except Exception as e:
             logging.error(f"Session creation error: {e}")
             self.notify(f"❌ Failed to create session: {e}", severity="error")
@@ -299,12 +357,14 @@ class WeeTUI(App):
                     if arg:
                         self.current_model = arg
                         await chat_panel.add_message("system", f"✅ Model set to: {arg}")
+                        await self.refresh_display()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /model <name>")
                 elif command == "/runtime":
                     if arg:
                         self.current_runtime = arg
                         await chat_panel.add_message("system", f"✅ Runtime set to: {arg}")
+                        await self.refresh_display()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /runtime <name>")
                 elif command == "/timeout":
