@@ -63,7 +63,8 @@ class ShortcutsPanel(Static):
             "/agent <name>\n"
             "/model <name>\n"
             "/runtime <name>\n"
-            "/timeout <sec>"
+            "/timeout <sec>\n"
+            "/bg <prompt>"
         )
 
 
@@ -208,13 +209,31 @@ class WeeTUI(App):
             await self.api_client.close()
 
     async def initialize_api(self) -> None:
-        """Establish persistent API connection"""
+        """Establish persistent API connection and create initial session"""
         try:
             await self.api_client.connect()
             logging.info("API client connected")
+            await self._ensure_session()
         except Exception as e:
             logging.error(f"Failed to connect API client: {e}")
             self.notify(f"❌ API Error: {e}", severity="error", timeout=10)
+
+    async def _ensure_session(self) -> None:
+        """Create a session if one doesn't exist"""
+        if self.current_session_id:
+            return
+        try:
+            session_id = await self.api_client.create_session(
+                runtime=self.current_runtime,
+                model=self.current_model,
+                agent=self.current_agent,
+            )
+            self.current_session_id = session_id
+            await self.refresh_sessions()
+            await self.refresh_display()
+        except Exception as e:
+            logging.error(f"Session init error: {e}")
+            self.notify(f"❌ Could not create session: {e}", severity="error")
 
     async def refresh_data_loop(self) -> None:
         """Refresh data periodically"""
@@ -336,7 +355,7 @@ class WeeTUI(App):
             self.notify(f"❌ Failed to create session: {e}", severity="error")
 
     def action_send_prompt(self) -> None:
-        """Send prompt as a background task"""
+        """Send prompt via session stream API"""
         input_widget = self.query_one("#input", InputField)
         prompt = input_widget.value.strip()
 
@@ -347,7 +366,7 @@ class WeeTUI(App):
         self.run_worker(self._send_prompt_async(prompt))
 
     async def _send_prompt_async(self, prompt: str) -> None:
-        """Dispatch prompt as a background task or handle commands"""
+        """Send prompt via session stream API or handle slash commands"""
         try:
             if not self.api_client:
                 self.notify("❌ API client not initialized", severity="error")
@@ -365,6 +384,7 @@ class WeeTUI(App):
                         self.current_agent = arg
                         await chat_panel.add_message("system", f"✅ Agent set to: {arg}")
                         await self.refresh_display()
+                        await self._new_session_async()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /agent <name>")
                 elif command == "/model":
@@ -372,6 +392,7 @@ class WeeTUI(App):
                         self.current_model = arg
                         await chat_panel.add_message("system", f"✅ Model set to: {arg}")
                         await self.refresh_display()
+                        await self._new_session_async()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /model <name>")
                 elif command == "/runtime":
@@ -379,6 +400,7 @@ class WeeTUI(App):
                         self.current_runtime = arg
                         await chat_panel.add_message("system", f"✅ Runtime set to: {arg}")
                         await self.refresh_display()
+                        await self._new_session_async()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /runtime <name>")
                 elif command == "/timeout":
@@ -391,20 +413,38 @@ class WeeTUI(App):
                             await chat_panel.add_message("system", "❌ Timeout must be a number")
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /timeout <seconds>")
+                elif command == "/bg":
+                    if arg:
+                        task_id = await self.api_client.create_background_task(
+                            prompt=arg,
+                            agent=self.current_agent,
+                            runtime=self.current_runtime,
+                            model=self.current_model,
+                        )
+                        await chat_panel.add_message("system", f"✅ Background task dispatched: {task_id}")
+                    else:
+                        await chat_panel.add_message("system", "❌ Usage: /bg <prompt>")
                 else:
                     await chat_panel.add_message("system", f"❌ Unknown command: {command}")
                 return
 
-            logging.info(f"Sending prompt (len={len(prompt)})")
-            task_id = await self.api_client.create_background_task(
-                prompt=prompt,
-                agent=self.current_agent,
-                runtime=self.current_runtime,
-                model=self.current_model,
-            )
+            # Ensure we have a session before sending
+            if not self.current_session_id:
+                await self._ensure_session()
+            if not self.current_session_id:
+                self.notify("❌ No active session", severity="error")
+                return
+
             chat_panel = self.query_one("#chat", ChatPanel)
             await chat_panel.add_message("user", prompt)
-            await chat_panel.add_message("assistant", f"✅ Task dispatched: {task_id}")
+
+            logging.info(f"Sending prompt to session {self.current_session_id} (len={len(prompt)})")
+            response = await self.api_client.stream_session(
+                session_id=self.current_session_id,
+                prompt=prompt,
+            )
+            await chat_panel.add_message("assistant", response)
+
         except Exception as e:
             logging.error(f"Prompt send error: {e}")
             self.notify(f"❌ Error sending prompt: {e}", severity="error")
