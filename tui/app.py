@@ -19,14 +19,14 @@ from tui.components.task_queue import TaskQueuePanel
 from tui.config import config
 
 
-class ControlPanel(Static):
-    """Right-side control panel"""
+class CurrentSessionPanel(Static):
+    """Right-side current session info panel"""
 
     def on_mount(self) -> None:
-        self.border_title = "Controls"
+        self.border_title = "Current Session"
 
     def render(self):
-        """Render control info, reading live state from WeeTUI app"""
+        """Render current session info, reading live state from WeeTUI app"""
         try:
             app = self.app
             agent = getattr(app, "current_agent", "orchestrator")
@@ -38,23 +38,32 @@ class ControlPanel(Static):
             agent, runtime, model, session_label = "orchestrator", "copilot", "claude-haiku-4.5", "(none)"
 
         return (
-            f"[bold]Current Settings[/bold]\n\n"
-            f"Session: [white]{session_label}[/white]\n"
-            f"Agent: [cyan]{agent}[/cyan]\n"
-            f"Runtime: [magenta]{runtime}[/magenta]\n"
-            f"Model: [green]{model}[/green]\n"
-            f"Timeout: [yellow]60s[/yellow]\n\n"
-            f"[bold]Keyboard Shortcuts[/bold]\n"
-            f"Tab - Focus next\n"
-            f"Shift+Tab - Focus prev\n"
-            f"Ctrl+N - New session\n"
-            f"Ctrl+S - Send prompt\n"
-            f"Ctrl+Q - Quit\n\n"
-            f"[bold]Commands[/bold]\n"
-            f"/agent <name>\n"
-            f"/model <name>\n"
-            f"/runtime <name>\n"
-            f"/timeout <sec>\n"
+            f"[bold]Agent:[/bold]   [cyan]{agent}[/cyan]\n"
+            f"[bold]Runtime:[/bold] [magenta]{runtime}[/magenta]\n"
+            f"[bold]Model:[/bold]   [green]{model}[/green]\n"
+            f"[bold]Timeout:[/bold] [yellow]60s[/yellow]\n"
+            f"[bold]Session:[/bold] [white]{session_label}[/white]"
+        )
+
+
+class ShortcutsPanel(Static):
+    """Bottom-left keyboard shortcuts and commands reference"""
+
+    def on_mount(self) -> None:
+        self.border_title = "Shortcuts"
+
+    def render(self):
+        return (
+            "[bold]Keys[/bold]\n"
+            "Tab      next panel\n"
+            "Ctrl+N   new session\n"
+            "Ctrl+S   send\n"
+            "Ctrl+Q   quit\n\n"
+            "[bold]Commands[/bold]\n"
+            "/agent <name>\n"
+            "/model <name>\n"
+            "/runtime <name>\n"
+            "/timeout <sec>"
         )
 
 
@@ -93,17 +102,20 @@ class WeeTUI(App):
     }
 
     /* Layout proportions */
-    #main         { height: 1fr; }
-    #sessions     { width: 30; }
-    #center       { width: 1fr; }
-    #right        { width: 38; }
-    #controls     { height: auto; }
-    #status_panel { height: 9; }
-    #tasks        { height: 1fr; }
-    #chat         { height: 1fr; }
+    #main              { height: 1fr; }
+    #left              { width: 30; }
+    #sessions          { height: 1fr; }
+    #shortcuts         { height: auto; }
+    #center            { width: 1fr; }
+    #right             { width: 38; }
+    #current_session   { height: auto; }
+    #status_panel      { height: auto; }
+    #tasks             { height: 1fr; }
+    #chat              { height: 1fr; }
 
     /* Panel borders — rounded + Nord muted gray-blue */
-    SessionListPanel, ServiceStatusPanel, ChatPanel, TaskQueuePanel, ControlPanel {
+    SessionListPanel, ServiceStatusPanel, ChatPanel, TaskQueuePanel,
+    CurrentSessionPanel, ShortcutsPanel {
         border: round #4C566A;
         padding: 0 1;
     }
@@ -157,14 +169,16 @@ class WeeTUI(App):
         yield Header()
 
         with Horizontal(id="main"):
-            yield SessionListPanel(id="sessions")
+            with Vertical(id="left"):
+                yield SessionListPanel(id="sessions")
+                yield ShortcutsPanel(id="shortcuts")
 
             with Vertical(id="center"):
                 yield ChatPanel(id="chat")
                 yield InputField(id="input", name="prompt")
 
             with Vertical(id="right"):
-                yield ControlPanel(id="controls")
+                yield CurrentSessionPanel(id="current_session")
                 yield ServiceStatusPanel(id="status_panel")
                 yield TaskQueuePanel(id="tasks")
 
@@ -243,9 +257,9 @@ class WeeTUI(App):
             logging.error(f"Service status error: {e}")
 
     async def refresh_display(self) -> None:
-        """Refresh the controls panel display"""
+        """Refresh the current session panel display"""
         try:
-            self.query_one("#controls", ControlPanel).refresh()
+            self.query_one("#current_session", CurrentSessionPanel).refresh()
         except Exception:
             pass
 
