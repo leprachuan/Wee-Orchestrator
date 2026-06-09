@@ -34,6 +34,8 @@ class ControlPanel(Static):
             agent, runtime, model = "orchestrator", "copilot", "claude-haiku-4.5"
 
         info = f"""
+[bold #88C0D0]🍀 Wee Orchestrator[/bold #88C0D0]
+
 [bold]Current Settings[/bold]
 
 Agent: [cyan]{agent}[/cyan]
@@ -64,13 +66,11 @@ class StatusBar(Static):
     task_count: reactive[int] = reactive(0)
 
     def render(self):
-        """Render status bar"""
-        status = (
-            f"[green]{self.api_status}[/green] | "
-            f"Tasks: {self.task_count} | "
-            f"Wee TUI Ready"
-        )
-        return Text(status, style="white")
+        """Render status bar — use Text.append to avoid raw markup display"""
+        text = Text()
+        text.append("✓ Connected", style="bold green")
+        text.append(f" | Tasks: {self.task_count} | Wee TUI Ready", style="white")
+        return text
 
 
 class InputField(Input):
@@ -85,19 +85,53 @@ class WeeTUI(App):
     """Main Wee TUI Application"""
 
     TITLE = "Wee TUI - Terminal UI for Wee Orchestrator"
+
+    # Nord-inspired dark palette
     CSS = """
     Screen {
         layout: vertical;
     }
 
-    #main { height: 1fr; }
-    #sessions { width: 30; }
-    #center { width: 1fr; }
-    #controls { width: 35; }
-    #status_panel { height: auto; }
-    #chat { height: 1fr; }
-    #tasks { height: auto; }
-    #status_bar { height: 1; background: $surface; }
+    /* Layout proportions */
+    #main         { height: 1fr; }
+    #sessions     { width: 30; }
+    #center       { width: 1fr; }
+    #controls     { width: 35; }
+    #status_panel { height: 9; }
+    #chat         { height: 1fr; }
+    #tasks        { height: 14; }
+
+    /* Panel borders — rounded + Nord muted gray-blue */
+    SessionListPanel, ServiceStatusPanel, ChatPanel, TaskQueuePanel, ControlPanel {
+        border: round #4C566A;
+        padding: 0 1;
+    }
+
+    /* Highlight focused panel */
+    *:focus-within {
+        border: round #88C0D0;
+    }
+
+    /* Status bar — docked bottom strip */
+    #status_bar {
+        height: 1;
+        dock: bottom;
+        background: #3B4252;
+        border-top: solid #4C566A;
+        padding: 0 1;
+        color: $text-muted;
+    }
+
+    /* Input field */
+    #input {
+        border: round #4C566A;
+        padding: 0 1;
+        background: #3B4252;
+    }
+
+    #input:focus {
+        border: round #88C0D0;
+    }
     """
 
     BINDINGS = [

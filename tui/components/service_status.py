@@ -5,6 +5,13 @@ from rich.table import Table
 from textual.reactive import reactive
 from textual.widgets import Static
 
+STATUS_ICONS = {
+    "active":   ("[bold #A3BE8C]●[/bold #A3BE8C]", "active"),
+    "running":  ("[bold #A3BE8C]●[/bold #A3BE8C]", "running"),
+    "inactive": ("[bold #EBCB8B]○[/bold #EBCB8B]", "inactive"),
+    "failed":   ("[bold #BF616A]✗[/bold #BF616A]", "failed"),
+}
+
 
 class ServiceStatusPanel(Static):
     """Panel for service status display"""
@@ -23,14 +30,13 @@ class ServiceStatusPanel(Static):
         else:
             for name, status_info in self.services.items():
                 status = status_info.get("status", "unknown")
-                status_color = (
-                    "[green]✓[/green]"
-                    if status in ("running", "active")
-                    else "[red]✗[/red]"
+                icon, label = STATUS_ICONS.get(
+                    status,
+                    ("[bold #4C566A]○[/bold #4C566A]", status),
                 )
                 uptime = status_info.get("uptime_seconds", 0)
                 uptime_str = self._format_uptime(uptime) if uptime else "N/A"
-                table.add_row(name, f"{status_color} {status}", uptime_str)
+                table.add_row(name, f"{icon} {label}", uptime_str)
 
         return Panel(table, title="[bold]Services[/bold]", expand=False, height=8)
 
