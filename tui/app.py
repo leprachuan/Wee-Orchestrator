@@ -93,10 +93,11 @@ class WeeTUI(App):
     #main         { height: 1fr; }
     #sessions     { width: 30; }
     #center       { width: 1fr; }
-    #controls     { width: 35; }
+    #right        { width: 38; }
+    #controls     { height: auto; }
     #status_panel { height: 9; }
+    #tasks        { height: 1fr; }
     #chat         { height: 1fr; }
-    #tasks        { height: 14; }
 
     /* Panel borders — rounded + Nord muted gray-blue */
     SessionListPanel, ServiceStatusPanel, ChatPanel, TaskQueuePanel, ControlPanel {
@@ -155,12 +156,13 @@ class WeeTUI(App):
             yield SessionListPanel(id="sessions")
 
             with Vertical(id="center"):
-                yield ServiceStatusPanel(id="status_panel")
                 yield ChatPanel(id="chat")
-                yield TaskQueuePanel(id="tasks")
                 yield InputField(id="input", name="prompt")
 
-            yield ControlPanel(id="controls")
+            with Vertical(id="right"):
+                yield ControlPanel(id="controls")
+                yield ServiceStatusPanel(id="status_panel")
+                yield TaskQueuePanel(id="tasks")
 
         yield StatusBar(id="status_bar")
 
