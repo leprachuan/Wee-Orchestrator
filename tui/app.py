@@ -90,10 +90,14 @@ class WeeTUI(App):
         layout: vertical;
     }
 
-    #status_bar {
-        height: 1;
-        background: $surface;
-    }
+    #main { height: 1fr; }
+    #sessions { width: 30; }
+    #center { width: 1fr; }
+    #controls { width: 35; }
+    #status_panel { height: auto; }
+    #chat { height: 1fr; }
+    #tasks { height: auto; }
+    #status_bar { height: 1; background: $surface; }
     """
 
     BINDINGS = [
@@ -117,15 +121,15 @@ class WeeTUI(App):
         yield Header()
 
         with Horizontal(id="main"):
-            yield SessionListPanel(id="sessions", expand=False, width=30)
+            yield SessionListPanel(id="sessions")
 
-            with Vertical(expand=True, id="center"):
-                yield ServiceStatusPanel(id="status_panel", expand=False)
-                yield ChatPanel(id="chat", expand=True)
-                yield TaskQueuePanel(id="tasks", expand=False)
+            with Vertical(id="center"):
+                yield ServiceStatusPanel(id="status_panel")
+                yield ChatPanel(id="chat")
+                yield TaskQueuePanel(id="tasks")
                 yield InputField(id="input", name="prompt")
 
-            yield ControlPanel(id="controls", expand=False)
+            yield ControlPanel(id="controls")
 
         yield StatusBar(id="status_bar")
         yield Footer()
