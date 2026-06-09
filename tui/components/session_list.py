@@ -2,7 +2,6 @@
 
 from typing import Any, Dict, List
 
-from rich.panel import Panel
 from rich.table import Table
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -13,6 +12,9 @@ class SessionListPanel(Static):
 
     sessions: reactive[list] = reactive([])
     active_session_id: reactive[str] = reactive("")
+
+    def on_mount(self) -> None:
+        self.border_title = "Sessions"
 
     def render(self):
         """Render session list"""
@@ -36,14 +38,13 @@ class SessionListPanel(Static):
                     if status == "idle"
                     else "[bold #BF616A]✗[/bold #BF616A]"
                 )
-                # Dim rows that aren't the currently active session
                 row_style = "bold" if sid == self.active_session_id else "dim"
                 table.add_row(
                     short_id, agent, f"{status_icon} {status}",
                     style=row_style,
                 )
 
-        return Panel(table, title="[bold]Sessions[/bold]", expand=False, width=30)
+        return table
 
     async def update_sessions(self, sessions: List[Dict[str, Any]]) -> None:
         """Update the displayed session list."""

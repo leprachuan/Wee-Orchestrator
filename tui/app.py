@@ -4,13 +4,12 @@ import asyncio
 import logging
 from typing import Optional
 
-from rich.panel import Panel
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Input, Static
+from textual.widgets import Header, Input, Static
 
 from tui.api.client import WeeAPIClient
 from tui.components.chat_panel import ChatPanel
@@ -23,6 +22,9 @@ from tui.config import config
 class ControlPanel(Static):
     """Right-side control panel"""
 
+    def on_mount(self) -> None:
+        self.border_title = "Controls"
+
     def render(self):
         """Render control info, reading live state from WeeTUI app"""
         try:
@@ -33,30 +35,25 @@ class ControlPanel(Static):
         except Exception:
             agent, runtime, model = "orchestrator", "copilot", "claude-haiku-4.5"
 
-        info = f"""
-[bold #88C0D0]🍀 Wee Orchestrator[/bold #88C0D0]
-
-[bold]Current Settings[/bold]
-
-Agent: [cyan]{agent}[/cyan]
-Runtime: [magenta]{runtime}[/magenta]
-Model: [green]{model}[/green]
-Timeout: [yellow]60s[/yellow]
-
-[bold]Keyboard Shortcuts[/bold]
-Tab - Focus next
-Shift+Tab - Focus prev
-Ctrl+N - New session
-Ctrl+S - Send prompt
-Ctrl+Q - Quit
-
-[bold]Commands[/bold]
-/agent <name>
-/model <name>
-/runtime <name>
-/timeout <sec>
-"""
-        return Panel(info, title="[bold]Controls[/bold]", expand=False, width=35)
+        return (
+            f"[bold #88C0D0]🍀 Wee Orchestrator[/bold #88C0D0]\n\n"
+            f"[bold]Current Settings[/bold]\n\n"
+            f"Agent: [cyan]{agent}[/cyan]\n"
+            f"Runtime: [magenta]{runtime}[/magenta]\n"
+            f"Model: [green]{model}[/green]\n"
+            f"Timeout: [yellow]60s[/yellow]\n\n"
+            f"[bold]Keyboard Shortcuts[/bold]\n"
+            f"Tab - Focus next\n"
+            f"Shift+Tab - Focus prev\n"
+            f"Ctrl+N - New session\n"
+            f"Ctrl+S - Send prompt\n"
+            f"Ctrl+Q - Quit\n\n"
+            f"[bold]Commands[/bold]\n"
+            f"/agent <name>\n"
+            f"/model <name>\n"
+            f"/runtime <name>\n"
+            f"/timeout <sec>\n"
+        )
 
 
 class StatusBar(Static):
@@ -66,7 +63,7 @@ class StatusBar(Static):
     task_count: reactive[int] = reactive(0)
 
     def render(self):
-        """Render status bar — use Text.append to avoid raw markup display"""
+        """Render status bar"""
         text = Text()
         text.append("✓ Connected", style="bold green")
         text.append(f" | Tasks: {self.task_count} | Wee TUI Ready", style="white")
@@ -86,9 +83,9 @@ class WeeTUI(App):
 
     TITLE = "Wee TUI - Terminal UI for Wee Orchestrator"
 
-    # Nord-inspired dark palette
     CSS = """
     Screen {
+        height: 100%;
         layout: vertical;
     }
 
@@ -166,7 +163,6 @@ class WeeTUI(App):
             yield ControlPanel(id="controls")
 
         yield StatusBar(id="status_bar")
-        yield Footer()
 
     def on_mount(self) -> None:
         """Initialize on mount"""
@@ -283,7 +279,6 @@ class WeeTUI(App):
                 self.notify("❌ API client not initialized", severity="error")
                 return
 
-            # Check if this is a command (starts with /)
             if prompt.startswith("/"):
                 parts = prompt.split(None, 1)
                 command = parts[0].lower()
@@ -294,57 +289,36 @@ class WeeTUI(App):
                 if command == "/agent":
                     if arg:
                         self.current_agent = arg
-                        await chat_panel.add_message(
-                            "system", f"✅ Agent set to: {arg}"
-                        )
+                        await chat_panel.add_message("system", f"✅ Agent set to: {arg}")
                         await self.refresh_display()
                     else:
-                        await chat_panel.add_message(
-                            "system", "❌ Usage: /agent <name>"
-                        )
+                        await chat_panel.add_message("system", "❌ Usage: /agent <name>")
                 elif command == "/model":
                     if arg:
                         self.current_model = arg
-                        await chat_panel.add_message(
-                            "system", f"✅ Model set to: {arg}"
-                        )
+                        await chat_panel.add_message("system", f"✅ Model set to: {arg}")
                     else:
-                        await chat_panel.add_message(
-                            "system", "❌ Usage: /model <name>"
-                        )
+                        await chat_panel.add_message("system", "❌ Usage: /model <name>")
                 elif command == "/runtime":
                     if arg:
                         self.current_runtime = arg
-                        await chat_panel.add_message(
-                            "system", f"✅ Runtime set to: {arg}"
-                        )
+                        await chat_panel.add_message("system", f"✅ Runtime set to: {arg}")
                     else:
-                        await chat_panel.add_message(
-                            "system", "❌ Usage: /runtime <name>"
-                        )
+                        await chat_panel.add_message("system", "❌ Usage: /runtime <name>")
                 elif command == "/timeout":
                     if arg:
                         try:
                             timeout_sec = int(arg)
                             self.current_timeout = timeout_sec
-                            await chat_panel.add_message(
-                                "system", f"✅ Timeout set to: {timeout_sec}s"
-                            )
+                            await chat_panel.add_message("system", f"✅ Timeout set to: {timeout_sec}s")
                         except ValueError:
-                            await chat_panel.add_message(
-                                "system", "❌ Timeout must be a number"
-                            )
+                            await chat_panel.add_message("system", "❌ Timeout must be a number")
                     else:
-                        await chat_panel.add_message(
-                            "system", "❌ Usage: /timeout <seconds>"
-                        )
+                        await chat_panel.add_message("system", "❌ Usage: /timeout <seconds>")
                 else:
-                    await chat_panel.add_message(
-                        "system", f"❌ Unknown command: {command}"
-                    )
+                    await chat_panel.add_message("system", f"❌ Unknown command: {command}")
                 return
 
-            # Not a command, dispatch as background task
             logging.info(f"Sending prompt (len={len(prompt)})")
             task_id = await self.api_client.create_background_task(
                 prompt=prompt,
