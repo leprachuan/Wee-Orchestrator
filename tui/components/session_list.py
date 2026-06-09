@@ -26,8 +26,9 @@ class SessionListPanel(DataTable):
             self.add_row("—", "No sessions", "", key="__empty__")
             return
 
+        max_rows = max(0, self.size.height - 3)
         new_row_key = None
-        for session in sessions[-20:]:
+        for session in sessions[:max_rows]:
             sid = session.get("session_id", session.get("id", ""))
             short_id = sid[:8] if sid else "—"
             agent = session.get("agent", "—")
