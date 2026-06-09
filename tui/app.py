@@ -368,8 +368,8 @@ class WeeTUI(App):
     async def _send_prompt_async(self, prompt: str) -> None:
         """Send prompt via session stream API or handle slash commands"""
         try:
-            if not self.api_client:
-                self.notify("❌ API client not initialized", severity="error")
+            if not self.api_client or not self.api_client.client:
+                self.notify("⏳ Still connecting to API — try again in a moment", severity="warning")
                 return
 
             if prompt.startswith("/"):
