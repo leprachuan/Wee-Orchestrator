@@ -38,7 +38,6 @@ class ControlPanel(Static):
             agent, runtime, model, session_label = "orchestrator", "copilot", "claude-haiku-4.5", "(none)"
 
         return (
-            f"[bold #88C0D0]🍀 Wee Orchestrator[/bold #88C0D0]\n\n"
             f"[bold]Current Settings[/bold]\n\n"
             f"Session: [white]{session_label}[/white]\n"
             f"Agent: [cyan]{agent}[/cyan]\n"
@@ -84,7 +83,8 @@ class InputField(Input):
 class WeeTUI(App):
     """Main Wee TUI Application"""
 
-    TITLE = "Wee TUI - Terminal UI for Wee Orchestrator"
+    TITLE = "🍀 Wee Orchestrator"
+    SUB_TITLE = "Terminal UI"
 
     CSS = """
     Screen {
