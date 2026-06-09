@@ -1,6 +1,5 @@
 """Service status component"""
 
-from rich.panel import Panel
 from rich.table import Table
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -18,9 +17,12 @@ class ServiceStatusPanel(Static):
 
     services: reactive[dict] = reactive({})
 
+    def on_mount(self) -> None:
+        self.border_title = "Services"
+
     def render(self):
         """Render service status"""
-        table = Table(title="Services", show_header=True, header_style="bold")
+        table = Table(show_header=True, header_style="bold", expand=True)
         table.add_column("Name", style="cyan")
         table.add_column("Status", style="yellow")
         table.add_column("Uptime", style="green")
@@ -38,7 +40,7 @@ class ServiceStatusPanel(Static):
                 uptime_str = self._format_uptime(uptime) if uptime else "N/A"
                 table.add_row(name, f"{icon} {label}", uptime_str)
 
-        return Panel(table, title="[bold]Services[/bold]", expand=False, height=8)
+        return table
 
     @staticmethod
     def _format_uptime(seconds: float) -> str:
