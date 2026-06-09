@@ -34,16 +34,20 @@ class CurrentSessionPanel(Static):
             model = getattr(app, "current_model", "claude-haiku-4.5")
             session_id = getattr(app, "current_session_id", None)
             session_label = session_id[:8] + "..." if session_id else "(none)"
+            inspecting = getattr(app, "inspecting_task_id", None)
         except Exception:
-            agent, runtime, model, session_label = "orchestrator", "copilot", "claude-haiku-4.5", "(none)"
+            agent, runtime, model, session_label, inspecting = "orchestrator", "copilot", "claude-haiku-4.5", "(none)", None
 
-        return (
+        lines = (
             f"[bold]Agent:[/bold]   [cyan]{agent}[/cyan]\n"
             f"[bold]Runtime:[/bold] [magenta]{runtime}[/magenta]\n"
             f"[bold]Model:[/bold]   [green]{model}[/green]\n"
             f"[bold]Timeout:[/bold] [yellow]60s[/yellow]\n"
             f"[bold]Session:[/bold] [white]{session_label}[/white]"
         )
+        if inspecting:
+            lines += f"\n[bold]Inspect:[/bold] [#88C0D0]{inspecting[:12]}[/#88C0D0]"
+        return lines
 
 
 class ShortcutsPanel(Static):
@@ -58,7 +62,8 @@ class ShortcutsPanel(Static):
             "Tab      next panel\n"
             "Ctrl+N   new session\n"
             "Ctrl+S   send\n"
-            "Ctrl+Q   quit\n\n"
+            "Ctrl+Q   quit\n"
+            "Escape   exit inspector\n\n"
             "[bold]Commands[/bold]\n"
             "/agent <name>\n"
             "/model <name>\n"
@@ -154,6 +159,7 @@ class WeeTUI(App):
         Binding("ctrl+s", "send_prompt", "Send", show=False),
         Binding("tab", "focus_next", "Next", show=False),
         Binding("shift+tab", "focus_previous", "Prev", show=False),
+        Binding("escape", "exit_inspector", "Back", show=False),
     ]
 
     def __init__(self, **kwargs):
@@ -164,6 +170,8 @@ class WeeTUI(App):
         self.current_runtime = "copilot"
         self.current_model = "claude-haiku-4.5"
         self._sessions_cache: list = []
+        self.inspecting_task_id: Optional[str] = None
+        self._inspector_timer = None
 
     def compose(self) -> ComposeResult:
         """Compose the UI layout"""
@@ -282,15 +290,23 @@ class WeeTUI(App):
         except Exception:
             pass
 
-    # ── Session selection ──────────────────────────────────────────────────────
+    # ── Row selection (sessions + tasks) ──────────────────────────────────────
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle session row selection from the sessions DataTable."""
-        if event.control.id != "sessions":
-            return
-        session_id = str(event.row_key.value) if event.row_key.value else ""
-        if session_id and session_id not in ("__empty__", "__unknown__"):
-            self.run_worker(self._load_session(session_id))
+        """Handle row selection from any DataTable."""
+        table_id = event.control.id
+
+        if table_id == "sessions":
+            session_id = str(event.row_key.value) if event.row_key.value else ""
+            if session_id and session_id not in ("__empty__", "__unknown__"):
+                self.run_worker(self._load_session(session_id))
+
+        elif table_id == "tasks":
+            task_id = str(event.row_key.value) if event.row_key.value else ""
+            if task_id and task_id not in ("__empty__",):
+                self.run_worker(self._inspect_task(task_id))
+
+    # ── Session loading ────────────────────────────────────────────────────────
 
     async def _load_session(self, session_id: str) -> None:
         """Switch active session and load its transcript into the chat panel."""
@@ -298,6 +314,10 @@ class WeeTUI(App):
             if not self.api_client:
                 self.notify("❌ API client not initialized", severity="error")
                 return
+
+            # Exit inspector mode when switching to a session
+            self._cancel_inspector_timer()
+            self.inspecting_task_id = None
 
             self.current_session_id = session_id
 
@@ -325,7 +345,66 @@ class WeeTUI(App):
             logging.error(f"Load session error: {e}")
             self.notify(f"❌ Failed to load session: {e}", severity="error")
 
+    # ── Task inspector ─────────────────────────────────────────────────────────
+
+    async def _inspect_task(self, task_id: str) -> None:
+        """Enter inspector mode for the given task."""
+        self._cancel_inspector_timer()
+        self.inspecting_task_id = task_id
+        await self._refresh_task_inspector()
+
+    async def _refresh_task_inspector(self) -> None:
+        """Fetch task details and update the chat panel; re-schedule if still running."""
+        if not self.inspecting_task_id:
+            return
+        try:
+            if not self.api_client or not self.api_client.client:
+                return
+            task = await self.api_client.get_background_task(self.inspecting_task_id)
+            # Guard: user may have exited inspector while awaiting
+            if not self.inspecting_task_id:
+                return
+            chat = self.query_one("#chat", ChatPanel)
+            await chat.show_task_inspector(task)
+            await self.refresh_display()
+
+            if task.get("status") == "running":
+                self._inspector_timer = self.set_timer(2.5, self._refresh_task_inspector)
+        except Exception as e:
+            logging.error(f"Task inspector refresh error: {e}")
+            self.notify(f"❌ Failed to fetch task: {e}", severity="error")
+
+    def _cancel_inspector_timer(self) -> None:
+        """Cancel any pending inspector auto-refresh timer."""
+        if self._inspector_timer is not None:
+            try:
+                self._inspector_timer.stop()
+            except Exception:
+                pass
+            self._inspector_timer = None
+
     # ── Actions ────────────────────────────────────────────────────────────────
+
+    def action_exit_inspector(self) -> None:
+        """Exit task inspector and return to normal chat view."""
+        if not self.inspecting_task_id:
+            return
+        self._cancel_inspector_timer()
+        self.inspecting_task_id = None
+        self.run_worker(self._restore_session_view())
+
+    async def _restore_session_view(self) -> None:
+        """Restore chat panel to current session transcript after exiting inspector."""
+        await self.refresh_display()
+        chat = self.query_one("#chat", ChatPanel)
+        if self.current_session_id and self.api_client and self.api_client.client:
+            try:
+                messages = await self.api_client.get_session_messages(self.current_session_id)
+                await chat.load_transcript(messages)
+            except Exception:
+                await chat.load_transcript([])
+        else:
+            await chat.load_transcript([])
 
     def action_new_session(self) -> None:
         """Create a new session"""
