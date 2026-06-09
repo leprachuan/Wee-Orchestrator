@@ -27,13 +27,19 @@ class ChatPanel(RichLog):
 
     def on_mount(self) -> None:
         """Show placeholder on first mount"""
+        self._cleared_placeholder = False
         self.write(Align.center(Text.from_markup(PLACEHOLDER), vertical="middle"))
+
+    @property
+    def line_count(self) -> int:
+        """Get the number of lines in the chat"""
+        return len(self._lines) if hasattr(self, "_lines") else 0
 
     async def add_message(self, role: str, content: str) -> None:
         """Add a message to the chat panel."""
-        if self.line_count == 1:
-            # Clear placeholder on first real message
+        if not self._cleared_placeholder:
             self.clear()
+            self._cleared_placeholder = True
         style = self.ROLE_STYLES.get(role, "white")
         prefix = Text(f"[{role.upper()}] ", style=style)
         message = Text.assemble(prefix, content)

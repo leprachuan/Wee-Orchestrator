@@ -147,6 +147,7 @@ class WeeTUI(App):
         self.current_agent = "orchestrator"
         self.current_runtime = "copilot"
         self.current_model = "claude-haiku-4.5"
+        self.current_timeout = 60
 
     def compose(self) -> ComposeResult:
         """Compose the UI layout"""
@@ -292,7 +293,6 @@ class WeeTUI(App):
                     if arg:
                         self.current_agent = arg
                         await chat_panel.add_message("system", f"✅ Agent set to: {arg}")
-                        await self.refresh_display()
                     else:
                         await chat_panel.add_message("system", "❌ Usage: /agent <name>")
                 elif command == "/model":
