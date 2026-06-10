@@ -1800,8 +1800,9 @@ class TestCLIArguments(unittest.TestCase):
 
         self.assertEqual(result["exit_code"], 0)
         self.assertIn("claude", result["stdout"].lower())
-        # Should show Claude models
-        self.assertIn("Anthropic Models", result["stdout"])
+        # Should show Claude models (model-manifest.json runtimes.claude is the
+        # source of truth as of issue #359)
+        self.assertIn("Claude Models", result["stdout"])
         self.assertIn("sonnet", result["stdout"].lower())
 
 

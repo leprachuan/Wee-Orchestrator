@@ -26,6 +26,52 @@ from uuid import uuid4
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
 
+
+def _model_manifest_runtime_key(runtime: str) -> str:
+    """Map runtime aliases onto model-manifest.json `runtimes` keys.
+
+    `copilot-sdk` and `claude-sdk` share their model lists with their
+    non-SDK counterparts unless the manifest defines a dedicated entry.
+    """
+    runtime = (runtime or "").lower().strip()
+    if runtime == "copilot-sdk":
+        return "copilot"
+    return runtime
+
+
+def load_model_manifest(path: Optional[Path] = None) -> Dict:
+    """Load model-manifest.json, caching by mtime so edits are picked up live.
+
+    Returns {} when the manifest is missing or invalid so callers can fall
+    back to their existing static/CLI-discovered defaults.
+    """
+    manifest_path = path or MODEL_MANIFEST_PATH
+    try:
+        mtime = os.path.getmtime(manifest_path)
+    except OSError:
+        load_model_manifest._cache = {}
+        load_model_manifest._cache_key = None
+        return {}
+
+    cache_key = (str(manifest_path), mtime)
+    if getattr(load_model_manifest, "_cache_key", None) == cache_key:
+        return load_model_manifest._cache
+
+    try:
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[Warning] Failed to read model manifest: {e}", file=sys.stderr)
+        return {}
+
+    if not isinstance(data, dict) or not isinstance(data.get("runtimes"), dict):
+        return {}
+
+    load_model_manifest._cache = data
+    load_model_manifest._cache_key = cache_key
+    return data
+
+
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
     {
@@ -3642,7 +3688,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             return False
 
     def _copilot_static_fallback(self) -> dict:
-        # Static model list used when copilot CLI is unavailable
+        # model-manifest.json (runtimes.copilot) is the source of truth; this
+        # static list is only used if the manifest is missing/empty.
+        manifest_models = self._manifest_models_to_dict("copilot")
+        if manifest_models:
+            return manifest_models
         return {
             "Auto": [
                 "auto",
@@ -3676,7 +3726,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
 
     def fetch_copilot_models(self) -> Dict:
-        """Fetch available models from copilot CLI help text"""
+        """Fetch available models from model-manifest.json, falling back to copilot CLI help text."""
+        manifest_models = self._manifest_models_to_dict("copilot")
+        if manifest_models:
+            return manifest_models
+
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
             return self._copilot_static_fallback()
@@ -3803,7 +3857,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return self._copilot_static_fallback()
 
     def fetch_opencode_models(self) -> Dict:
-        """Fetch available models from opencode CLI, falling back to static list on failure."""
+        """Fetch available models from opencode CLI, falling back to manifest/static list on failure."""
         try:
             cmd = [str(self.opencode_bin), "models"]
             # Use configured command timeout (may be set via COMMAND_TIMEOUT)
@@ -3816,13 +3870,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
                     file=sys.stderr,
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
                 print(
                     "[Warning] opencode models returned empty output", file=sys.stderr
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
             for line in result.stdout.splitlines():
@@ -3846,10 +3904,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"[Error] opencode models command timed out after {self.command_timeout}s",
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
     # Curated popular OpenRouter model IDs for auto-discovery filtering
     OPENROUTER_POPULAR_MODELS = {
@@ -3977,8 +4039,119 @@ You can mention an agent in your prompt and it will auto-delegate:
             for cat, entries in static_dict.items()
         }
 
+    # ── model-manifest.json helpers (#359) ──────────────────────────────
+    #
+    # model-manifest.json is the source of truth for runtime->model lists.
+    # Each `runtimes.<runtime>` entry is a flat list of model id strings, in
+    # the order they should be presented. Group, display label, and known
+    # aliases are derived from the id itself (see _model_group_from_id /
+    # _model_label_from_id / _model_aliases_from_id) so a manifest edit is
+    # enough to add/remove/reorder models with no code changes.
+
+    def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
+        """Return the raw manifest model id list for `runtime`, or None if absent."""
+        manifest = load_model_manifest()
+        runtime_key = _model_manifest_runtime_key(runtime)
+        models = manifest.get("runtimes", {}).get(runtime_key)
+        if not models:
+            return None
+        return [m for m in models if isinstance(m, str) and m.strip()]
+
+    def _model_label_from_id(self, model_id: str) -> str:
+        """Derive a human-readable display label from a model id."""
+        words = re.split(r"[-_/]+", model_id)
+        return " ".join(
+            w.upper() if w.lower() == "gpt" else w.capitalize() for w in words
+        )
+
+    def _model_group_from_id(self, model_id: str, runtime: str) -> str:
+        """Derive a display category for a model id."""
+        model_lower = model_id.lower()
+        runtime = (runtime or "").lower()
+        if "claude" in model_lower:
+            return "Claude Models"
+        if "gpt" in model_lower or re.match(r"^o\d", model_lower):
+            return "GPT Models"
+        if "gemini" in model_lower:
+            return "Google Models"
+        if runtime in ("opencode", "wee") and "/" in model_id:
+            return model_id.split("/", 1)[0]
+        if runtime in ("claude", "claude-sdk"):
+            return "Claude Models"
+        return "Manifest Models"
+
+    def _model_aliases_from_id(self, model_id: str) -> List[str]:
+        """Derive common short aliases (e.g. 'sonnet-4.6') from a model id."""
+        aliases: List[str] = []
+        model_lower = model_id.lower()
+        for family in ("sonnet", "haiku", "opus"):
+            if family in model_lower:
+                aliases.append(family)
+                version = re.search(rf"{family}[-.]?([0-9][0-9.-]*)", model_lower)
+                if version:
+                    version_text = version.group(1).strip("-.")
+                    aliases.append(f"{family}-{version_text}")
+                    aliases.append(f"{family}-{version_text.replace('.', '-')}")
+        return aliases
+
+    def _manifest_models_to_metadata(self, runtime: str) -> Optional[Dict]:
+        """Return {category: [(id, label, aliases)...]} sourced from the manifest."""
+        models = self._model_manifest_models(runtime)
+        if not models:
+            return None
+
+        metadata: Dict[str, list] = {}
+        for model_id in models:
+            group = self._model_group_from_id(model_id, runtime)
+            metadata.setdefault(group, []).append(
+                (
+                    model_id,
+                    self._model_label_from_id(model_id),
+                    self._model_aliases_from_id(model_id),
+                )
+            )
+        return metadata
+
+    def _manifest_models_to_dict(self, runtime: str) -> Optional[Dict]:
+        """Return {category: [id...]} sourced from the manifest, or None if absent."""
+        metadata = self._manifest_models_to_metadata(runtime)
+        if not metadata:
+            return None
+        return self._static_models_to_dict(metadata)
+
+    def _runtime_default_model(self, runtime: str) -> str:
+        """Return the default model for `runtime`.
+
+        Resolution order: manifest's first listed model, then this runtime's
+        dispatch_config default from agents.json, then a hardcoded fallback.
+        """
+        manifest_models = self._model_manifest_models(runtime)
+        if manifest_models:
+            return manifest_models[0]
+
+        for agent in self.AGENTS.values():
+            dispatch_config = agent.get("dispatch_config", {})
+            if dispatch_config.get("runtime") == runtime and dispatch_config.get(
+                "model"
+            ):
+                return dispatch_config["model"]
+
+        fallback = {
+            "copilot": "gpt-5-mini",
+            "copilot-sdk": "gpt-5-mini",
+            "claude": "haiku",
+            "claude-sdk": "haiku",
+            "opencode": "opencode/gpt-5-nano",
+            "gemini": "gemini-1.5-flash",
+            "codex": "gpt-5.4",
+            "devin": os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4"),
+            "cursor": os.getenv("CURSOR_DEFAULT_MODEL", "auto"),
+            "wee": os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"),
+        }
+        return fallback.get(runtime, get_default_model())
+
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
-        """Look up a human-readable description for a model from static metadata."""
+        """Look up a human-readable description for a model from manifest/static metadata."""
         # First check env-loaded models (if cached)
         env_models_map = {
             "claude": self._env_claude_models,
@@ -3996,7 +4169,15 @@ You can mention an agent in your prompt and it will auto-delegate:
                     if mid == model_id:
                         return desc
 
-        # Fall back to static models
+        # Then the manifest (source of truth for live listings)
+        manifest_models = self._manifest_models_to_metadata(runtime)
+        if manifest_models:
+            for _cat, entries in manifest_models.items():
+                for mid, desc, _aliases in entries:
+                    if mid == model_id:
+                        return desc
+
+        # Fall back to static models (last resort)
         static_map = {
             "claude": self.CLAUDE_MODELS,
             "claude-sdk": self.CLAUDE_MODELS,
@@ -4016,19 +4197,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                     return desc
         return None
 
-    def fetch_claude_models(self) -> Dict:
-        """Return available Claude models from environment or fallback to static list.
+    def fetch_claude_models(self, runtime: str = "claude") -> Dict:
+        """Return available Claude models, sourced from model-manifest.json.
 
         Claude Code CLI does not currently expose a model-listing subcommand.
-        Models are read from CLAUDE_MODELS_JSON environment variable, with
-        static CLAUDE_MODELS as fallback.
+        Resolution order: model-manifest.json `runtimes.<runtime>` (source of
+        truth), then the deprecated CLAUDE_MODELS_JSON env var override, then
+        the static CLAUDE_MODELS fallback.
         """
-        # Try to load from environment variable first
+        manifest_models = self._manifest_models_to_dict(runtime)
+        if manifest_models:
+            return manifest_models
+
+        # Deprecated: CLAUDE_MODELS_JSON env var override (last resort)
         env_models = os.getenv("CLAUDE_MODELS_JSON")
         if env_models:
             try:
-                import json
-
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_claude_models = models_dict
@@ -4043,18 +4227,21 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.CLAUDE_MODELS)
 
     def fetch_gemini_models(self) -> Dict:
-        """Return available Gemini models from environment or fallback to static list.
+        """Return available Gemini models, sourced from model-manifest.json.
 
         Gemini CLI does not currently expose a model-listing subcommand.
-        Models are read from GEMINI_MODELS_JSON environment variable, with
-        static GEMINI_MODELS as fallback.
+        Resolution order: model-manifest.json `runtimes.gemini` (source of
+        truth), then the deprecated GEMINI_MODELS_JSON env var override, then
+        the static GEMINI_MODELS fallback.
         """
-        # Try to load from environment variable first
+        manifest_models = self._manifest_models_to_dict("gemini")
+        if manifest_models:
+            return manifest_models
+
+        # Deprecated: GEMINI_MODELS_JSON env var override (last resort)
         env_models = os.getenv("GEMINI_MODELS_JSON")
         if env_models:
             try:
-                import json
-
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_gemini_models = models_dict
@@ -4069,18 +4256,21 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.GEMINI_MODELS)
 
     def fetch_codex_models(self) -> Dict:
-        """Return available Codex models from environment or fallback to static list.
+        """Return available Codex models, sourced from model-manifest.json.
 
         Codex CLI does not currently expose a model-listing subcommand.
-        Models are read from CODEX_MODELS_JSON environment variable, with
-        static CODEX_MODELS as fallback.
+        Resolution order: model-manifest.json `runtimes.codex` (source of
+        truth), then the deprecated CODEX_MODELS_JSON env var override, then
+        the static CODEX_MODELS fallback.
         """
-        # Try to load from environment variable first
+        manifest_models = self._manifest_models_to_dict("codex")
+        if manifest_models:
+            return manifest_models
+
+        # Deprecated: CODEX_MODELS_JSON env var override (last resort)
         env_models = os.getenv("CODEX_MODELS_JSON")
         if env_models:
             try:
-                import json
-
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_codex_models = models_dict
@@ -4135,7 +4325,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 file=sys.stderr,
             )
 
-        return self._static_models_to_dict(self.DEVIN_MODELS)
+        return self._manifest_models_to_dict("devin") or self._static_models_to_dict(
+            self.DEVIN_MODELS
+        )
 
     def fetch_cursor_models(self) -> Dict:
         """Return available Cursor models by querying the agent CLI directly.
@@ -4192,7 +4384,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 file=sys.stderr,
             )
 
-        return self._static_models_to_dict(self.CURSOR_MODELS)
+        return self._manifest_models_to_dict("cursor") or self._static_models_to_dict(
+            self.CURSOR_MODELS
+        )
 
     def _fetch_ollama_models_live(self) -> list:
         """Return available wee models: local Ollama + OpenRouter cloud models.
@@ -4306,6 +4500,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                 print(
                     "[wee] No OpenRouter API key -- using static list", file=sys.stderr
                 )
+                manifest_models = self._manifest_models_to_dict("wee")
+                if manifest_models:
+                    for cat, ids in manifest_models.items():
+                        if "Ollama" not in cat:
+                            result.setdefault(cat, [(mid, mid, []) for mid in ids])
+                    return self._static_models_to_dict(result)
                 return self._static_models_to_dict(self.WEE_MODELS)
 
             import urllib.request
@@ -4373,9 +4573,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
-            "claude-sdk": self.fetch_claude_models,
+            "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
-            "claude": self.fetch_claude_models,
+            "claude": lambda: self.fetch_claude_models("claude"),
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
@@ -4385,6 +4585,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
+            # Unknown runtime: model-manifest.json may still define a list for it.
+            manifest_models = self._manifest_models_to_dict(runtime)
+            if manifest_models:
+                return manifest_models
             print(
                 f"[Warning] Unknown runtime for model listing: {runtime}",
                 file=sys.stderr,
@@ -4939,10 +5143,18 @@ You can mention an agent in your prompt and it will auto-delegate:
             "wee": self.WEE_MODELS,
         }
 
-        # Try env-loaded models first, fall back to static
-        models_to_check = env_alias_map.get(runtime) or static_alias_map.get(runtime)
-
-        if runtime in static_alias_map and models_to_check:
+        # Check env-loaded models, curated static alias tables, and the
+        # manifest's auto-derived aliases, in that order. Curated static
+        # tables are checked before the manifest since they carry richer
+        # hand-maintained alias lists than what can be derived from a bare
+        # model id.
+        for models_to_check in (
+            env_alias_map.get(runtime),
+            static_alias_map.get(runtime),
+            self._manifest_models_to_metadata(runtime),
+        ):
+            if not models_to_check:
+                continue
             for _category, entries in models_to_check.items():
                 for model_id, desc, aliases in entries:
                     aliases_lower = [a.lower() for a in aliases]
