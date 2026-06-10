@@ -1990,6 +1990,8 @@ class SessionManager:
         self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
         self._ollama_models_cache: list = []  # Live-discovered Ollama model names
         self._ollama_cache_ts: float = 0  # TTL timestamp for Ollama discovery (60s)
+        self._openrouter_models_cache: Optional[Dict] = None  # fetch_openrouter_models() cache (#172)
+        self._openrouter_models_cache_ts: float = 0  # TTL timestamp for the above (300s)
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3935,6 +3937,149 @@ You can mention an agent in your prompt and it will auto-delegate:
         "cohere/command-r-plus-08-2024",
     }
 
+    # Human-readable names for OpenRouter provider prefixes (Issue #142/#172)
+    OPENROUTER_PROVIDER_NAMES = {
+        "meta-llama": "Meta Llama",
+        "anthropic": "Anthropic",
+        "google": "Google",
+        "openai": "OpenAI",
+        "deepseek": "DeepSeek",
+        "mistralai": "Mistral AI",
+        "qwen": "Qwen",
+        "microsoft": "Microsoft",
+        "nvidia": "NVIDIA",
+        "cohere": "Cohere",
+        "perplexity": "Perplexity",
+        "x-ai": "xAI",
+        "01-ai": "01.AI",
+        "amazon": "Amazon",
+        "nousresearch": "Nous Research",
+        "liquid": "Liquid",
+        "bytedance": "ByteDance",
+    }
+
+    # Priority order for OpenRouter provider groups in the model selector
+    OPENROUTER_PROVIDER_PRIORITY = [
+        "OpenRouter - Anthropic",
+        "OpenRouter - OpenAI",
+        "OpenRouter - Google",
+        "OpenRouter - Meta Llama",
+        "OpenRouter - DeepSeek",
+        "OpenRouter - Mistral AI",
+        "OpenRouter - xAI",
+    ]
+
+    # Regex to strip variant suffixes from OpenRouter model IDs (Issue #172)
+    BASE_MODEL_RE = re.compile(r"(:free|:thinking|:extended|:beta|:nitro|:floor|:preview)$")
+
+    def fetch_openrouter_models(self) -> Dict:
+        """Fetch ALL available models from the OpenRouter API, deduplicated and
+        collapsed into a single "OpenRouter" group.
+
+        Returns {"OpenRouter": [(model_id, description, aliases), ...]} where
+        model_id uses the "openrouter/<provider>/<name>" prefix understood by
+        wee_runtime.py. Variant suffixes (:free, :thinking, etc.) are stripped
+        so each base model appears only once (Issue #172).
+
+        Resolution order:
+          1. Per-call 300s TTL cache (self._openrouter_models_cache)
+          2. Live API call to https://openrouter.ai/api/v1/models
+          3. Static WEE_MODELS fallback (Wee Native (OpenRouter)/(OpenRouter Free))
+
+        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        """
+        # Build static fallback + alias lookup from the curated WEE_MODELS lists,
+        # normalizing variant-suffixed IDs (Issue #172).
+        _static_raw = []
+        for _cat in ("Wee Native (OpenRouter)", "Wee Native (OpenRouter Free)"):
+            _static_raw.extend(self.WEE_MODELS.get(_cat, []))
+
+        static_aliases: Dict[str, list] = {}
+        _seen_static: set = set()
+        _normalized_static: list = []
+        for _entry in _static_raw:
+            _raw_id, _desc, _aliases = _entry[0], _entry[1], (_entry[2] if len(_entry) > 2 else [])
+            static_aliases.setdefault(_raw_id, _aliases)
+            _sid = self.BASE_MODEL_RE.sub("", _raw_id)
+            static_aliases.setdefault(_sid, _aliases)
+            if _sid not in _seen_static:
+                _seen_static.add(_sid)
+                _normalized_static.append((_sid, _desc, _aliases))
+        static_fallback = {"OpenRouter": _normalized_static}
+
+        cache_ttl = 300
+        if (
+            self._openrouter_models_cache is not None
+            and time.time() - self._openrouter_models_cache_ts < cache_ttl
+        ):
+            return self._openrouter_models_cache
+
+        api_key = None
+        try:
+            import keyring as _keyring
+
+            api_key = _keyring.get_password("openrouter", "api_key")
+        except Exception:
+            pass
+        if not api_key:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+
+        if not api_key:
+            print(
+                "[wee] OpenRouter: no API key available, using static fallback",
+                file=sys.stderr,
+            )
+            return static_fallback
+
+        try:
+            import urllib.request as _urlreq
+
+            req = _urlreq.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = _urlreq.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
+
+            # Deduplicate by stripping variant suffixes (Issue #172), e.g.
+            # meta-llama/llama-3.3-70b-instruct:free -> meta-llama/llama-3.3-70b-instruct
+            seen_base_ids: set = set()
+            deduped: list = []
+            for m in all_models:
+                mid = m.get("id") or ""
+                if not mid:
+                    continue
+                base_id = self.BASE_MODEL_RE.sub("", mid)
+                if base_id in seen_base_ids:
+                    continue
+                seen_base_ids.add(base_id)
+                name = m.get("name", mid)
+                or_id = "openrouter/" + base_id
+                aliases = static_aliases.get(or_id, [])
+                deduped.append((or_id, name, aliases))
+
+            if not deduped:
+                return static_fallback
+
+            # Collapse all models into a single "OpenRouter" group (Issue #172),
+            # sorted alphabetically by display name.
+            deduped.sort(key=lambda t: t[1].lower())
+            ordered = {"OpenRouter": deduped}
+
+            print(
+                f"[wee] OpenRouter: discovered {len(deduped)} models (deduplicated)",
+                file=sys.stderr,
+            )
+
+            self._openrouter_models_cache = ordered
+            self._openrouter_models_cache_ts = time.time()
+            return ordered
+
+        except Exception as e:
+            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+            return static_fallback
+
     WEE_MODELS = {
         "Wee Native (Ollama)": [
             ("ollama/gemma4:e4b", "Ollama Gemma 4 E4B (local)", ["gemma4", "gemma"]),
@@ -3974,7 +4119,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             (
                 "openrouter/meta-llama/llama-4-scout",
                 "Llama 4 Scout via OpenRouter",
-                ["llama-4-scout", "scout"],
+                ["llama-4-scout", "scout", "or-scout"],
             ),
             (
                 "openrouter/anthropic/claude-sonnet-4.6",
@@ -4398,8 +4543,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         import urllib.request as _urllib_req
 
         ollama_ttl = 60
-        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
-            return self._ollama_models_cache
+        cached = getattr(self, "_ollama_models_cache", [])
+        cached_ts = getattr(self, "_ollama_cache_ts", 0)
+        if cached and _time.time() - cached_ts < ollama_ttl:
+            return cached
 
         ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
         try:
@@ -4417,7 +4564,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
             # Return cached data even if stale, or empty list
-            return self._ollama_models_cache or []
+            return getattr(self, "_ollama_models_cache", None) or []
 
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama (live) + OpenRouter cloud models.
@@ -4479,74 +4626,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self.WEE_MODELS.get("Wee Native (Ollama)", [])
             )
 
-        # Copy static OpenRouter entries as initial values (overwritten below if live succeeds)
-        for cat, entries in self.WEE_MODELS.items():
-            if "Ollama" not in cat:
-                result[cat] = list(entries)
-
-        # Try live OpenRouter discovery
+        # Issue #172: dynamic OpenRouter discovery, deduplicated into a single
+        # "OpenRouter" group (replaces the old per-model OPENROUTER_POPULAR_MODELS
+        # filter and per-provider grouping).
         try:
-            api_key = None
-            try:
-                import keyring
-
-                api_key = keyring.get_password("openrouter", "api_key")
-            except Exception:
-                pass
-            if not api_key:
-                api_key = os.environ.get("OPENROUTER_API_KEY")
-
-            if not api_key:
-                print(
-                    "[wee] No OpenRouter API key -- using static list", file=sys.stderr
-                )
-                manifest_models = self._manifest_models_to_dict("wee")
-                if manifest_models:
-                    for cat, ids in manifest_models.items():
-                        if "Ollama" not in cat:
-                            result.setdefault(cat, [(mid, mid, []) for mid in ids])
-                    return self._static_models_to_dict(result)
-                return self._static_models_to_dict(self.WEE_MODELS)
-
-            import urllib.request
-
-            req = urllib.request.Request(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
-            )
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read())
-            all_models = data.get("data", [])
-
-            discovered = []
-            for m in all_models:
-                mid = m.get("id", "")
-                if mid in self.OPENROUTER_POPULAR_MODELS:
-                    name = m.get("name", mid)
-                    or_id = "openrouter/" + mid
-                    discovered.append((or_id, name + " (OpenRouter)", []))
-
-            if discovered:
-                discovered.sort(key=lambda t: t[1])
-                result["Wee Native (OpenRouter)"] = discovered
-                print(
-                    "[wee] OpenRouter: discovered %d models" % len(discovered),
-                    file=sys.stderr,
-                )
-
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
-
+            result.update(self.fetch_openrouter_models())
         except Exception as e:
-            print(
-                "[wee] OpenRouter discovery failed: %s — using live Ollama + static OR list" % e,
-                file=sys.stderr,
-            )
-            # Return result with live Ollama (already populated) + static OpenRouter fallback
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
+            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+
+        self._env_wee_models = result
+        self._openrouter_cache_ts = _time.time()
+        return self._static_models_to_dict(result)
 
     def fetch_ollama_models(self) -> Dict:
         """Fetch available ollama models from the model manifest."""
