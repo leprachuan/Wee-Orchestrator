@@ -62,6 +62,17 @@ class WeeAPIClient:
             response = await self.client.request(method, path, **kwargs)
             response.raise_for_status()
             return response.json() if response.content else {}
+        except httpx.HTTPStatusError as e:
+            body = {}
+            try:
+                body = e.response.json()
+            except Exception:
+                pass
+            detail = body.get("detail", str(e))
+            logger.error(f"API {e.response.status_code} error: {detail}")
+            raise httpx.HTTPStatusError(
+                str(detail), request=e.request, response=e.response
+            ) from e
         except httpx.HTTPError as e:
             logger.error(f"API error: {e}")
             raise
@@ -121,6 +132,9 @@ class WeeAPIClient:
         self, prompt: str, agent: str, runtime: str, model: str
     ) -> str:
         """Create a background task"""
+        if not prompt:
+            raise ValueError("prompt must not be empty")
+        logger.debug(f"POST background-tasks payload: prompt={prompt!r} agent={agent} runtime={runtime} model={model}")
         data = await self._request(
             "POST",
             "/api/v1/background-tasks",

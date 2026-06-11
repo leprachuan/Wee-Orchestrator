@@ -1,5 +1,7 @@
 """Chat panel component"""
 
+from typing import Any, Dict, List
+
 from rich.align import Align
 from rich.text import Text
 from textual.widgets import RichLog
@@ -30,11 +32,6 @@ class ChatPanel(RichLog):
         self._cleared_placeholder = False
         self.write(Align.center(Text.from_markup(PLACEHOLDER), vertical="middle"))
 
-    @property
-    def line_count(self) -> int:
-        """Get the number of lines in the chat"""
-        return len(self._lines) if hasattr(self, "_lines") else 0
-
     async def add_message(self, role: str, content: str) -> None:
         """Add a message to the chat panel."""
         if not self._cleared_placeholder:
@@ -44,3 +41,27 @@ class ChatPanel(RichLog):
         prefix = Text(f"[{role.upper()}] ", style=style)
         message = Text.assemble(prefix, content)
         self.write(message)
+
+    async def load_transcript(self, messages: List[Dict[str, Any]]) -> None:
+        """Clear and populate the panel with a historical transcript."""
+        self.clear()
+        self._cleared_placeholder = True
+        if not messages:
+            self.write(Align.center(Text.from_markup("[dim]No messages in this session[/dim]"), vertical="middle"))
+            return
+        for msg in messages:
+            role = msg.get("role", "system")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Handle content blocks (e.g. Claude API format)
+                parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(block.get("text", ""))
+                    elif isinstance(block, str):
+                        parts.append(block)
+                content = "\n".join(parts)
+            style = self.ROLE_STYLES.get(role, "white")
+            prefix = Text(f"[{role.upper()}] ", style=style)
+            self.write(Text.assemble(prefix, str(content)))
+        self.scroll_end(animate=False)

@@ -71,6 +71,31 @@ export interface AgentRuntimeConfig {
   fallback_model?: string;
 }
 
+
+/** Per-channel bot configuration (stored in agents.json under agent.bots.<channel>) */
+export interface AgentBotChannelConfig {
+  /** Secret name in the keyring — the actual token is never stored in agents.json */
+  token_secret?: string;
+  /** Optional list of user IDs allowed to interact with this bot */
+  allowed_users?: string[];
+}
+
+/** Optional mobile bot configuration block for an agent */
+export interface AgentBotsConfig {
+  telegram?: AgentBotChannelConfig;
+  webex?: AgentBotChannelConfig;
+}
+
+/** Bot token status returned by GET /api/v1/agents/{name}/bots/{channel}/token-status */
+export interface BotTokenStatus {
+  agent: string;
+  channel: string;
+  configured: boolean;
+  /** Secret name (only present if configured) */
+  secret_name?: string | null;
+  allowed_users: string[];
+}
+
 /** A single agent configuration entry */
 export interface Agent extends AgentRuntimeConfig {
   /** Unique identifier used in /agent set <name> */
@@ -83,6 +108,9 @@ export interface Agent extends AgentRuntimeConfig {
   max_concurrent?: number;
   /** Permission configuration for this agent */
   permissions?: AgentPermissions;
+  /** Optional mobile bot configuration (Telegram/WebEx per-agent bots) */
+  bots?: AgentBotsConfig;
+
   /** DEPRECATED: Use primary_runtime instead. Kept for backward compatibility. */
   runtime?: string;
   /** DEPRECATED: Use primary_model instead. Kept for backward compatibility. */

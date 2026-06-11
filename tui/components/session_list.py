@@ -2,50 +2,44 @@
 
 from typing import Any, Dict, List
 
-from rich.table import Table
-from textual.reactive import reactive
-from textual.widgets import Static
+from textual.widgets import DataTable
 
 
-class SessionListPanel(Static):
-    """Scrollable session list panel"""
-
-    sessions: reactive[list] = reactive([])
-    active_session_id: reactive[str] = reactive("")
+class SessionListPanel(DataTable):
+    """Selectable session list panel using DataTable for keyboard/mouse navigation"""
 
     def on_mount(self) -> None:
         self.border_title = "Sessions"
-
-    def render(self):
-        """Render session list"""
-        table = Table(show_header=True, header_style="bold", expand=True)
-        table.add_column("ID", style="cyan", width=10, no_wrap=True)
-        table.add_column("Agent", style="green", width=12)
-        table.add_column("Status", style="yellow")
-
-        if not self.sessions:
-            table.add_row("—", "No sessions", "")
-        else:
-            for session in self.sessions[-20:]:
-                sid = session.get("session_id", session.get("id", ""))
-                short_id = sid[:8] if sid else "—"
-                agent = session.get("agent", "—")
-                status = session.get("status", "unknown")
-                status_icon = (
-                    "[bold #A3BE8C]●[/bold #A3BE8C]"
-                    if status in ("active", "running")
-                    else "[bold #EBCB8B]○[/bold #EBCB8B]"
-                    if status == "idle"
-                    else "[bold #BF616A]✗[/bold #BF616A]"
-                )
-                row_style = "bold" if sid == self.active_session_id else "dim"
-                table.add_row(
-                    short_id, agent, f"{status_icon} {status}",
-                    style=row_style,
-                )
-
-        return table
+        self.cursor_type = "row"
+        self.add_columns("ID", "Agent", "Status")
 
     async def update_sessions(self, sessions: List[Dict[str, Any]]) -> None:
-        """Update the displayed session list."""
-        self.sessions = sessions
+        """Rebuild the session rows; preserve cursor position by session_id if possible."""
+        try:
+            current_key = self.get_row_at(self.cursor_row)[0] if self.row_count else None
+        except Exception:
+            current_key = None
+
+        self.clear()
+
+        if not sessions:
+            self.add_row("—", "No sessions", "", key="__empty__")
+            return
+
+        max_rows = max(0, self.size.height - 3)
+        new_row_key = None
+        for session in sessions[:max_rows]:
+            sid = session.get("session_id", session.get("id", ""))
+            short_id = sid[:8] if sid else "—"
+            agent = session.get("agent", "—")
+            status = session.get("status", "unknown")
+            self.add_row(short_id, agent, status, key=sid or "__unknown__")
+            if short_id == current_key:
+                new_row_key = sid
+
+        # Restore cursor to the previously selected row after rebuild
+        if new_row_key:
+            try:
+                self.move_cursor(row=self.get_row_index(new_row_key))
+            except Exception:
+                pass

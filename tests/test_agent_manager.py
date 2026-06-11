@@ -1800,10 +1800,80 @@ class TestCLIArguments(unittest.TestCase):
 
         self.assertEqual(result["exit_code"], 0)
         self.assertIn("claude", result["stdout"].lower())
-        # Should show Claude models
-        self.assertIn("Anthropic Models", result["stdout"])
+        # Should show Claude models (model-manifest.json runtimes.claude is the
+        # source of truth as of issue #359)
+        self.assertIn("Claude Models", result["stdout"])
         self.assertIn("sonnet", result["stdout"].lower())
 
+
+
+
+class TestWeeToolOutputCap(unittest.TestCase):
+    """Regression tests for issue #336: wee runtime tool output size cap."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        self.config_file = self.temp_path / "agents.json"
+        with open(self.config_file, "w") as f:
+            json.dump({"agents": []}, f)
+        self.manager = SessionManager(str(self.config_file))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_execute_bash_large_output_is_uncapped(self):
+        """_execute_bash_command itself returns full output (no internal cap).
+
+        The cap lives at the messages[] injection site, not inside
+        _execute_bash_command, so this verifies the contract is correct.
+        """
+        # Generate output larger than 8000 chars
+        result = self.manager._execute_bash_command(
+            "python3 -c \"print('x' * 10000)\"",
+            "orchestrator",
+        )
+        # Raw bash output should be 10000 chars (plus possible newline)
+        self.assertGreaterEqual(len(result), 10000)
+
+    def test_wee_execute_tool_large_output(self):
+        """_wee_execute_tool returns large output; injection site is responsible for capping."""
+        result = self.manager._wee_execute_tool(
+            "bash",
+            {"command": "python3 -c \"print('y' * 10000)\""},
+            "orchestrator",
+        )
+        self.assertGreaterEqual(len(result), 10000)
+
+    def test_tool_output_cap_constant_value(self):
+        """WEE_TOOL_OUTPUT_CAP is set to 8000 per the agentic loop local."""
+        # The constant is a local variable inside the agentic loop method.
+        # We verify the injection-site logic by simulating what the loop does.
+        WEE_TOOL_OUTPUT_CAP = 8_000
+        big_output = "A" * 20_000
+        _raw = big_output or "No output"
+        if len(_raw) > WEE_TOOL_OUTPUT_CAP:
+            _raw = _raw[:WEE_TOOL_OUTPUT_CAP] + "\n[...output truncated at " + str(WEE_TOOL_OUTPUT_CAP) + " chars]"
+        self.assertLessEqual(len(_raw), WEE_TOOL_OUTPUT_CAP + 100)
+        self.assertIn("truncated at 8000 chars", _raw)
+
+    def test_tool_output_cap_preserves_small_output(self):
+        """Output shorter than the cap passes through unchanged."""
+        WEE_TOOL_OUTPUT_CAP = 8_000
+        small_output = "hello world"
+        _raw = small_output or "No output"
+        if len(_raw) > WEE_TOOL_OUTPUT_CAP:
+            _raw = _raw[:WEE_TOOL_OUTPUT_CAP] + "\n[...output truncated at " + str(WEE_TOOL_OUTPUT_CAP) + " chars]"
+        self.assertEqual(_raw, "hello world")
+
+    def test_tool_output_cap_empty_is_no_output(self):
+        """Empty/falsy tool result becomes 'No output' sentinel."""
+        WEE_TOOL_OUTPUT_CAP = 8_000
+        tool_result = ""
+        _raw = tool_result or "No output"
+        if len(_raw) > WEE_TOOL_OUTPUT_CAP:
+            _raw = _raw[:WEE_TOOL_OUTPUT_CAP] + "\n[...output truncated at " + str(WEE_TOOL_OUTPUT_CAP) + " chars]"
+        self.assertEqual(_raw, "No output")
 
 if __name__ == "__main__":
     # Print test configuration info

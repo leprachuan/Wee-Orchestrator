@@ -205,7 +205,7 @@ class TelegramConnector(BaseConnector):
     def _safe_file_dirs(self):
         """Allowed download directories for Telegram file sends."""
         return [
-            Path("/opt/n8n-copilot-shim-dev/telegram_downloads").resolve(),
+            Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/telegram_downloads")).resolve(),
             Path("/tmp/webui_ai_media").resolve(),
         ]
 
@@ -844,7 +844,7 @@ class TelegramConnector(BaseConnector):
             file_path = file_info["result"]["file_path"]
 
             # Create downloads directory in repo
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
+            downloads_dir = Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/telegram_downloads"))
             downloads_dir.mkdir(exist_ok=True)
 
             # Download file
@@ -871,7 +871,7 @@ class TelegramConnector(BaseConnector):
     def cleanup_files(self, user_id: int):
         """Clean up downloaded files for user"""
         try:
-            downloads_dir = Path("/opt/n8n-copilot-shim-dev/telegram_downloads")
+            downloads_dir = Path(os.environ.get("TELEGRAM_DOWNLOADS_DIR", "/opt/n8n-copilot-shim/telegram_downloads"))
             if downloads_dir.exists():
                 for file in downloads_dir.glob(f"{user_id}_*"):
                     file.unlink()
@@ -1206,6 +1206,60 @@ class TelegramConnector(BaseConnector):
         self._wait_for_active_requests()
 
 
+def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.json") -> Optional[str]:
+    """Resolve the orchestrator bot token from agents.json via secret_tool.
+
+    Reads agents.json, finds the 'orchestrator' agent, and resolves
+    bots.<channel>.token_secret from the file-backend secret store.
+
+    Returns the token string or None (caller falls back to env/config).
+    Never logs the actual token value.
+    """
+    import json
+    import subprocess
+    try:
+        agents_path = Path(agents_json)
+        if not agents_path.exists():
+            # Try relative to this script's directory
+            agents_path = Path(__file__).resolve().parent / "agents.json"
+        if not agents_path.exists():
+            return None
+        data = json.loads(agents_path.read_text())
+        agents = data.get("agents", [])
+        orch = next((a for a in agents if a.get("name") == "orchestrator"), None)
+        if not orch:
+            return None
+        bots = orch.get("bots") or {}
+        ch_cfg = bots.get(channel) or {}
+        secret_name = ch_cfg.get("token_secret", "").strip()
+        if not secret_name:
+            return None
+        # Resolve from file backend — same backend the Settings API uses for storage
+        secret_tool_path = Path(__file__).resolve().parent / "secret_tool" / "secret_tool.py"
+        if not secret_tool_path.exists():
+            logger.warning("secret_tool.py not found at %s — cannot resolve orchestrator bot token", secret_tool_path)
+            return None
+        result = subprocess.run(
+            [sys.executable, str(secret_tool_path), "get", "--name", secret_name, "--backend", "file"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            try:
+                parsed = json.loads(output)
+                if parsed.get("status") == "success":
+                    return parsed.get("credential") or parsed.get("value")
+            except Exception:
+                if output:
+                    return output
+        logger.warning("Failed to resolve orchestrator telegram token (secret=%s)", secret_name)
+    except Exception as exc:
+        logger.warning("Error resolving orchestrator bot token: %s", exc)
+    return None
+
+
 def main():
     """Main entry point for Telegram connector"""
     import argparse
@@ -1222,6 +1276,11 @@ def main():
         "--config",
         default="telegram_config.json",
         help="Configuration file path",
+    )
+    parser.add_argument(
+        "--agents-json",
+        default="agents.json",
+        help="Path to agents.json (used to resolve orchestrator bot token from Settings)",
     )
     parser.add_argument(
         "--allow-user",
@@ -1260,14 +1319,25 @@ def main():
         print(f"Allowed users: {allowed if allowed else 'None (all users allowed)'}")
         return
 
+    # Token resolution priority:
+    # 1. Settings-backed token (agents.json bots.telegram.token_secret via secret_tool)
+    # 2. CLI --token / TELEGRAM_BOT_TOKEN env var (migration fallback)
+    # 3. telegram_config.json token field (handled inside TelegramConnector.__init__)
+    settings_token = _resolve_orchestrator_bot_token("telegram", args.agents_json)
+    token = settings_token or args.token
+
     # Start connector
-    if not args.token:
+    if not token:
         print(
-            "Error: Telegram bot token required (--token or TELEGRAM_BOT_TOKEN env var)"
+            "Error: Telegram bot token required (--token, TELEGRAM_BOT_TOKEN env var,"
+            " or configure via Settings panel)"
         )
         sys.exit(1)
 
-    connector = TelegramConnector(args.token, args.config)
+    if settings_token:
+        print("[INFO] Using orchestrator Telegram bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
+
+    connector = TelegramConnector(token, args.config)
     connector.run()
 
 

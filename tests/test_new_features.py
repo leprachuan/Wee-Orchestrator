@@ -552,6 +552,37 @@ class TestMediaInstructions(unittest.TestCase):
     def test_ai_media_path_referenced(self):
         self.assertIn("/ai-media/", self.source)
 
+    # --- Regression tests for issue #344: hallucinated image URLs ---
+
+    def test_image_prompt_never_guess_warning(self):
+        """Issue #344: prompt must explicitly forbid guessing/constructing URLs from memory."""
+        # The word NEVER (caps) must appear near the no-guessing rule
+        idx = self.source.find("NEVER guess or construct image URLs")
+        self.assertGreater(idx, 0, "Prompt must contain explicit 'NEVER guess or construct image URLs' instruction")
+
+    def test_image_prompt_webfetch_mandatory(self):
+        """Issue #344: prompt must require WebFetch before using Option A."""
+        idx = self.source.find("NEVER guess or construct image URLs")
+        snippet = self.source[idx : idx + 600]
+        self.assertIn("WebFetch", snippet, "No-guessing block must reference WebFetch as mandatory")
+        self.assertIn("MUST", snippet, "No-guessing block must use MUST to enforce fetching")
+
+    def test_image_prompt_fallback_to_omit(self):
+        """Issue #344: prompt must instruct model to omit image rather than fabricate URL."""
+        idx = self.source.find("NEVER guess or construct image URLs")
+        snippet = self.source[idx : idx + 600]
+        self.assertIn("do NOT include an image", snippet,
+                      "Prompt must tell model to omit image when URL cannot be confirmed")
+
+    def test_option_a_requires_webfetch_confirmation(self):
+        """Issue #344: Option A description must require prior WebFetch confirmation, not just say 'simplest'."""
+        idx = self.source.find("Option A —")
+        snippet = self.source[idx : idx + 200]
+        self.assertIn("WebFetch confirms", snippet,
+                      "Option A description must state it requires WebFetch confirmation")
+        self.assertNotIn("simplest", snippet,
+                         "Option A must no longer be labelled 'simplest' — it requires WebFetch first")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WebUI JS — pill selector command strings

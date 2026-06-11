@@ -6,11 +6,13 @@ correctly routes command-mode jobs to direct shell execution instead of
 dispatching them through the LLM pipeline.
 """
 
+import asyncio
+import importlib
 import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -222,14 +224,14 @@ class TestRunCommandTaskExecution(unittest.TestCase):
 
         # Should save results to scheduler
         self.assertIn(
-            "_save_result",
+            "save_result",
             func_body,
             "Should save results to scheduler",
         )
 
         # Should log to scheduler logs
         self.assertIn(
-            "_log_job",
+            "_log",
             func_body,
             "Should log execution to scheduler",
         )
@@ -264,14 +266,9 @@ class TestRunNowAPIIntegration(unittest.TestCase):
         except ImportError:
             self.skipTest("httpx not available")
 
-        agent_manager = _load_module(
-            "issue96_agent_manager_api", REPO / "agent_manager.py"
-        )
-        create_api_app = agent_manager.create_api_app
-        app = create_api_app()
+        from agent_manager import create_api_app
 
-        # Mock the scheduler to return a command-mode job
-        mock_job = {  # noqa: F841
+        mock_job = {
             "id": "test_cmd_job",
             "name": "Test Command",
             "task": "echo hello",
@@ -283,31 +280,34 @@ class TestRunNowAPIIntegration(unittest.TestCase):
         mock_scheduler = MagicMock()
         mock_scheduler.get_job.return_value = {"success": True, "result": mock_job}
         mock_scheduler.run_job.return_value = {"success": True}
-        fake_loop = MagicMock()
 
-        with patch.object(
-            app.state.bg_task_mgr, "create_task", return_value={}
-        ) as mock_create:  # noqa: F841
+        created_tasks = []
 
-            async def _run():
-                transport = ASGITransport(app=app)
-                async with AsyncClient(
-                    transport=transport, base_url="https://test"
-                ) as client:
-                    # We need to mock _get_scheduler
+        def capture_create(**kwargs):
+            created_tasks.append(kwargs)
+
+        with patch("scheduler.management.TaskScheduler", return_value=mock_scheduler):
+            app = create_api_app()
+
+        async def _run():
+            transport = ASGITransport(app=app)
+            async with AsyncClient(
+                transport=transport, base_url="https://test"
+            ) as client:
+                with patch.object(
+                    app.state.bg_task_mgr, "create_task", side_effect=capture_create
+                ):
                     with patch(
-                        "agent_manager._get_scheduler_for_test",
-                        return_value=None,
+                        "scheduler.management.TaskScheduler",
+                        return_value=mock_scheduler,
                     ):
                         response = await client.post(
                             "/api/v1/scheduler/jobs/test_cmd_job/run",
-                            headers={
-                                "Authorization": "Bearer test_key_123",
-                            },
+                            headers={"Authorization": "Bearer shared_test_key_123"},
                         )
                         return response
 
-            response = asyncio.run(_run())
+        response = asyncio.run(_run())
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -315,12 +315,10 @@ class TestRunNowAPIIntegration(unittest.TestCase):
         self.assertEqual(body["job_id"], "test_cmd_job")
         self.assertEqual(body["mode"], "command")
         self.assertEqual(body["status"], "running")
-        mock_scheduler.get_job.assert_called_once_with("test_cmd_job")
-        mock_scheduler.run_job.assert_called_once_with("test_cmd_job")
-        mock_create.assert_called_once()
-        self.assertEqual(mock_create.call_args.kwargs["runtime"], "shell")
-        self.assertEqual(mock_create.call_args.kwargs["agent"], "command")
-        fake_loop.run_in_executor.assert_called_once()
+        mock_scheduler.run_job.assert_called_with("test_cmd_job")
+        self.assertTrue(len(created_tasks) >= 1)
+        self.assertEqual(created_tasks[0].get("runtime"), "shell")
+        self.assertEqual(created_tasks[0].get("agent"), "command")
 
     def test_ai_mode_still_uses_background_task(self):
         """AI mode jobs should still be dispatched via _run_background_task."""

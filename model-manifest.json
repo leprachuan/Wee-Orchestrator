@@ -1,81 +1,128 @@
 {
-    "source": "manually verified from Codex CLI model picker 2026-04-26",
-    "last_updated": "2026-05-03T00:00:00Z",
-    "runtimes": {
-        "copilot": [
-            "auto",
-            "gpt-5.4",
-            "gpt-5.5",
-            "gpt-5.3-codex",
-            "gpt-5.2-codex",
-            "gpt-5.2",
-            "gpt-5.4-mini",
-            "gpt-5-mini",
-            "gpt-4.1",
-            "claude-sonnet-4.6",
-            "claude-sonnet-4.5",
-            "claude-haiku-4.5",
-            "claude-opus-4.7",
-            "claude-sonnet-4"
-        ],
-        "codex": [
-            "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.3-codex",
-            "gpt-5.2"
-        ],
-        "copilot-sdk": [
-            "auto",
-            "gpt-5.4",
-            "gpt-5.5",
-            "gpt-5.3-codex",
-            "gpt-5.2-codex",
-            "gpt-5.2",
-            "gpt-5.4-mini",
-            "gpt-5-mini",
-            "gpt-4.1",
-            "claude-sonnet-4.6",
-            "claude-sonnet-4.5",
-            "claude-haiku-4.5",
-            "claude-opus-4.7",
-            "claude-sonnet-4"
-        ],
-        "claude-sdk": [
-            "claude-sonnet-4.6",
-            "claude-sonnet-4.5",
-            "claude-haiku-4.5",
-            "claude-opus-4.7",
-            "claude-sonnet-4"
-        ],
-        "openai": [
-            "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.3-codex",
-            "gpt-5.2"
-        ],
-        "opencode": [
-            "openai-compatible/mistral-7b-instruct-v0.1"
-        ],
-        "qwen": [
-            "qwen-32k"
-        ],
-        "gemini": [
-            "gemini-1.5",
-            "gemini-1.5-pro"
-        ],
-        "ollama": [
-            "qwen3.5-64k:latest"
-        ],
-        "wee": [
-            "openrouter/auto",
-            "qwen/qwen3.6-72b",
-            "qwen/qwen3.6-14b",
-            "qwen/qwen3.6-32b",
-            "qwen/qwen3.6-7b",
-            "qwen/qwen3.6-flash"
-        ]
-    },
-    "notes": "This file centralizes runtime->model lists. Services and UI should read this file instead of hard-coded lists. Update and PR from /opt/n8n-copilot-shim/model-manifest.json."
+  "source": "manually verified from Codex CLI model picker 2026-04-26; claude/devin/cursor/gemini/wee migrated from agent_manager.py static dicts for issue #359",
+  "last_updated": "2026-06-10T00:00:00.000000Z",
+  "runtimes": {
+    "copilot": [
+      "auto",
+      "gpt-5.4",
+      "gpt-5.5",
+      "gpt-5.3-codex",
+      "gpt-5.2-codex",
+      "gpt-5.2",
+      "gpt-5.4-mini",
+      "gpt-5-mini",
+      "gpt-4.1",
+      "claude-sonnet-4.6",
+      "claude-sonnet-4.5",
+      "claude-haiku-4.5",
+      "claude-opus-4.7",
+      "claude-sonnet-4"
+    ],
+    "copilot-sdk": [
+      "auto",
+      "gpt-5.4",
+      "gpt-5.5",
+      "gpt-5.3-codex",
+      "gpt-5.2-codex",
+      "gpt-5.2",
+      "gpt-5.4-mini",
+      "gpt-5-mini",
+      "gpt-4.1",
+      "claude-sonnet-4.6",
+      "claude-sonnet-4.5",
+      "claude-haiku-4.5",
+      "claude-opus-4.7",
+      "claude-sonnet-4"
+    ],
+    "codex": [
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex",
+      "gpt-5.2"
+    ],
+    "claude": [
+      "sonnet",
+      "haiku",
+      "opus",
+      "claude-3-5-sonnet-latest",
+      "claude-3-5-haiku-latest",
+      "claude-3-opus-latest"
+    ],
+    "claude-sdk": [
+      "claude-sonnet-4.6",
+      "claude-sonnet-4.5",
+      "claude-haiku-4.5",
+      "claude-opus-4.7",
+      "claude-sonnet-4"
+    ],
+    "gemini": [
+      "gemini-3-pro-preview",
+      "gemini-3-flash-preview",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-2.0-flash-exp",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+      "gemini-pro"
+    ],
+    "devin": [
+      "claude-sonnet-4.6",
+      "claude-opus-4.7",
+      "claude-opus-4.6",
+      "claude-sonnet-4.5",
+      "claude-sonnet-4.5-thinking",
+      "claude-haiku-4.5",
+      "claude-opus-4.5",
+      "claude-sonnet-4",
+      "gemini-3.1-pro",
+      "gemini-3-pro",
+      "gemini-3-flash",
+      "gpt-5.4",
+      "gpt-5.3-codex",
+      "gpt-5.2",
+      "phoenix-alpha",
+      "swe-1.5",
+      "swe-1.5-fast"
+    ],
+    "cursor": [
+      "auto",
+      "composer-2",
+      "composer-2-fast",
+      "composer-1.5",
+      "claude-4.5-sonnet",
+      "claude-4.5-sonnet-thinking",
+      "claude-4-sonnet",
+      "gpt-5.3-codex",
+      "gpt-5.3-codex-fast",
+      "gpt-5.2",
+      "gpt-5.2-codex",
+      "gpt-5.1",
+      "gpt-5.4-mini-medium",
+      "gpt-5-mini",
+      "gemini-3.1-pro",
+      "gemini-3-flash",
+      "grok-4-20",
+      "kimi-k2.5"
+    ],
+    "opencode": [
+      "openai-compatible/mistral-7b-instruct-v0.1"
+    ],
+    "wee": [
+      "openrouter/anthropic/claude-sonnet-4.6",
+      "openrouter/anthropic/claude-opus-4.6",
+      "openrouter/openai/gpt-4.1",
+      "openrouter/openai/gpt-4.1-mini",
+      "openrouter/google/gemini-3.1-flash-lite-preview",
+      "openrouter/deepseek/deepseek-v3.2",
+      "openrouter/qwen/qwen3.6-plus",
+      "openrouter/nvidia/nemotron-nano-9b-v2:free",
+      "openrouter/qwen/qwen3-coder:free"
+    ],
+    "ollama": [
+      "qwen3.5-64k:latest"
+    ]
+  },
+  "notes": "This file is the source of truth for runtime->model lists, read by SessionManager.get_models_for_runtime() / fetch_*_models() for every runtime (issue #359). Editing this file (add/remove/reorder model ids) takes effect on the next manifest read -- no code changes or restarts required. Schema: runtimes.<runtime> is a flat, ordered array of model id strings. Display group, label, and known short aliases (e.g. 'sonnet-4.6') are derived automatically from each id (see _model_group_from_id / _model_label_from_id / _model_aliases_from_id in agent_manager.py). Runtimes with live CLI/API discovery (copilot, opencode, devin, cursor, ollama, wee) still prefer that live data when available and fall back to this manifest, then to a small static list as a last resort if both the manifest and live discovery are unavailable. Runtime aliases: 'copilot-sdk' shares the 'copilot' entry."
 }

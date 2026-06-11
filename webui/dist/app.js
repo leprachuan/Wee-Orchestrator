@@ -6565,6 +6565,158 @@ if (document.readyState !== 'loading') {
   if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
   if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
 
+
+  /* ── Mobile Bot Token Settings ─────────────────────────────────────────── */
+
+  const BOT_CHANNELS = ['telegram', 'webex'];
+
+  const BOT_ELS = {
+    telegram: {
+      badge:      () => document.getElementById('asf-tg-status-badge'),
+      form:       () => document.getElementById('asf-tg-token-form'),
+      input:      () => document.getElementById('asf-tg-token-input'),
+      status:     () => document.getElementById('asf-tg-form-status'),
+      btnUpdate:  () => document.getElementById('btn-tg-update'),
+      btnSave:    () => document.getElementById('btn-tg-save'),
+      btnCancel:  () => document.getElementById('btn-tg-cancel'),
+      btnRemove:  () => document.getElementById('btn-tg-remove'),
+    },
+    webex: {
+      badge:      () => document.getElementById('asf-wx-status-badge'),
+      form:       () => document.getElementById('asf-wx-token-form'),
+      input:      () => document.getElementById('asf-wx-token-input'),
+      status:     () => document.getElementById('asf-wx-form-status'),
+      btnUpdate:  () => document.getElementById('btn-wx-update'),
+      btnSave:    () => document.getElementById('btn-wx-save'),
+      btnCancel:  () => document.getElementById('btn-wx-cancel'),
+      btnRemove:  () => document.getElementById('btn-wx-remove'),
+    },
+  };
+
+  function botStatusText(ch, status) {
+    const s = status || {};
+    const badge = BOT_ELS[ch].badge();
+    if (!badge) return;
+    if (s.configured) {
+      badge.textContent = 'configured';
+      badge.className = 'asf-bot-badge asf-bot-badge--configured';
+      const btn = BOT_ELS[ch].btnUpdate();
+      if (btn) btn.textContent = 'Update Token';
+    } else {
+      badge.textContent = 'not configured';
+      badge.className = 'asf-bot-badge asf-bot-badge--unconfigured';
+      const btn = BOT_ELS[ch].btnUpdate();
+      if (btn) btn.textContent = 'Set Token';
+    }
+    // Show/hide remove button depending on configured state
+    const removeBtn = BOT_ELS[ch].btnRemove();
+    if (removeBtn) removeBtn.classList.toggle('hidden', !s.configured);
+  }
+
+  function botFormStatus(ch, msg, isError) {
+    const el = BOT_ELS[ch].status();
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'asf-bot-form-status' + (isError ? ' asf-bot-form-status--error' : ' asf-bot-form-status--ok');
+    el.classList.remove('hidden');
+    if (!isError) setTimeout(() => el && el.classList.add('hidden'), 4000);
+  }
+
+  function showBotForm(ch) {
+    const form = BOT_ELS[ch].form();
+    if (form) {
+      form.classList.remove('hidden');
+      const inp = BOT_ELS[ch].input();
+      if (inp) { inp.value = ''; inp.focus(); }
+    }
+    const status = BOT_ELS[ch].status();
+    if (status) status.classList.add('hidden');
+  }
+
+  function hideBotForm(ch) {
+    const form = BOT_ELS[ch].form();
+    if (form) form.classList.add('hidden');
+    const inp = BOT_ELS[ch].input();
+    if (inp) inp.value = '';
+  }
+
+  async function loadBotTokenStatus(agentName) {
+    for (const ch of BOT_CHANNELS) {
+      try {
+        const data = await apiRequest('GET', `/agents/${agentName}/bots/${ch}/token-status`);
+        botStatusText(ch, data);
+      } catch (e) {
+        // Silently ignore — agent may not have bots configured yet
+        botStatusText(ch, { configured: false });
+      }
+      hideBotForm(ch);
+    }
+    // Show orchestrator note if this is the orchestrator agent
+    const noteEl = document.getElementById('asf-mobile-bots-orchestrator-note');
+    if (noteEl) {
+      noteEl.classList.toggle('hidden', agentName !== 'orchestrator');
+    }
+  }
+
+  async function saveBotToken(ch) {
+    const inp = BOT_ELS[ch].input();
+    if (!inp) return;
+    const token = inp.value.trim();
+    if (!token) { botFormStatus(ch, 'Token value is required.', true); return; }
+    const agentName = ASF.selectedName;
+    if (!agentName) return;
+    try {
+      await apiRequest('PUT', `/agents/${agentName}/bots/${ch}/token`, { token });
+      botFormStatus(ch, '✓ Token saved securely.', false);
+      hideBotForm(ch);
+      await loadBotTokenStatus(agentName);
+    } catch (e) {
+      botFormStatus(ch, 'Save failed: ' + e.message, true);
+    }
+  }
+
+  async function removeBotToken(ch) {
+    const agentName = ASF.selectedName;
+    if (!agentName) return;
+    if (!confirm(`Remove ${ch} bot token for agent "${agentName}"? The bot will stop working.`)) return;
+    try {
+      await apiRequest('DELETE', `/agents/${agentName}/bots/${ch}/token`);
+      botStatusText(ch, { configured: false });
+      hideBotForm(ch);
+      showOk(`${ch} bot token removed.`);
+    } catch (e) {
+      showErr('Remove failed: ' + e.message);
+    }
+  }
+
+  // Wire up bot token button events
+  for (const ch of BOT_CHANNELS) {
+    const els = BOT_ELS[ch];
+    const btnUpdate = els.btnUpdate();
+    const btnSave   = els.btnSave();
+    const btnCancel = els.btnCancel();
+    const btnRemove = els.btnRemove();
+    if (btnUpdate)  btnUpdate.addEventListener('click',  () => showBotForm(ch));
+    if (btnSave)    btnSave.addEventListener('click',    () => saveBotToken(ch));
+    if (btnCancel)  btnCancel.addEventListener('click',  () => hideBotForm(ch));
+    if (btnRemove)  btnRemove.addEventListener('click',  () => removeBotToken(ch));
+  }
+
+  // Patch openSettings to also load bot token status when the panel opens
+  const _wrappedOpenForBots = openSettings;
+  openSettings = async function() {
+    await _wrappedOpenForBots();
+    if (ASF.selectedName) await loadBotTokenStatus(ASF.selectedName);
+  };
+
+  // Patch agent selector change to reload bot status
+  if (asfSelector) {
+    asfSelector.addEventListener('change', async () => {
+      if (ASF.selectedName) await loadBotTokenStatus(ASF.selectedName);
+    });
+  }
+
+
   // Auto-load .env when settings panel opens
   const _origOpenSettings = typeof openSettings === 'function' ? openSettings : null;
   if (_origOpenSettings) {

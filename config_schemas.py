@@ -112,6 +112,7 @@ _AGENT_KNOWN: set[str] = {
     "permissions",
     "permission_mode",
     "yolo",
+    "bots",
 }
 
 
@@ -131,6 +132,7 @@ class AgentEntry(BaseModel):
     permissions: Optional[Dict[str, Any]] = None
     permission_mode: Optional[str] = None
     yolo: Optional[bool] = None
+    bots: Optional[AgentBotsConfig] = None
 
     @model_validator(mode="before")
     @classmethod

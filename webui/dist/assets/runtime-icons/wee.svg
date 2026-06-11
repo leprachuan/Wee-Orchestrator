@@ -1,1 +1,13 @@
-<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Wee</title><ellipse cx="12" cy="7.5" rx="3" ry="3.5"/><ellipse cx="15.5" cy="11" rx="3.5" ry="3"/><ellipse cx="12" cy="14.5" rx="3" ry="3.5"/><ellipse cx="8.5" cy="11" rx="3.5" ry="3"/><rect x="11.25" y="17.5" width="1.5" height="5.5" rx="0.75"/></svg>
+<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <title>Wee</title>
+  <!-- Top leaf -->
+  <path d="M 12 2 Q 9 4 9 7 Q 9 10 12 11 Q 15 10 15 7 Q 15 4 12 2 Z" fill="currentColor"/>
+  <!-- Right leaf -->
+  <path d="M 22 12 Q 20 9 17 9 Q 14 9 13 12 Q 14 15 17 15 Q 20 15 22 12 Z" fill="currentColor"/>
+  <!-- Bottom leaf -->
+  <path d="M 12 22 Q 15 20 15 17 Q 15 14 12 13 Q 9 14 9 17 Q 9 20 12 22 Z" fill="currentColor"/>
+  <!-- Left leaf -->
+  <path d="M 2 12 Q 4 15 7 15 Q 10 15 11 12 Q 10 9 7 9 Q 4 9 2 12 Z" fill="currentColor"/>
+  <!-- Stem -->
+  <rect x="11" y="14" width="2" height="6" rx="1" fill="currentColor"/>
+</svg>

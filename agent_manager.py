@@ -26,6 +26,52 @@ from uuid import uuid4
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
 
+
+def _model_manifest_runtime_key(runtime: str) -> str:
+    """Map runtime aliases onto model-manifest.json `runtimes` keys.
+
+    `copilot-sdk` and `claude-sdk` share their model lists with their
+    non-SDK counterparts unless the manifest defines a dedicated entry.
+    """
+    runtime = (runtime or "").lower().strip()
+    if runtime == "copilot-sdk":
+        return "copilot"
+    return runtime
+
+
+def load_model_manifest(path: Optional[Path] = None) -> Dict:
+    """Load model-manifest.json, caching by mtime so edits are picked up live.
+
+    Returns {} when the manifest is missing or invalid so callers can fall
+    back to their existing static/CLI-discovered defaults.
+    """
+    manifest_path = path or MODEL_MANIFEST_PATH
+    try:
+        mtime = os.path.getmtime(manifest_path)
+    except OSError:
+        load_model_manifest._cache = {}
+        load_model_manifest._cache_key = None
+        return {}
+
+    cache_key = (str(manifest_path), mtime)
+    if getattr(load_model_manifest, "_cache_key", None) == cache_key:
+        return load_model_manifest._cache
+
+    try:
+        with open(manifest_path, "r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[Warning] Failed to read model manifest: {e}", file=sys.stderr)
+        return {}
+
+    if not isinstance(data, dict) or not isinstance(data.get("runtimes"), dict):
+        return {}
+
+    load_model_manifest._cache = data
+    load_model_manifest._cache_key = cache_key
+    return data
+
+
 # ── Theme constants (F025) ──────────────────────────────────────────────
 _BUILTIN_THEMES = [
     {
@@ -296,6 +342,49 @@ def _parse_codex_transport_line(
         )
 
     return tool_events
+
+
+# ---------------------------------------------------------------------------
+# SSH command sanitization (Issue #113)
+# ---------------------------------------------------------------------------
+
+_SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
+
+def _wee_sanitize_bash_command(command: str) -> str:
+    """Inject ``-o StrictHostKeyChecking=accept-new`` into ssh/scp/sftp commands.
+
+    Prevents interactive known_hosts prompts that block non-interactive runs.
+    Idempotent: already-flagged commands are returned unchanged.
+    """
+    if not command:
+        return command
+    if "StrictHostKeyChecking" in command:
+        return command
+
+    def _inject(m: re.Match) -> str:
+        return m.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+    return _SSH_BIN_RE.sub(_inject, command, count=0)
+
+
+def _wee_anti_hallucination_prompt() -> str:
+    """Return the anti-hallucination system prompt fragment for Wee runtime.
+
+    [CRITICAL RULES — read before every response]
+    1. NEVER fabricate command output. Run every command that you claim to run.
+    2. Report the EXACT error message you receive — no paraphrasing.
+    3. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new`` to
+       avoid interactive host-key prompts that will block the session.
+    4. Label any illustrative snippet: EXAMPLE (not real output).
+    """
+    return (
+        "\n\n[CRITICAL RULES — read before every response]\n"
+        "1. NEVER fabricate command output. Run every command you claim to run.\n"
+        "2. Report the EXACT error message you receive — no paraphrasing.\n"
+        "3. For SSH commands: ALWAYS use ``-o StrictHostKeyChecking=accept-new``.\n"
+        "4. Label any illustrative snippet: EXAMPLE (not real output).\n"
+    )
 
 
 def _resolve_silent_default(channel: str) -> bool:
@@ -2040,6 +2129,8 @@ class SessionManager:
         self._openrouter_cache_ts = 0  # TTL timestamp for OpenRouter discovery cache
         self._ollama_models_cache: list = []  # Live-discovered Ollama model names
         self._ollama_cache_ts: float = 0  # TTL timestamp for Ollama discovery (60s)
+        self._openrouter_models_cache: Optional[Dict] = None  # fetch_openrouter_models() cache (#172)
+        self._openrouter_models_cache_ts: float = 0  # TTL timestamp for the above (300s)
 
         # Load command timeout from environment
         self.command_timeout = get_command_timeout()
@@ -3738,7 +3829,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             return False
 
     def _copilot_static_fallback(self) -> dict:
-        # Static model list used when copilot CLI is unavailable
+        # model-manifest.json (runtimes.copilot) is the source of truth; this
+        # static list is only used if the manifest is missing/empty.
+        manifest_models = self._manifest_models_to_dict("copilot")
+        if manifest_models:
+            return manifest_models
         return {
             "Auto": [
                 "auto",
@@ -3772,7 +3867,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
 
     def fetch_copilot_models(self) -> Dict:
-        """Fetch available models from copilot CLI help text"""
+        """Fetch available models from model-manifest.json, falling back to copilot CLI help text."""
+        manifest_models = self._manifest_models_to_dict("copilot")
+        if manifest_models:
+            return manifest_models
+
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
             return self._copilot_static_fallback()
@@ -3899,7 +3998,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return self._copilot_static_fallback()
 
     def fetch_opencode_models(self) -> Dict:
-        """Fetch available models from opencode CLI, falling back to static list on failure."""
+        """Fetch available models from opencode CLI, falling back to manifest/static list on failure."""
         try:
             cmd = [str(self.opencode_bin), "models"]
             # Use configured command timeout (may be set via COMMAND_TIMEOUT)
@@ -3912,13 +4011,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                     f"[Error] opencode models failed (exit {result.returncode}): {result.stderr}",
                     file=sys.stderr,
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             if not result.stdout.strip():
                 print(
                     "[Warning] opencode models returned empty output", file=sys.stderr
                 )
-                return self._static_models_to_dict(self.OPENCODE_MODELS)
+                return self._manifest_models_to_dict(
+                    "opencode"
+                ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
             models_by_provider = {}
             for line in result.stdout.splitlines():
@@ -3942,10 +4045,14 @@ You can mention an agent in your prompt and it will auto-delegate:
                 f"[Error] opencode models command timed out after {self.command_timeout}s",
                 file=sys.stderr,
             )
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
         except Exception as e:
             print(f"Error fetching opencode models: {e}", file=sys.stderr)
-            return self._static_models_to_dict(self.OPENCODE_MODELS)
+            return self._manifest_models_to_dict(
+                "opencode"
+            ) or self._static_models_to_dict(self.OPENCODE_MODELS)
 
     # Curated popular OpenRouter model IDs for auto-discovery filtering
     OPENROUTER_POPULAR_MODELS = {
@@ -3969,6 +4076,149 @@ You can mention an agent in your prompt and it will auto-delegate:
         "mistralai/mistral-small-2603",
         "cohere/command-r-plus-08-2024",
     }
+
+    # Human-readable names for OpenRouter provider prefixes (Issue #142/#172)
+    OPENROUTER_PROVIDER_NAMES = {
+        "meta-llama": "Meta Llama",
+        "anthropic": "Anthropic",
+        "google": "Google",
+        "openai": "OpenAI",
+        "deepseek": "DeepSeek",
+        "mistralai": "Mistral AI",
+        "qwen": "Qwen",
+        "microsoft": "Microsoft",
+        "nvidia": "NVIDIA",
+        "cohere": "Cohere",
+        "perplexity": "Perplexity",
+        "x-ai": "xAI",
+        "01-ai": "01.AI",
+        "amazon": "Amazon",
+        "nousresearch": "Nous Research",
+        "liquid": "Liquid",
+        "bytedance": "ByteDance",
+    }
+
+    # Priority order for OpenRouter provider groups in the model selector
+    OPENROUTER_PROVIDER_PRIORITY = [
+        "OpenRouter - Anthropic",
+        "OpenRouter - OpenAI",
+        "OpenRouter - Google",
+        "OpenRouter - Meta Llama",
+        "OpenRouter - DeepSeek",
+        "OpenRouter - Mistral AI",
+        "OpenRouter - xAI",
+    ]
+
+    # Regex to strip variant suffixes from OpenRouter model IDs (Issue #172)
+    BASE_MODEL_RE = re.compile(r"(:free|:thinking|:extended|:beta|:nitro|:floor|:preview)$")
+
+    def fetch_openrouter_models(self) -> Dict:
+        """Fetch ALL available models from the OpenRouter API, deduplicated and
+        collapsed into a single "OpenRouter" group.
+
+        Returns {"OpenRouter": [(model_id, description, aliases), ...]} where
+        model_id uses the "openrouter/<provider>/<name>" prefix understood by
+        wee_runtime.py. Variant suffixes (:free, :thinking, etc.) are stripped
+        so each base model appears only once (Issue #172).
+
+        Resolution order:
+          1. Per-call 300s TTL cache (self._openrouter_models_cache)
+          2. Live API call to https://openrouter.ai/api/v1/models
+          3. Static WEE_MODELS fallback (Wee Native (OpenRouter)/(OpenRouter Free))
+
+        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        """
+        # Build static fallback + alias lookup from the curated WEE_MODELS lists,
+        # normalizing variant-suffixed IDs (Issue #172).
+        _static_raw = []
+        for _cat in ("Wee Native (OpenRouter)", "Wee Native (OpenRouter Free)"):
+            _static_raw.extend(self.WEE_MODELS.get(_cat, []))
+
+        static_aliases: Dict[str, list] = {}
+        _seen_static: set = set()
+        _normalized_static: list = []
+        for _entry in _static_raw:
+            _raw_id, _desc, _aliases = _entry[0], _entry[1], (_entry[2] if len(_entry) > 2 else [])
+            static_aliases.setdefault(_raw_id, _aliases)
+            _sid = self.BASE_MODEL_RE.sub("", _raw_id)
+            static_aliases.setdefault(_sid, _aliases)
+            if _sid not in _seen_static:
+                _seen_static.add(_sid)
+                _normalized_static.append((_sid, _desc, _aliases))
+        static_fallback = {"OpenRouter": _normalized_static}
+
+        cache_ttl = 300
+        if (
+            self._openrouter_models_cache is not None
+            and time.time() - self._openrouter_models_cache_ts < cache_ttl
+        ):
+            return self._openrouter_models_cache
+
+        api_key = None
+        try:
+            import keyring as _keyring
+
+            api_key = _keyring.get_password("openrouter", "api_key")
+        except Exception:
+            pass
+        if not api_key:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+
+        if not api_key:
+            print(
+                "[wee] OpenRouter: no API key available, using static fallback",
+                file=sys.stderr,
+            )
+            return static_fallback
+
+        try:
+            import urllib.request as _urlreq
+
+            req = _urlreq.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = _urlreq.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            all_models = data.get("data", [])
+
+            # Deduplicate by stripping variant suffixes (Issue #172), e.g.
+            # meta-llama/llama-3.3-70b-instruct:free -> meta-llama/llama-3.3-70b-instruct
+            seen_base_ids: set = set()
+            deduped: list = []
+            for m in all_models:
+                mid = m.get("id") or ""
+                if not mid:
+                    continue
+                base_id = self.BASE_MODEL_RE.sub("", mid)
+                if base_id in seen_base_ids:
+                    continue
+                seen_base_ids.add(base_id)
+                name = m.get("name", mid)
+                or_id = "openrouter/" + base_id
+                aliases = static_aliases.get(or_id, [])
+                deduped.append((or_id, name, aliases))
+
+            if not deduped:
+                return static_fallback
+
+            # Collapse all models into a single "OpenRouter" group (Issue #172),
+            # sorted alphabetically by display name.
+            deduped.sort(key=lambda t: t[1].lower())
+            ordered = {"OpenRouter": deduped}
+
+            print(
+                f"[wee] OpenRouter: discovered {len(deduped)} models (deduplicated)",
+                file=sys.stderr,
+            )
+
+            self._openrouter_models_cache = ordered
+            self._openrouter_models_cache_ts = time.time()
+            return ordered
+
+        except Exception as e:
+            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+            return static_fallback
 
     WEE_MODELS = {
         "Wee Native (Ollama)": [
@@ -3997,6 +4247,11 @@ You can mention an agent in your prompt and it will auto-delegate:
         ],
         "Wee Native (OpenRouter)": [
             (
+                "openrouter/auto",
+                "Auto Router (OpenRouter)",
+                ["openrouter-auto", "or-auto", "auto"],
+            ),
+            (
                 "openrouter/meta-llama/llama-4-maverick",
                 "Llama 4 Maverick via OpenRouter",
                 ["llama-4-maverick", "maverick"],
@@ -4004,7 +4259,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             (
                 "openrouter/meta-llama/llama-4-scout",
                 "Llama 4 Scout via OpenRouter",
-                ["llama-4-scout", "scout"],
+                ["llama-4-scout", "scout", "or-scout"],
             ),
             (
                 "openrouter/anthropic/claude-sonnet-4.6",
@@ -4029,6 +4284,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             ),
         ],
         "Wee Native (OpenRouter Free)": [
+            (
+                "openrouter/free",
+                "Free Auto Router (OpenRouter)",
+                ["openrouter-free", "or-free", "free"],
+            ),
             (
                 "openrouter/google/gemma-3-27b-it:free",
                 "Gemma 3 27B FREE via OpenRouter",
@@ -4069,8 +4329,119 @@ You can mention an agent in your prompt and it will auto-delegate:
             for cat, entries in static_dict.items()
         }
 
+    # ── model-manifest.json helpers (#359) ──────────────────────────────
+    #
+    # model-manifest.json is the source of truth for runtime->model lists.
+    # Each `runtimes.<runtime>` entry is a flat list of model id strings, in
+    # the order they should be presented. Group, display label, and known
+    # aliases are derived from the id itself (see _model_group_from_id /
+    # _model_label_from_id / _model_aliases_from_id) so a manifest edit is
+    # enough to add/remove/reorder models with no code changes.
+
+    def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
+        """Return the raw manifest model id list for `runtime`, or None if absent."""
+        manifest = load_model_manifest()
+        runtime_key = _model_manifest_runtime_key(runtime)
+        models = manifest.get("runtimes", {}).get(runtime_key)
+        if not models:
+            return None
+        return [m for m in models if isinstance(m, str) and m.strip()]
+
+    def _model_label_from_id(self, model_id: str) -> str:
+        """Derive a human-readable display label from a model id."""
+        words = re.split(r"[-_/]+", model_id)
+        return " ".join(
+            w.upper() if w.lower() == "gpt" else w.capitalize() for w in words
+        )
+
+    def _model_group_from_id(self, model_id: str, runtime: str) -> str:
+        """Derive a display category for a model id."""
+        model_lower = model_id.lower()
+        runtime = (runtime or "").lower()
+        if "claude" in model_lower:
+            return "Claude Models"
+        if "gpt" in model_lower or re.match(r"^o\d", model_lower):
+            return "GPT Models"
+        if "gemini" in model_lower:
+            return "Google Models"
+        if runtime in ("opencode", "wee") and "/" in model_id:
+            return model_id.split("/", 1)[0]
+        if runtime in ("claude", "claude-sdk"):
+            return "Claude Models"
+        return "Manifest Models"
+
+    def _model_aliases_from_id(self, model_id: str) -> List[str]:
+        """Derive common short aliases (e.g. 'sonnet-4.6') from a model id."""
+        aliases: List[str] = []
+        model_lower = model_id.lower()
+        for family in ("sonnet", "haiku", "opus"):
+            if family in model_lower:
+                aliases.append(family)
+                version = re.search(rf"{family}[-.]?([0-9][0-9.-]*)", model_lower)
+                if version:
+                    version_text = version.group(1).strip("-.")
+                    aliases.append(f"{family}-{version_text}")
+                    aliases.append(f"{family}-{version_text.replace('.', '-')}")
+        return aliases
+
+    def _manifest_models_to_metadata(self, runtime: str) -> Optional[Dict]:
+        """Return {category: [(id, label, aliases)...]} sourced from the manifest."""
+        models = self._model_manifest_models(runtime)
+        if not models:
+            return None
+
+        metadata: Dict[str, list] = {}
+        for model_id in models:
+            group = self._model_group_from_id(model_id, runtime)
+            metadata.setdefault(group, []).append(
+                (
+                    model_id,
+                    self._model_label_from_id(model_id),
+                    self._model_aliases_from_id(model_id),
+                )
+            )
+        return metadata
+
+    def _manifest_models_to_dict(self, runtime: str) -> Optional[Dict]:
+        """Return {category: [id...]} sourced from the manifest, or None if absent."""
+        metadata = self._manifest_models_to_metadata(runtime)
+        if not metadata:
+            return None
+        return self._static_models_to_dict(metadata)
+
+    def _runtime_default_model(self, runtime: str) -> str:
+        """Return the default model for `runtime`.
+
+        Resolution order: manifest's first listed model, then this runtime's
+        dispatch_config default from agents.json, then a hardcoded fallback.
+        """
+        manifest_models = self._model_manifest_models(runtime)
+        if manifest_models:
+            return manifest_models[0]
+
+        for agent in self.AGENTS.values():
+            dispatch_config = agent.get("dispatch_config", {})
+            if dispatch_config.get("runtime") == runtime and dispatch_config.get(
+                "model"
+            ):
+                return dispatch_config["model"]
+
+        fallback = {
+            "copilot": "gpt-5-mini",
+            "copilot-sdk": "gpt-5-mini",
+            "claude": "haiku",
+            "claude-sdk": "haiku",
+            "opencode": "opencode/gpt-5-nano",
+            "gemini": "gemini-1.5-flash",
+            "codex": "gpt-5.4",
+            "devin": os.getenv("DEVIN_DEFAULT_MODEL", "claude-sonnet-4"),
+            "cursor": os.getenv("CURSOR_DEFAULT_MODEL", "auto"),
+            "wee": os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b"),
+        }
+        return fallback.get(runtime, get_default_model())
+
     def _get_model_description(self, model_id: str, runtime: str) -> Optional[str]:
-        """Look up a human-readable description for a model from static metadata."""
+        """Look up a human-readable description for a model from manifest/static metadata."""
         # First check env-loaded models (if cached)
         env_models_map = {
             "claude": self._env_claude_models,
@@ -4088,7 +4459,15 @@ You can mention an agent in your prompt and it will auto-delegate:
                     if mid == model_id:
                         return desc
 
-        # Fall back to static models
+        # Then the manifest (source of truth for live listings)
+        manifest_models = self._manifest_models_to_metadata(runtime)
+        if manifest_models:
+            for _cat, entries in manifest_models.items():
+                for mid, desc, _aliases in entries:
+                    if mid == model_id:
+                        return desc
+
+        # Fall back to static models (last resort)
         static_map = {
             "claude": self.CLAUDE_MODELS,
             "claude-sdk": self.CLAUDE_MODELS,
@@ -4108,19 +4487,22 @@ You can mention an agent in your prompt and it will auto-delegate:
                     return desc
         return None
 
-    def fetch_claude_models(self) -> Dict:
-        """Return available Claude models from environment or fallback to static list.
+    def fetch_claude_models(self, runtime: str = "claude") -> Dict:
+        """Return available Claude models, sourced from model-manifest.json.
 
         Claude Code CLI does not currently expose a model-listing subcommand.
-        Models are read from CLAUDE_MODELS_JSON environment variable, with
-        static CLAUDE_MODELS as fallback.
+        Resolution order: model-manifest.json `runtimes.<runtime>` (source of
+        truth), then the deprecated CLAUDE_MODELS_JSON env var override, then
+        the static CLAUDE_MODELS fallback.
         """
-        # Try to load from environment variable first
+        manifest_models = self._manifest_models_to_dict(runtime)
+        if manifest_models:
+            return manifest_models
+
+        # Deprecated: CLAUDE_MODELS_JSON env var override (last resort)
         env_models = os.getenv("CLAUDE_MODELS_JSON")
         if env_models:
             try:
-                import json
-
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_claude_models = models_dict
@@ -4135,18 +4517,21 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.CLAUDE_MODELS)
 
     def fetch_gemini_models(self) -> Dict:
-        """Return available Gemini models from environment or fallback to static list.
+        """Return available Gemini models, sourced from model-manifest.json.
 
         Gemini CLI does not currently expose a model-listing subcommand.
-        Models are read from GEMINI_MODELS_JSON environment variable, with
-        static GEMINI_MODELS as fallback.
+        Resolution order: model-manifest.json `runtimes.gemini` (source of
+        truth), then the deprecated GEMINI_MODELS_JSON env var override, then
+        the static GEMINI_MODELS fallback.
         """
-        # Try to load from environment variable first
+        manifest_models = self._manifest_models_to_dict("gemini")
+        if manifest_models:
+            return manifest_models
+
+        # Deprecated: GEMINI_MODELS_JSON env var override (last resort)
         env_models = os.getenv("GEMINI_MODELS_JSON")
         if env_models:
             try:
-                import json
-
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_gemini_models = models_dict
@@ -4161,18 +4546,21 @@ You can mention an agent in your prompt and it will auto-delegate:
         return self._static_models_to_dict(self.GEMINI_MODELS)
 
     def fetch_codex_models(self) -> Dict:
-        """Return available Codex models from environment or fallback to static list.
+        """Return available Codex models, sourced from model-manifest.json.
 
         Codex CLI does not currently expose a model-listing subcommand.
-        Models are read from CODEX_MODELS_JSON environment variable, with
-        static CODEX_MODELS as fallback.
+        Resolution order: model-manifest.json `runtimes.codex` (source of
+        truth), then the deprecated CODEX_MODELS_JSON env var override, then
+        the static CODEX_MODELS fallback.
         """
-        # Try to load from environment variable first
+        manifest_models = self._manifest_models_to_dict("codex")
+        if manifest_models:
+            return manifest_models
+
+        # Deprecated: CODEX_MODELS_JSON env var override (last resort)
         env_models = os.getenv("CODEX_MODELS_JSON")
         if env_models:
             try:
-                import json
-
                 models_dict = json.loads(env_models)
                 # Cache the full model dict with descriptions for lookup later
                 self._env_codex_models = models_dict
@@ -4227,7 +4615,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 file=sys.stderr,
             )
 
-        return self._static_models_to_dict(self.DEVIN_MODELS)
+        return self._manifest_models_to_dict("devin") or self._static_models_to_dict(
+            self.DEVIN_MODELS
+        )
 
     def fetch_cursor_models(self) -> Dict:
         """Return available Cursor models by querying the agent CLI directly.
@@ -4284,7 +4674,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                 file=sys.stderr,
             )
 
-        return self._static_models_to_dict(self.CURSOR_MODELS)
+        return self._manifest_models_to_dict("cursor") or self._static_models_to_dict(
+            self.CURSOR_MODELS
+        )
 
     def _fetch_ollama_models_live(self) -> list:
         """Return available wee models: local Ollama + OpenRouter cloud models.
@@ -4296,8 +4688,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         import urllib.request as _urllib_req
 
         ollama_ttl = 60
-        if self._ollama_models_cache and _time.time() - self._ollama_cache_ts < ollama_ttl:
-            return self._ollama_models_cache
+        cached = getattr(self, "_ollama_models_cache", [])
+        cached_ts = getattr(self, "_ollama_cache_ts", 0)
+        if cached and _time.time() - cached_ts < ollama_ttl:
+            return cached
 
         ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
         try:
@@ -4315,7 +4709,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             print(f"[wee] Ollama discovery failed ({ollama_url}): {e}", file=sys.stderr)
             # Return cached data even if stale, or empty list
-            return self._ollama_models_cache or []
+            return getattr(self, "_ollama_models_cache", None) or []
 
     def fetch_wee_models(self) -> Dict:
         """Return available wee models: local Ollama (live) + OpenRouter cloud models.
@@ -4377,68 +4771,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                 self.WEE_MODELS.get("Wee Native (Ollama)", [])
             )
 
-        # Copy static OpenRouter entries as initial values (overwritten below if live succeeds)
-        for cat, entries in self.WEE_MODELS.items():
-            if "Ollama" not in cat:
-                result[cat] = list(entries)
-
-        # Try live OpenRouter discovery
+        # Issue #172: dynamic OpenRouter discovery, deduplicated into a single
+        # "OpenRouter" group (replaces the old per-model OPENROUTER_POPULAR_MODELS
+        # filter and per-provider grouping).
         try:
-            api_key = None
-            try:
-                import keyring
-
-                api_key = keyring.get_password("openrouter", "api_key")
-            except Exception:
-                pass
-            if not api_key:
-                api_key = os.environ.get("OPENROUTER_API_KEY")
-
-            if not api_key:
-                print(
-                    "[wee] No OpenRouter API key -- using static list", file=sys.stderr
-                )
-                return self._static_models_to_dict(self.WEE_MODELS)
-
-            import urllib.request
-
-            req = urllib.request.Request(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
-            )
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read())
-            all_models = data.get("data", [])
-
-            discovered = []
-            for m in all_models:
-                mid = m.get("id", "")
-                if mid in self.OPENROUTER_POPULAR_MODELS:
-                    name = m.get("name", mid)
-                    or_id = "openrouter/" + mid
-                    discovered.append((or_id, name + " (OpenRouter)", []))
-
-            if discovered:
-                discovered.sort(key=lambda t: t[1])
-                result["Wee Native (OpenRouter)"] = discovered
-                print(
-                    "[wee] OpenRouter: discovered %d models" % len(discovered),
-                    file=sys.stderr,
-                )
-
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
-
+            result.update(self.fetch_openrouter_models())
         except Exception as e:
-            print(
-                "[wee] OpenRouter discovery failed: %s — using live Ollama + static OR list" % e,
-                file=sys.stderr,
-            )
-            # Return result with live Ollama (already populated) + static OpenRouter fallback
-            self._env_wee_models = result
-            self._openrouter_cache_ts = _time.time()
-            return self._static_models_to_dict(result)
+            print(f"[wee] OpenRouter discovery failed: {e}", file=sys.stderr)
+
+        self._env_wee_models = result
+        self._openrouter_cache_ts = _time.time()
+        return self._static_models_to_dict(result)
 
     def fetch_ollama_models(self) -> Dict:
         """Fetch available ollama models from the model manifest."""
@@ -4465,9 +4808,9 @@ You can mention an agent in your prompt and it will auto-delegate:
         dispatch = {
             "copilot": self.fetch_copilot_models,
             "copilot-sdk": self.fetch_copilot_models,
-            "claude-sdk": self.fetch_claude_models,
+            "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
-            "claude": self.fetch_claude_models,
+            "claude": lambda: self.fetch_claude_models("claude"),
             "gemini": self.fetch_gemini_models,
             "codex": self.fetch_codex_models,
             "devin": self.fetch_devin_models,
@@ -4477,6 +4820,10 @@ You can mention an agent in your prompt and it will auto-delegate:
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
+            # Unknown runtime: model-manifest.json may still define a list for it.
+            manifest_models = self._manifest_models_to_dict(runtime)
+            if manifest_models:
+                return manifest_models
             print(
                 f"[Warning] Unknown runtime for model listing: {runtime}",
                 file=sys.stderr,
@@ -5031,10 +5378,18 @@ You can mention an agent in your prompt and it will auto-delegate:
             "wee": self.WEE_MODELS,
         }
 
-        # Try env-loaded models first, fall back to static
-        models_to_check = env_alias_map.get(runtime) or static_alias_map.get(runtime)
-
-        if runtime in static_alias_map and models_to_check:
+        # Check env-loaded models, curated static alias tables, and the
+        # manifest's auto-derived aliases, in that order. Curated static
+        # tables are checked before the manifest since they carry richer
+        # hand-maintained alias lists than what can be derived from a bare
+        # model id.
+        for models_to_check in (
+            env_alias_map.get(runtime),
+            static_alias_map.get(runtime),
+            self._manifest_models_to_metadata(runtime),
+        ):
+            if not models_to_check:
+                continue
             for _category, entries in models_to_check.items():
                 for model_id, desc, aliases in entries:
                     aliases_lower = [a.lower() for a in aliases]
@@ -5056,7 +5411,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Substring matching with longest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
-        
+
         # Issue #142 B01: For wee runtime, exclude multi-namespace models from substring
         # matching (e.g., "openrouter/openai/gpt-5-mini" has 2+ slashes = multi-namespace)
         if runtime == "wee" and matches:
@@ -5066,7 +5421,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if has_multi_ns:
                 # Don't use substring matching when multi-namespace models are present
                 matches = single_ns if single_ns else []
-        
+
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -5112,13 +5467,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         if prompt_mode != "restricted":
             return prompt_mode
-        
+
         # Check environment variables (set by scheduler executor for elevated/sandboxed modes)
         if os.environ.get("WEE_ELEVATED", "").lower() in ("true", "1"):
             return "elevated"
         if os.environ.get("WEE_SANDBOXED", "").lower() in ("true", "1"):
             return "sandboxed"
-        
+
         perms = (
             session_data.get("permissions") or {}
         )  # Handle None from session template
@@ -5994,12 +6349,14 @@ Example skill structure:
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
 
+⚠️ IMPORTANT: NEVER guess or construct image URLs from memory. You MUST call WebFetch (or an equivalent browse tool) to retrieve the page and extract an actual src URL before using Option A. If you cannot confirm the URL returns a valid image (e.g. WebFetch is unavailable or the fetch failed), do NOT include an image at all — a missing image is always better than a broken link. Constructing plausible-looking URLs without fetching them is not acceptable.
+
 How to get images:
-1. Use WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp.
+1. Call WebFetch on a relevant page (Wikipedia, the official product site, Wikimedia Commons) to locate a direct image URL ending in .jpg, .png, .gif, or .webp. You MUST perform this fetch — do not skip it.
    Example: WebFetch("https://en.wikipedia.org/wiki/Snort_(software)") then read the page to extract a real image src URL.
 2. Return the image using one of these methods:
 
-   Option A — Direct external URL (simplest, use when URL is publicly accessible):
+   Option A — Direct external URL (only use after WebFetch confirms the URL is real and accessible):
    ![Description of image](https://actual-direct-image-url.jpg)
 
    Option B — Download locally for reliability (use when image may be behind a CDN or require headers):
@@ -8788,6 +9145,8 @@ User Request:
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
         context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
+        # Issue #113: Inject anti-hallucination rules and SSH sanitization guidance.
+        context_prompt = context_prompt + _wee_anti_hallucination_prompt()
 
         # -- Streaming infrastructure --
         stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
@@ -8909,11 +9268,43 @@ User Request:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_agent",
+                    "description": (
+                        "Delegate a task to a specialized sub-agent. "
+                        "Use mode='background' for long-running tasks (returns task ID). "
+                        "Use mode='quick' to wait for the result inline."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent": {
+                                "type": "string",
+                                "description": "Agent name (e.g. orchestrator, research, devops, wee-dev)",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "The task or question to send to the agent",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["quick", "background"],
+                                "description": "quick=wait for result, background=dispatch and return task ID",
+                            },
+                        },
+                        "required": ["agent", "prompt"],
+                    },
+                },
+            },
         ]
 
         collected_output = []
         _tool_call_counter = 0
+        _last_tool_names: set = set()  # Issue #343: track names of tools called in last round
         MAX_TOOL_ROUNDS = 10
+        WEE_TOOL_OUTPUT_CAP = 8_000  # Issue #336: cap tool output fed back to model
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
@@ -9018,6 +9409,21 @@ User Request:
 
                 # No tool calls — we have the final answer
                 if not tool_calls_acc:
+                    # Issue #343: When call_agent was the last tool and model returns
+                    # empty synthesis, surface the task dispatch result as confirmation.
+                    if not content_text.strip() and "call_agent" in _last_tool_names:
+                        _tool_msgs = [
+                            m["content"] for m in messages if m.get("role") == "tool"
+                        ]
+                        if _tool_msgs:
+                            content_text = _tool_msgs[-1]
+                            print(
+                                "[Wee Native] Empty synthesis after call_agent — "
+                                "surfacing task dispatch result",
+                                file=sys.stderr,
+                            )
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": content_text})
                     collected_output.append(content_text)
                     messages.append({"role": "assistant", "content": content_text})
                     break
@@ -9092,13 +9498,20 @@ User Request:
                         stream_buffer.push("tool_call", tc_done_event)
 
                     # Append tool result to conversation for next round
+                    # Issue #336: cap output to prevent model context overflow
+                    _raw = tool_result or "No output"
+                    if len(_raw) > WEE_TOOL_OUTPUT_CAP:
+                        _raw = _raw[:WEE_TOOL_OUTPUT_CAP] + "\n[...output truncated at " + str(WEE_TOOL_OUTPUT_CAP) + " chars]"
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tc_id,
-                            "content": tool_result or "No output",
+                            "content": _raw,
                         }
                     )
+
+                # Issue #343: record which tools were called in this round
+                _last_tool_names = {tc["function"]["name"] for tc in assistant_tool_calls}
 
             else:
                 # All MAX_TOOL_ROUNDS had tool calls with no final text
@@ -9287,6 +9700,12 @@ User Request:
             '  Call: python tool with {"code": "your python code here"}\n'
             "  Use for: data processing, calculations, scripting, file parsing\n"
             "\n"
+            "**search** -- Query SearXNG for web search results.\n"
+            '  Call: search tool with {"q": "your query", "count": 5, "format": "text"}\n'
+            "  Use for: finding information online, web searches, research\n"
+            "  Parameters: q (required, search query), count (optional, 1-20, default 5), format (optional, 'json' or 'text')\n"
+            "  Env: WEE_SEARXNG_URL (default: http://localhost:8888)\n"
+            "\n"
             "CRITICAL RULES:\n"
             "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
             "2. For delegating work to other agents: use call_agent\n"
@@ -9359,6 +9778,62 @@ User Request:
         )
         tracker.context_window = int(usage.get("context_window", context_window) or 0)
         return tracker
+
+    def _wee_fetch_openrouter_pricing(self):
+        """Fetch and cache OpenRouter model pricing."""
+        if hasattr(self, '_openrouter_pricing_cache'):
+            return self._openrouter_pricing_cache
+
+        try:
+            import urllib.request
+            import json
+
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                try:
+                    import keyring
+                    api_key = keyring.get_password("openrouter", "api_key")
+                except:
+                    pass
+
+            if not api_key:
+                self._openrouter_pricing_cache = {}
+                return {}
+
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": "Bearer " + api_key},
+            )
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+
+            pricing = {}
+            for model in data.get("data", []):
+                model_id = model.get("id", "")
+                pricing[model_id] = {
+                    "prompt": float(model.get("pricing", {}).get("prompt", 0) or 0),
+                    "completion": float(model.get("pricing", {}).get("completion", 0) or 0),
+                }
+
+            self._openrouter_pricing_cache = pricing
+            return pricing
+        except Exception:
+            self._openrouter_pricing_cache = {}
+            return {}
+
+    def _wee_calculate_openrouter_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int):
+        """Calculate estimated cost for OpenRouter API call."""
+        pricing_cache = self._wee_fetch_openrouter_pricing()
+
+        if model_id not in pricing_cache:
+            return None
+
+        p = pricing_cache[model_id]
+        if p["prompt"] == 0 and p["completion"] == 0:
+            return None
+
+        cost = (prompt_tokens * p["prompt"] + completion_tokens * p["completion"]) / 1000
+        return f"${cost:.6f}"
 
     def _wee_build_meta(
         self,
@@ -9433,6 +9908,14 @@ User Request:
             meta["cost_label"] = "local"
         elif "openrouter" in api_base_lower and ":free" in (model or "").lower():
             meta["cost_label"] = "free"
+        elif "openrouter" in api_base_lower and last_usage:
+            # Calculate OpenRouter cost for paid models
+            prompt_tokens = int(last_usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(last_usage.get("completion_tokens", 0) or 0)
+            if prompt_tokens > 0 or completion_tokens > 0:
+                cost = self._wee_calculate_openrouter_cost(model, prompt_tokens, completion_tokens)
+                if cost:
+                    meta["cost_label"] = cost
 
         return usage_state, meta
 
@@ -9637,6 +10120,7 @@ User Request:
                 command = func_args.get("command", "")
                 if not command:
                     return "Error: No command provided"
+                command = _wee_sanitize_bash_command(command)
                 return self._execute_bash_command(command, agent)
             elif func_name == "python":
                 code = func_args.get("code", "")
@@ -9660,12 +10144,100 @@ User Request:
                     else:
                         return f"✗ Failed with exit code: {result.returncode}"
                 return output.strip()
+            elif func_name == "call_agent":
+                # Issue #343: Delegate to sub-agent via orchestrator API
+                return self._wee_call_agent(func_args)
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: bash, python"
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python, call_agent"
         except subprocess.TimeoutExpired:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+
+    def _wee_call_agent(self, func_args: dict) -> str:
+        # Issue #343: Handle call_agent tool calls from the wee agentic loop.
+        # Dispatches to the Wee Orchestrator background-tasks API (mode=background)
+        # or query API (mode=quick).  Uses environment variables for API URL/token,
+        # falling back to the same defaults as wee_runtime._call_agent_handler.
+        import ssl
+        import urllib.error
+        import urllib.request
+        import json as _json
+
+        agent = func_args.get("agent", "").strip()
+        prompt = func_args.get("prompt", "").strip()
+        mode = func_args.get("mode", "background").strip().lower()
+
+        if not agent:
+            return "Error: call_agent requires 'agent' parameter"
+        if not prompt:
+            return "Error: call_agent requires 'prompt' parameter"
+        if mode not in ("quick", "background"):
+            mode = "background"
+
+        if "WEE_ORCHESTRATOR_API" in os.environ:
+            api_url = os.environ["WEE_ORCHESTRATOR_API"]
+        else:
+            host = os.environ.get("WEE_ORCHESTRATOR_HOST", "127.0.0.1")
+            port = os.environ.get("WEE_ORCHESTRATOR_PORT", "8001")
+            protocol = "http" if host in ("127.0.0.1", "localhost") else "https"
+            api_url = f"{protocol}://{host}:{port}"
+
+        token = os.environ.get(
+            "WEE_ORCHESTRATOR_TOKEN",
+            "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU",
+        )
+
+        agent_cfg = self.AGENTS.get(agent, {})
+        runtime = agent_cfg.get("primary_runtime", "copilot")
+        model = agent_cfg.get("primary_model", "claude-haiku-4.5")
+
+        if mode == "background":
+            endpoint = "/api/v1/background-tasks"
+            http_timeout = 10
+            task_data = {
+                "prompt": prompt, "agent": agent,
+                "runtime": runtime, "model": model, "timeout": 1800,
+            }
+        else:
+            endpoint = "/api/v1/query"
+            http_timeout = 120
+            task_data = {
+                "prompt": prompt, "agent": agent,
+                "runtime": runtime, "model": model, "timeout": 90,
+            }
+
+        url = f"{api_url}{endpoint}"
+        req = urllib.request.Request(url, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {token}")
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            with urllib.request.urlopen(
+                req, data=_json.dumps(task_data).encode(),
+                context=ctx, timeout=http_timeout,
+            ) as response:
+                result = _json.loads(response.read().decode())
+                if mode == "background":
+                    task_id = result.get("id") or result.get("task_id", "unknown")
+                    return (
+                        f"Task dispatched to {agent} agent.\n"
+                        f"Task ID: {task_id}\n"
+                        f"Check status: /background status {task_id}"
+                    )
+                else:
+                    resp_text = result.get("response") or result.get("result") or str(result)
+                    return f"Response from {agent}:\n{resp_text}"
+        except urllib.error.HTTPError as e:
+            return f"Error: call_agent HTTP {e.code} — {e.reason}"
+        except urllib.error.URLError as e:
+            return f"Error: call_agent network error — {str(e)[:80]}"
+        except Exception as e:
+            return f"Error: call_agent failed — {str(e)[:100]}"
 
     def _get_cursor_session_id(self, n8n_session_id: str) -> Optional[str]:
         """Return the stored cursor session flag for this n8n session, or None."""
@@ -12732,8 +13304,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
 
         try:
-            import shlex
-            argv = shlex.split(command, posix=True)
+            from scheduler.executor import _split_command_args
+            argv = _split_command_args(command)
             result = _sp.run(
                 argv,
                 capture_output=True,
@@ -12773,7 +13345,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             sched = _get_scheduler()
             task_rec = bg_task_mgr.get_task(task_id)
             success = task_rec and task_rec.get("status") == "completed"
-            sched._save_result(
+            sched.save_result(
                 job_id,
                 job_name,
                 success=success,
@@ -12781,7 +13353,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 error=(task_rec or {}).get("error", ""),
             )
             status_label = "succeeded" if success else "failed"
-            sched._log_job(job_id, f"Run Now (command mode) {status_label}")
+            sched._log(job_id, f"Run Now (command mode) {status_label}")
         except Exception as exc:
             logger.warning(
                 f"[Command Mode] Could not save scheduler result for {job_id}: {exc}"
@@ -16498,6 +17070,227 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             raise HTTPException(status_code=500, detail=f"Reload failed: {msg}")
 
+
+
+    # --- Per-agent Bot Token Management API ---
+
+    _VALID_BOT_CHANNELS = frozenset({"telegram", "webex"})
+
+    @app.get("/api/v1/agents/{agent_name}/bots/{channel}/token-status")
+    async def get_agent_bot_token_status(
+        agent_name: str, channel: str, request: Request
+    ):
+        """Return configured/not-configured status for an agent bot token.
+
+        Never returns the plaintext token value.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        try:
+            data = json.loads(_agents_json_path.read_text())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        agents = data.get("agents", [])
+        agent = next((a for a in agents if a.get("name") == agent_name), None)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        bots = agent.get("bots") or {}
+        ch_cfg = bots.get(channel) or {}
+        secret_name = ch_cfg.get("token_secret") or ""
+        configured = bool(secret_name)
+        return {
+            "agent": agent_name,
+            "channel": channel,
+            "configured": configured,
+            "secret_name": secret_name if configured else None,
+            "allowed_users": ch_cfg.get("allowed_users") or [],
+        }
+
+    @app.put("/api/v1/agents/{agent_name}/bots/{channel}/token")
+    async def set_agent_bot_token(
+        agent_name: str, channel: str, request: Request
+    ):
+        """Store a bot token securely and update agents.json with the secret reference.
+
+        Body: {"token": "<bot_token>", "allowed_users": ["123456"]}
+        The token value is never returned or logged.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        body = await request.json()
+        token_value = body.get("token", "").strip()
+        allowed_users = body.get("allowed_users", None)
+        if not token_value:
+            raise HTTPException(status_code=400, detail="'token' is required")
+
+        secret_name = f"wee.agent.{agent_name}.{channel}.bot_token"
+
+        # Store the token securely via secret_tool
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            _SECRET_TOOL_PATH,
+            "set",
+            "--name",
+            secret_name,
+            "--value-stdin",
+            "--backend",
+            "file",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate(input=f"{token_value}\n".encode())
+        if proc.returncode != 0:
+            detail = stdout.decode().strip() or stderr.decode().strip() or "secret-tool set failed"
+            try:
+                err = json.loads(detail)
+                detail = err.get("message", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=detail)
+
+        # Update agents.json to reference the secret name
+        try:
+            data = json.loads(_agents_json_path.read_text())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        agents = data.get("agents", [])
+        agent_idx = next(
+            (i for i, a in enumerate(agents) if a.get("name") == agent_name), None
+        )
+        if agent_idx is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent = agents[agent_idx]
+        if not isinstance(agent.get("bots"), dict):
+            agent["bots"] = {}
+        if not isinstance(agent["bots"].get(channel), dict):
+            agent["bots"][channel] = {}
+        agent["bots"][channel]["token_secret"] = secret_name
+        if allowed_users is not None:
+            agent["bots"][channel]["allowed_users"] = [str(u) for u in allowed_users]
+
+        agents[agent_idx] = agent
+        data["agents"] = agents
+
+        backup = _agents_json_path.with_suffix(".json.bak")
+        if _agents_json_path.exists():
+            shutil.copy2(str(_agents_json_path), str(backup))
+        _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        print(
+            f"[API] Bot token set for agent '{agent_name}' channel '{channel}'"
+            f" by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
+        ok, msg = session_mgr.reload_agents_from_disk()
+        if ok:
+            print(f"[API] Auto-reloaded agents after bot token update — {msg}", file=sys.stderr)
+        return {
+            "status": "configured",
+            "agent": agent_name,
+            "channel": channel,
+            "secret_name": secret_name,
+            "reloaded": ok,
+        }
+
+    @app.delete("/api/v1/agents/{agent_name}/bots/{channel}/token")
+    async def delete_agent_bot_token(
+        agent_name: str, channel: str, request: Request
+    ):
+        """Remove a bot token: deletes the secret and clears the agents.json bots entry."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        try:
+            data = json.loads(_agents_json_path.read_text())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="agents.json not found")
+        agents = data.get("agents", [])
+        agent_idx = next(
+            (i for i, a in enumerate(agents) if a.get("name") == agent_name), None
+        )
+        if agent_idx is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent = agents[agent_idx]
+        bots = agent.get("bots") or {}
+        ch_cfg = bots.get(channel) or {}
+        secret_name = ch_cfg.get("token_secret") or ""
+
+        # Delete from secret store (best-effort)
+        if secret_name:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    _SECRET_TOOL_PATH,
+                    "delete",
+                    "--name",
+                    secret_name,
+                    "--backend",
+                    "file",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+            except Exception as exc:
+                print(
+                    f"[API] Warning: failed to delete secret '{secret_name}': {exc}",
+                    file=sys.stderr,
+                )
+
+        # Remove the channel block from agents.json
+        if channel in bots:
+            del bots[channel]
+        if not bots:
+            agent.pop("bots", None)
+        else:
+            agent["bots"] = bots
+        agents[agent_idx] = agent
+        data["agents"] = agents
+
+        backup = _agents_json_path.with_suffix(".json.bak")
+        if _agents_json_path.exists():
+            shutil.copy2(str(_agents_json_path), str(backup))
+        _agents_json_path.write_text(json.dumps(data, indent=2) + "\n")
+        print(
+            f"[API] Bot token removed for agent '{agent_name}' channel '{channel}'"
+            f" by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
+        ok, _ = session_mgr.reload_agents_from_disk()
+        return {
+            "status": "removed",
+            "agent": agent_name,
+            "channel": channel,
+            "reloaded": ok,
+        }
+
     @app.get("/api/v1/logs")
     async def get_logs(
         request: Request,
@@ -17078,31 +17871,31 @@ def main():
 Examples:
   # Execute a prompt with default settings
   %(prog)s "What is the status of the cluster?"
-  
+
   # Set agent via CLI
   %(prog)s --agent devops "Check server status"
-  
+
   # Set model and runtime via CLI
   %(prog)s --runtime gemini --model gemini-1.5-pro "Analyze this code"
-  
+
   # Use custom configuration file
   %(prog)s --config my-agents.json "What can you do?"
-  
+
   # List available agents
   %(prog)s --list-agents
-  
+
   # List available agents with custom config
   %(prog)s --list-agents --config my-agents.json
-  
+
   # List available models for current runtime
   %(prog)s --list-models
-  
+
   # List available runtimes
   %(prog)s --list-runtimes
-  
+
   # Combine multiple options
   %(prog)s --agent family --runtime claude --model sonnet "Find recipes"
-  
+
   # Backwards compatible: positional arguments
   %(prog)s "What's the weather?" my_session my-config.json
 """,
