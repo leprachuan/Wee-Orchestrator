@@ -1484,17 +1484,26 @@ function looksLikeCodexTransportFrames(text) {
   );
 }
 
+// Strip [STATUS_UPDATE: ...] progress markers (F004) so they never render
+// inline alongside assistant prose in the WebUI transcript.
+const STATUS_UPDATE_RE = /\s*\[STATUS_UPDATE[:\s]*[^\]]*\]\s*/g;
+
 function normalizeCodexStreamText(text) {
   const raw = String(text || '');
   if (!raw.trim()) return '';
-  if (!looksLikeCodexTransportFrames(raw)) return raw;
+  if (!looksLikeCodexTransportFrames(raw)) {
+    return raw.replace(STATUS_UPDATE_RE, '\n\n');
+  }
 
+  // Each entry tracks its text plus whether it came from an agent_message
+  // item, so consecutive agent_message segments get a paragraph break
+  // instead of being glued together mid-sentence.
   const out = [];
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (!trimmed.startsWith('{')) {
-      out.push(line);
+      out.push({ text: line, isAgentMessage: false });
       continue;
     }
     try {
@@ -1505,7 +1514,8 @@ function normalizeCodexStreamText(text) {
         evt.item.type === 'agent_message' &&
         typeof evt.item.text === 'string'
       ) {
-        if (evt.item.text) out.push(evt.item.text);
+        const cleaned = evt.item.text.replace(STATUS_UPDATE_RE, '\n\n').trim();
+        if (cleaned) out.push({ text: cleaned, isAgentMessage: true });
         continue;
       }
       if (
@@ -1518,12 +1528,24 @@ function normalizeCodexStreamText(text) {
         continue;
       }
     } catch {
-      out.push(line);
+      out.push({ text: line, isAgentMessage: false });
       continue;
     }
-    out.push(line);
+    out.push({ text: line, isAgentMessage: false });
   }
-  return out.join('\n');
+
+  let result = '';
+  let prev = null;
+  for (const entry of out) {
+    if (result) {
+      // Paragraph break between two agent_message segments; single
+      // newline otherwise.
+      result += prev && prev.isAgentMessage && entry.isAgentMessage ? '\n\n' : '\n';
+    }
+    result += entry.text;
+    prev = entry;
+  }
+  return result;
 }
 
 function detectToolCallLine(line) {
