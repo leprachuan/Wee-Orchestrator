@@ -246,3 +246,63 @@ struct ExecuteSessionResponse: Codable {
         case model
     }
 }
+
+// MARK: - Telegram/WebEx Pairing Auth
+
+/// Channels supported by `/api/v1/auth/request-pairing`, mirroring the
+/// WebUI's auth channel picker.
+enum AuthChannel: String, Codable, CaseIterable, Identifiable {
+    case telegram
+    case webex
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .telegram: return "Telegram"
+        case .webex: return "WebEx"
+        }
+    }
+}
+
+/// Body for `POST /api/v1/auth/request-pairing`.
+struct PairingRequestBody: Codable {
+    let identity: String
+    let channel: String
+}
+
+struct PairingRequestResponse: Codable {
+    let message: String
+    let expiresIn: Int
+    let identityResolved: String?
+
+    enum CodingKeys: String, CodingKey {
+        case message
+        case expiresIn = "expires_in"
+        case identityResolved = "identity_resolved"
+    }
+}
+
+/// Body for `POST /api/v1/auth/verify-pairing`.
+struct PairingVerificationBody: Codable {
+    let code: String
+    let identity: String
+}
+
+struct PairingVerificationResponse: Codable {
+    let token: String
+    let expiresIn: Int
+    let absoluteExpiresIn: Int
+    let identity: String
+    let channel: String
+    let username: String?
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case expiresIn = "expires_in"
+        case absoluteExpiresIn = "absolute_expires_in"
+        case identity
+        case channel
+        case username
+    }
+}

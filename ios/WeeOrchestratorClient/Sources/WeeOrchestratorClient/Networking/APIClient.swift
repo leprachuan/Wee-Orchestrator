@@ -1,5 +1,12 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted by `APIClient` whenever a request receives a `401` response,
+    /// so `AuthStore` can clear the stored session and return to the login
+    /// flow (mirrors the WebUI's `apiRequest` 401 handling).
+    static let weeUnauthorized = Notification.Name("WeeOrchestratorUnauthorized")
+}
+
 enum APIError: LocalizedError {
     case invalidURL
     case invalidResponse
@@ -56,6 +63,9 @@ final class APIClient: NSObject {
         }
         guard (200..<300).contains(http.statusCode) else {
             let message = String(data: data, encoding: .utf8)
+            if http.statusCode == 401 {
+                NotificationCenter.default.post(name: .weeUnauthorized, object: nil)
+            }
             throw APIError.http(status: http.statusCode, message: message)
         }
         do {
@@ -125,7 +135,37 @@ final class APIClient: NSObject {
         let request = try makeRequest(path: "/api/v1/sessions/\(sessionId)/execute", method: "POST", body: encoded)
         return try await send(request)
     }
+
+    // MARK: - Auth (Telegram/WebEx pairing)
+
+    /// Requests a one-time pairing code be sent to the user via the given
+    /// channel (e.g. their Telegram DM), mirroring the WebUI's
+    /// "Send Pairing Code" step. No bearer token is required for this call.
+    func requestPairing(identity: String, channel: String) async throws -> PairingRequestResponse {
+        let body = PairingRequestBody(identity: identity, channel: channel)
+        let encoded = try JSONEncoder().encode(body)
+        let request = try makeRequest(path: "/api/v1/auth/request-pairing", method: "POST", body: encoded)
+        return try await send(request)
+    }
+
+    /// Exchanges a pairing code for a session bearer token, mirroring the
+    /// WebUI's "Verify" step. No bearer token is required for this call.
+    func verifyPairing(code: String, identity: String) async throws -> PairingVerificationResponse {
+        let body = PairingVerificationBody(code: code, identity: identity)
+        let encoded = try JSONEncoder().encode(body)
+        let request = try makeRequest(path: "/api/v1/auth/verify-pairing", method: "POST", body: encoded)
+        return try await send(request)
+    }
 }
+
+/// Network operations needed by `AuthStore`, abstracted so tests can supply
+/// a fake implementation without hitting the network.
+protocol AuthAPI {
+    func requestPairing(identity: String, channel: String) async throws -> PairingRequestResponse
+    func verifyPairing(code: String, identity: String) async throws -> PairingVerificationResponse
+}
+
+extension APIClient: AuthAPI {}
 
 extension APIClient: URLSessionDelegate {
     func urlSession(

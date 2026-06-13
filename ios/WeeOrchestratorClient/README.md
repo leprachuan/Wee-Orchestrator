@@ -20,9 +20,18 @@ connection configuration.
 - **Agents** — list of configured agents with runtime/model.
 - **Tasks** — background task list, detail view with recent output, and a
   form to create new background tasks (`POST /api/v1/background-tasks`).
+- **Sign in (Telegram/WebEx pairing)** — the same pairing-code login flow as
+  the WebUI: enter your Telegram username/ID (or WebEx identity), receive a
+  one-time code via that channel, and verify it to obtain a session bearer
+  token. The token and identity metadata are stored securely in the iOS
+  Keychain and used automatically for all `/api/v1/*` requests, including
+  send/background-task calls. The login screen shows pending/expired/failed
+  states, and an "Advanced: Manual Token Entry" section remains available as
+  a fallback for pre-issued tokens.
 - **Settings** — configurable backend base URL, bearer token (stored in the
-  Keychain), a "use mock data" toggle for offline development, and an
-  option to trust self-signed TLS certificates for local/dev backends.
+  Keychain), a "use mock data" toggle for offline development, an
+  option to trust self-signed TLS certificates for local/dev backends, and
+  an Account section showing the signed-in identity with a Sign Out action.
 - **iPad/iPhone layouts** — `NavigationSplitView` sidebar on iPad (regular
   width), tab bar on iPhone (compact width).
 - **Mock/offline mode** — enabled by default so the app is browsable
@@ -42,10 +51,12 @@ ios/WeeOrchestratorClient/
 │   │   ├── ChatStore.swift       # Chat session/transcript/agent state
 │   │   ├── SettingsStore.swift  # Base URL / token / mock toggle
 │   │   └── KeychainHelper.swift # Bearer token storage
+│   │   └── AuthStore.swift       # Telegram/WebEx pairing login state
 │   ├── Theme/Theme.swift         # Colors/components matching the WebUI theme
 │   ├── Mock/MockData.swift       # Sample data for offline mode
 │   └── Views/
 │       ├── RootView.swift
+│       ├── LoginView.swift       # Telegram/WebEx pairing login flow
 │       ├── ChatView.swift
 │       ├── DashboardView.swift
 │       ├── AgentsView.swift
@@ -54,7 +65,8 @@ ios/WeeOrchestratorClient/
 │       ├── NewTaskView.swift
 │       └── SettingsView.swift
 └── Tests/WeeOrchestratorClientTests/
-    └── ChatStoreTests.swift      # Chat session/agent/new-chat regression tests
+    ├── ChatStoreTests.swift      # Chat session/agent/new-chat regression tests
+    └── AuthStoreTests.swift      # Pairing login flow / token storage regression tests
 ```
 
 ## Building locally
@@ -84,19 +96,43 @@ Requires Xcode 15+ (iOS 17 SDK) on macOS.
    backend uses HTTP or a self-signed certificate during development).
 5. Build and run on an iPhone or iPad simulator.
 
+## Signing in
+
+On first launch (with "Use mock data" off), the app shows a **Sign in**
+screen:
+
+1. Choose **Telegram** or **WebEx** and enter your username/ID. (For
+   Telegram, send any message to the bot first if the app reports the
+   username isn't recognized.)
+2. Tap **Send Pairing Code** — a one-time code is delivered via that
+   channel.
+3. Enter the code and tap **Verify**. The returned session token is stored
+   in the Keychain and used for all subsequent `/api/v1/*` requests.
+
+If the session token expires, or any request returns `401`, the app
+clears the stored token and returns to this screen with an "expired"
+message. The **Account** section in Settings shows the signed-in identity
+and channel, with a **Sign Out** action.
+
+The **"Advanced: Manual Token Entry"** section on the sign-in screen (and
+the Base URL / Bearer Token fields in Settings) remain available as a
+fallback for pre-issued tokens (e.g. a `shared_<key>` value), bypassing the
+pairing flow entirely.
+
 ## Configuring the backend connection
 
 Open the **Settings** tab/section in the app:
 
 - **Base URL** — e.g. `https://192.168.1.100:8000` (the dev host's API).
 - **Bearer Token** — an API token accepted by `/api/v1/*` endpoints
-  (e.g. a `shared_<key>` or `session_<token>` value). Stored in the iOS
-  Keychain, not `UserDefaults`.
+  (e.g. a `shared_<key>` or `session_<token>` value, the latter normally
+  obtained via the Sign in flow above). Stored in the iOS Keychain, not
+  `UserDefaults`.
 - **Allow self-signed certificates** — enable for dev backends using
   self-signed TLS certs (mirrors the `curl -k` pattern used elsewhere in
   this project). Leave disabled for production backends with valid certs.
-- **Use mock data** — on by default. Turn off once Base URL and Bearer
-  Token are set, then tap **Test Connection** to verify
+- **Use mock data** — on by default. Turn off once you've signed in (or
+  set a Bearer Token), then tap **Test Connection** to verify
   `GET /api/v1/health` succeeds.
 
 ## API endpoints used
@@ -109,10 +145,12 @@ Open the **Settings** tab/section in the app:
 | List background tasks | `GET /api/v1/background-tasks` |
 | Background task detail | `GET /api/v1/background-tasks/{task_id}` |
 | Create background task | `POST /api/v1/background-tasks` |
+| Request pairing code | `POST /api/v1/auth/request-pairing` |
+| Verify pairing code | `POST /api/v1/auth/verify-pairing` |
 
 All authenticated requests send `Authorization: Bearer <token>` and
 `X-Auth-Channel: ios` headers, matching the auth scheme implemented in
-`agent_manager.py`.
+`agent_manager.py`. The pairing endpoints do not require a prior token.
 
 ## Validation performed
 
@@ -131,5 +169,3 @@ All authenticated requests send `Authorization: Bearer <token>` and
 - Chat/session UI (`/api/v1/sessions/*`, streaming).
 - Scheduler UI (`/api/v1/scheduler/*`).
 - Notifications, secrets manager, theme picker parity with the WebUI.
-- Pairing-code login flow (`/api/v1/auth/request-pairing` /
-  `verify-pairing`) instead of manual token entry.

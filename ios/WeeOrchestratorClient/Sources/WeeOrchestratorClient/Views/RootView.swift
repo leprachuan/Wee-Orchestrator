@@ -7,6 +7,8 @@ import SwiftUI
 struct RootView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var settings: SettingsStore
+    @EnvironmentObject private var authStore: AuthStore
 
     enum Section: String, CaseIterable, Identifiable {
         case chat = "Chat"
@@ -30,31 +32,48 @@ struct RootView: View {
 
     @State private var selection: Section? = .chat
 
+    /// Mock mode lets the app be browsed fully offline without signing in,
+    /// matching the existing "use mock data" behavior. Otherwise the
+    /// Telegram/WebEx pairing login (or a manually-entered token) is
+    /// required before the main UI is shown.
+    private var requiresLogin: Bool {
+        !settings.useMockData && authStore.state != .authenticated
+    }
+
     var body: some View {
         Group {
-            if horizontalSizeClass == .regular {
-                NavigationSplitView {
-                    sidebar
-                } detail: {
-                    detail(for: selection ?? .chat)
-                }
+            if requiresLogin {
+                LoginView()
             } else {
-                TabView(selection: Binding(get: { selection ?? .chat }, set: { selection = $0 })) {
-                    ForEach(Section.allCases) { section in
-                        NavigationStack {
-                            detail(for: section)
-                        }
-                        .tabItem {
-                            Label(section.rawValue, systemImage: section.icon)
-                        }
-                        .tag(section)
-                    }
-                }
-                .tint(WeeTheme.accent)
+                content
             }
         }
         .task {
             await appState.loadAll()
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if horizontalSizeClass == .regular {
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                detail(for: selection ?? .chat)
+            }
+        } else {
+            TabView(selection: Binding(get: { selection ?? .chat }, set: { selection = $0 })) {
+                ForEach(Section.allCases) { section in
+                    NavigationStack {
+                        detail(for: section)
+                    }
+                    .tabItem {
+                        Label(section.rawValue, systemImage: section.icon)
+                    }
+                    .tag(section)
+                }
+            }
+            .tint(WeeTheme.accent)
         }
     }
 

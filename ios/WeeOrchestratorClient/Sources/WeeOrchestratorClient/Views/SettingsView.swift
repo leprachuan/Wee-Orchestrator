@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var settings: SettingsStore
+    @EnvironmentObject private var authStore: AuthStore
 
     @State private var isTesting = false
     @State private var testResult: String?
@@ -10,6 +11,20 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            if authStore.state == .authenticated {
+                Section("Account") {
+                    if let identity = authStore.storedIdentity {
+                        LabeledContent("Signed in as", value: authStore.storedUsername.map { "@\($0)" } ?? identity)
+                    }
+                    if let channel = authStore.storedChannel {
+                        LabeledContent("Channel", value: channel.capitalized)
+                    }
+                    Button("Sign Out", role: .destructive) {
+                        authStore.logout()
+                    }
+                }
+            }
+
             Section("Backend") {
                 TextField("Base URL", text: $settings.baseURL)
                     .keyboardType(.URL)
@@ -56,7 +71,10 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .scrollContentBackground(.hidden)
         .weeBackground()
-        .onChange(of: settings.baseURL) { _, _ in appState.refreshClient() }
+        .onChange(of: settings.baseURL) { _, _ in
+            appState.refreshClient()
+            authStore.refreshClient()
+        }
         .onChange(of: settings.bearerToken) { _, _ in appState.refreshClient() }
         .onChange(of: settings.allowSelfSignedCertificates) { _, _ in appState.refreshClient() }
         .onChange(of: settings.useMockData) { _, _ in
