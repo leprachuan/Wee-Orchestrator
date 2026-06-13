@@ -3,12 +3,13 @@ import SwiftUI
 /// Top-level navigation. Uses a sidebar on iPad (regular width) and a
 /// tab bar on iPhone (compact width), mirroring the WebUI's sidebar nav
 /// (Chat / Tasks / Scheduler) adapted for this starter's scope
-/// (Dashboard / Agents / Tasks / Settings).
+/// (Chat / Dashboard / Agents / Tasks / Settings).
 struct RootView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var appState: AppState
 
     enum Section: String, CaseIterable, Identifiable {
+        case chat = "Chat"
         case dashboard = "Dashboard"
         case agents = "Agents"
         case tasks = "Tasks"
@@ -18,6 +19,7 @@ struct RootView: View {
 
         var icon: String {
             switch self {
+            case .chat: return "bubble.left.and.bubble.right.fill"
             case .dashboard: return "gauge.with.dots.needle.50percent"
             case .agents: return "person.2.fill"
             case .tasks: return "bolt.fill"
@@ -26,7 +28,7 @@ struct RootView: View {
         }
     }
 
-    @State private var selection: Section? = .dashboard
+    @State private var selection: Section? = .chat
 
     var body: some View {
         Group {
@@ -34,10 +36,10 @@ struct RootView: View {
                 NavigationSplitView {
                     sidebar
                 } detail: {
-                    detail(for: selection ?? .dashboard)
+                    detail(for: selection ?? .chat)
                 }
             } else {
-                TabView(selection: Binding(get: { selection ?? .dashboard }, set: { selection = $0 })) {
+                TabView(selection: Binding(get: { selection ?? .chat }, set: { selection = $0 })) {
                     ForEach(Section.allCases) { section in
                         NavigationStack {
                             detail(for: section)
@@ -68,6 +70,8 @@ struct RootView: View {
     @ViewBuilder
     private func detail(for section: Section) -> some View {
         switch section {
+        case .chat:
+            ChatView()
         case .dashboard:
             DashboardView()
         case .agents:

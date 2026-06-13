@@ -40,3 +40,14 @@ targets:
         # exceptions) before distributing the app.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+
+  WeeOrchestratorClientTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/WeeOrchestratorClientTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.weeorchestrator.client.tests
+    dependencies:
+      - target: WeeOrchestratorClient

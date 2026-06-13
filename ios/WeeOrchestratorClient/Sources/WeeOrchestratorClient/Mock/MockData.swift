@@ -36,6 +36,22 @@ enum MockData {
         BackgroundTaskSummary(taskId: "bg_i9j0k1l2", agent: "wee-dev", runtime: "claude", model: "claude-sonnet-4-6", prompt: "Investigate flaky test in test_issue_251_bg_tasks_rate_limit.py", status: "failed", createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7200)), completedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7000)), error: "Timed out after 900s"),
     ]
 
+    static let chatSessions: [ChatSession] = [
+        ChatSession(sessionId: "chat_a1b2c3d4", title: "Plan iOS chat controls", preview: "Add agent picker, new chat, and session list.", agent: "wee-dev", createdAt: Date().addingTimeInterval(-1800).timeIntervalSince1970, updatedAt: Date().addingTimeInterval(-60).timeIntervalSince1970),
+        ChatSession(sessionId: "chat_e5f6g7h8", title: "Crude oil pricing stats", preview: "Here are the latest crude oil benchmarks…", agent: "research-dev", createdAt: Date().addingTimeInterval(-7200).timeIntervalSince1970, updatedAt: Date().addingTimeInterval(-7000).timeIntervalSince1970),
+        ChatSession(sessionId: "chat_i9j0k1l2", title: nil, preview: "Sure, I can help with that.", agent: "orchestrator", createdAt: Date().addingTimeInterval(-86400).timeIntervalSince1970, updatedAt: Date().addingTimeInterval(-86000).timeIntervalSince1970),
+    ]
+
+    static func chatMessages(for sessionId: String) -> [ChatMessage] {
+        guard let session = chatSessions.first(where: { $0.sessionId == sessionId }) else {
+            return []
+        }
+        return [
+            ChatMessage(role: "user", content: session.title ?? "Hello!", timestamp: session.createdAt ?? Date().timeIntervalSince1970),
+            ChatMessage(role: "assistant", content: session.preview ?? "Mock response — connect a real backend in Settings to chat for real.", timestamp: session.updatedAt ?? Date().timeIntervalSince1970),
+        ]
+    }
+
     static func backgroundTaskDetail(for summary: BackgroundTaskSummary) -> BackgroundTaskDetail {
         BackgroundTaskDetail(
             taskId: summary.taskId,

@@ -4,12 +4,18 @@ A SwiftUI starter client for [Wee Orchestrator](https://github.com/leprachuan/We
 mirroring the visual language of the existing WebUI (dark "Emerald"
 glassmorphism theme) with responsive layouts for iPhone and iPad.
 
-This is an early starter: it covers the API surface needed for health
-checks, agent listing, background task status/creation, and connection
-configuration. It is not a port of the full chat WebUI.
+This is an early starter: it covers the API surface needed for chat,
+health checks, agent listing, background task status/creation, and
+connection configuration.
 
 ## Features
 
+- **Chat** — transcript view backed by `/api/v1/sessions/*` and
+  `/api/v1/history/sessions/*`. The header agent name opens an agent picker
+  that updates the active session's agent (via `/agent set`) or the agent
+  used for the next new session. A "New Chat" action clears the transcript
+  and starts a fresh session on next send. Previous sessions can be browsed
+  and reopened from a sheet.
 - **Dashboard** — backend health, service status (telegram/webex/api/scheduler).
 - **Agents** — list of configured agents with runtime/model.
 - **Tasks** — background task list, detail view with recent output, and a
@@ -27,24 +33,28 @@ configuration. It is not a port of the full chat WebUI.
 ```
 ios/WeeOrchestratorClient/
 ├── project.yml                 # XcodeGen project definition
-└── Sources/WeeOrchestratorClient/
-    ├── WeeOrchestratorApp.swift # App entry point
-    ├── Models/Models.swift      # Codable API response types
-    ├── Networking/APIClient.swift
-    ├── Stores/
-    │   ├── AppState.swift       # Observable app data + mock fallback
-    │   ├── SettingsStore.swift  # Base URL / token / mock toggle
-    │   └── KeychainHelper.swift # Bearer token storage
-    ├── Theme/Theme.swift         # Colors/components matching the WebUI theme
-    ├── Mock/MockData.swift       # Sample data for offline mode
-    └── Views/
-        ├── RootView.swift
-        ├── DashboardView.swift
-        ├── AgentsView.swift
-        ├── BackgroundTasksView.swift
-        ├── BackgroundTaskDetailView.swift
-        ├── NewTaskView.swift
-        └── SettingsView.swift
+├── Sources/WeeOrchestratorClient/
+│   ├── WeeOrchestratorApp.swift # App entry point
+│   ├── Models/Models.swift      # Codable API response types
+│   ├── Networking/APIClient.swift
+│   ├── Stores/
+│   │   ├── AppState.swift       # Observable app data + mock fallback
+│   │   ├── ChatStore.swift       # Chat session/transcript/agent state
+│   │   ├── SettingsStore.swift  # Base URL / token / mock toggle
+│   │   └── KeychainHelper.swift # Bearer token storage
+│   ├── Theme/Theme.swift         # Colors/components matching the WebUI theme
+│   ├── Mock/MockData.swift       # Sample data for offline mode
+│   └── Views/
+│       ├── RootView.swift
+│       ├── ChatView.swift
+│       ├── DashboardView.swift
+│       ├── AgentsView.swift
+│       ├── BackgroundTasksView.swift
+│       ├── BackgroundTaskDetailView.swift
+│       ├── NewTaskView.swift
+│       └── SettingsView.swift
+└── Tests/WeeOrchestratorClientTests/
+    └── ChatStoreTests.swift      # Chat session/agent/new-chat regression tests
 ```
 
 ## Building locally

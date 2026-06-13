@@ -97,6 +97,34 @@ final class APIClient: NSObject {
         let request = try makeRequest(path: "/api/v1/background-tasks", method: "POST", body: encoded)
         return try await send(request)
     }
+
+    // MARK: - Chat
+
+    func fetchChatSessions() async throws -> [ChatSession] {
+        let request = try makeRequest(path: "/api/v1/history/sessions")
+        let response: ChatSessionsResponse = try await send(request)
+        return response.sessions
+    }
+
+    func fetchChatSessionMessages(sessionId: String) async throws -> [ChatMessage] {
+        let request = try makeRequest(path: "/api/v1/history/sessions/\(sessionId)/messages")
+        let response: ChatSessionMessagesResponse = try await send(request)
+        return response.messages
+    }
+
+    func createChatSession(agent: String?, model: String? = nil, runtime: String? = nil) async throws -> CreateChatSessionResponse {
+        let body = CreateChatSessionRequest(sessionId: nil, agent: agent, model: model, runtime: runtime)
+        let encoded = try JSONEncoder().encode(body)
+        let request = try makeRequest(path: "/api/v1/sessions/create", method: "POST", body: encoded)
+        return try await send(request)
+    }
+
+    func executeChatSession(sessionId: String, query: String) async throws -> ExecuteSessionResponse {
+        let body = ExecuteSessionRequest(query: query)
+        let encoded = try JSONEncoder().encode(body)
+        let request = try makeRequest(path: "/api/v1/sessions/\(sessionId)/execute", method: "POST", body: encoded)
+        return try await send(request)
+    }
 }
 
 extension APIClient: URLSessionDelegate {
