@@ -18,8 +18,11 @@ connection configuration.
   and reopened from a sheet.
 - **Dashboard** — backend health, service status (telegram/webex/api/scheduler).
 - **Agents** — list of configured agents with runtime/model.
-- **Tasks** — background task list, detail view with recent output, and a
-  form to create new background tasks (`POST /api/v1/background-tasks`).
+- **Tasks** — background task list, detail view with recent output, a
+  form to create new background tasks (`POST /api/v1/background-tasks`),
+  and a "Scheduled Tasks" section listing scheduler jobs
+  (`GET /api/v1/scheduler/jobs`) with name, agent, schedule, next/last run,
+  and enabled/paused status. Pull-to-refresh reloads both lists.
 - **Sign in (Telegram/WebEx pairing)** — the same pairing-code login flow as
   the WebUI: enter your Telegram username/ID (or WebEx identity), receive a
   one-time code via that channel, and verify it to obtain a session bearer
@@ -145,6 +148,7 @@ Open the **Settings** tab/section in the app:
 | List background tasks | `GET /api/v1/background-tasks` |
 | Background task detail | `GET /api/v1/background-tasks/{task_id}` |
 | Create background task | `POST /api/v1/background-tasks` |
+| List scheduled jobs | `GET /api/v1/scheduler/jobs` |
 | Request pairing code | `POST /api/v1/auth/request-pairing` |
 | Verify pairing code | `POST /api/v1/auth/verify-pairing` |
 
@@ -167,5 +171,6 @@ All authenticated requests send `Authorization: Bearer <token>` and
 ## Next steps (not in scope for this starter)
 
 - Chat/session UI (`/api/v1/sessions/*`, streaming).
-- Scheduler UI (`/api/v1/scheduler/*`).
+- Scheduler management (create/edit/pause/delete jobs via
+  `/api/v1/scheduler/jobs`) — currently read-only (list view).
 - Notifications, secrets manager, theme picker parity with the WebUI.

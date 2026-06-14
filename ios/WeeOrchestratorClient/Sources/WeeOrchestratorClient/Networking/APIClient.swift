@@ -108,6 +108,14 @@ final class APIClient: NSObject {
         return try await send(request)
     }
 
+    // MARK: - Scheduler
+
+    func fetchScheduledJobs() async throws -> [ScheduledJob] {
+        let request = try makeRequest(path: "/api/v1/scheduler/jobs")
+        let response: SchedulerJobsResponse = try await send(request)
+        return response.result
+    }
+
     // MARK: - Chat
 
     func fetchChatSessions() async throws -> [ChatSession] {

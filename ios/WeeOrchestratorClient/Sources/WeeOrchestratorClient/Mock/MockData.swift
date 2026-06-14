@@ -36,6 +36,45 @@ enum MockData {
         BackgroundTaskSummary(taskId: "bg_i9j0k1l2", agent: "wee-dev", runtime: "claude", model: "claude-sonnet-4-6", prompt: "Investigate flaky test in test_issue_251_bg_tasks_rate_limit.py", status: "failed", createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7200)), completedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7000)), error: "Timed out after 900s"),
     ]
 
+    static let scheduledJobs: [ScheduledJob] = [
+        ScheduledJob(
+            id: "job_daily_report",
+            name: "Daily Infrastructure Report",
+            agent: "wee-dev",
+            runtime: "claude",
+            model: "claude-sonnet-4-6",
+            mode: "ai",
+            task: "Generate a daily summary of homelab health and open issues.",
+            schedule: "every day at 9am",
+            cron: "0 9 * * *",
+            recurring: true,
+            enabled: true,
+            notify: true,
+            createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 7)),
+            nextRun: ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600 * 5)),
+            lastRun: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600 * 19)),
+            createdBy: ScheduledJobCreator(identity: "8193231291", channel: "telegram", username: "Foster")
+        ),
+        ScheduledJob(
+            id: "job_ceph_check",
+            name: "Ceph Health Check",
+            agent: "wee-dev",
+            runtime: "claude",
+            model: nil,
+            mode: "command",
+            task: "ceph health",
+            schedule: "every 6 hours",
+            cron: "0 */6 * * *",
+            recurring: true,
+            enabled: false,
+            notify: false,
+            createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 2)),
+            nextRun: nil,
+            lastRun: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600 * 2)),
+            createdBy: nil
+        ),
+    ]
+
     static let chatSessions: [ChatSession] = [
         ChatSession(sessionId: "chat_a1b2c3d4", title: "Plan iOS chat controls", preview: "Add agent picker, new chat, and session list.", agent: "wee-dev", createdAt: Date().addingTimeInterval(-1800).timeIntervalSince1970, updatedAt: Date().addingTimeInterval(-60).timeIntervalSince1970),
         ChatSession(sessionId: "chat_e5f6g7h8", title: "Crude oil pricing stats", preview: "Here are the latest crude oil benchmarks…", agent: "research-dev", createdAt: Date().addingTimeInterval(-7200).timeIntervalSince1970, updatedAt: Date().addingTimeInterval(-7000).timeIntervalSince1970),

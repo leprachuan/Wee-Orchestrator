@@ -118,6 +118,49 @@ struct BackgroundTaskDetail: Codable, Identifiable, Equatable {
     }
 }
 
+// MARK: - Scheduler
+
+/// Who created a scheduled job, as returned in `created_by`.
+struct ScheduledJobCreator: Codable, Equatable {
+    let identity: String?
+    let channel: String?
+    let username: String?
+}
+
+/// A scheduled task, as returned by `/api/v1/scheduler/jobs`.
+struct ScheduledJob: Codable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let agent: String?
+    let runtime: String?
+    let model: String?
+    let mode: String?
+    let task: String?
+    let schedule: String?
+    let cron: String?
+    let recurring: Bool?
+    let enabled: Bool?
+    let notify: Bool?
+    let createdAt: String?
+    let nextRun: String?
+    let lastRun: String?
+    let createdBy: ScheduledJobCreator?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, agent, runtime, model, mode, task, schedule, cron, recurring, enabled, notify
+        case createdAt = "created_at"
+        case nextRun = "next_run"
+        case lastRun = "last_run"
+        case createdBy = "created_by"
+    }
+}
+
+struct SchedulerJobsResponse: Codable {
+    let success: Bool
+    let result: [ScheduledJob]
+    let message: String?
+}
+
 struct CreateBackgroundTaskRequest: Codable {
     let prompt: String
     let agent: String?

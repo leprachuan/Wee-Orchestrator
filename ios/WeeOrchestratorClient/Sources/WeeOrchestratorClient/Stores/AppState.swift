@@ -12,6 +12,7 @@ final class AppState: ObservableObject {
     @Published var agents: [Agent] = []
     @Published var serviceStatus: ServiceStatusResponse?
     @Published var backgroundTasks: [BackgroundTaskSummary] = []
+    @Published var scheduledJobs: [ScheduledJob] = []
 
     @Published var isLoading = false
     @Published var errorMessage: String?
@@ -39,6 +40,7 @@ final class AppState: ObservableObject {
             agents = MockData.agents
             serviceStatus = MockData.serviceStatus
             backgroundTasks = MockData.backgroundTasks
+            scheduledJobs = MockData.scheduledJobs
             return
         }
 
@@ -49,6 +51,14 @@ final class AppState: ObservableObject {
             backgroundTasks = try await client.fetchBackgroundTasks()
         } catch {
             errorMessage = error.localizedDescription
+        }
+
+        // Scheduled jobs are fetched separately: users without scheduler
+        // access get a 403 here, which shouldn't block the rest of the page.
+        do {
+            scheduledJobs = try await client.fetchScheduledJobs()
+        } catch {
+            scheduledJobs = []
         }
     }
 
