@@ -22,7 +22,12 @@ connection configuration.
   form to create new background tasks (`POST /api/v1/background-tasks`),
   and a "Scheduled Tasks" section listing scheduler jobs
   (`GET /api/v1/scheduler/jobs`) with name, agent, schedule, next/last run,
-  and enabled/paused status. Pull-to-refresh reloads both lists.
+  and enabled/paused status. Pull-to-refresh reloads both lists. A `403`
+  from `/api/v1/scheduler/jobs` (user not on the scheduler allowlist) is
+  treated as "no scheduled tasks" with no error shown; any other failure
+  (network error, decoding error, 401, 500, ...) shows an inline
+  "Couldn't load scheduled tasks" message in that section instead of
+  silently looking empty.
 - **Sign in (Telegram/WebEx pairing)** — the same pairing-code login flow as
   the WebUI: enter your Telegram username/ID (or WebEx identity), receive a
   one-time code via that channel, and verify it to obtain a session bearer

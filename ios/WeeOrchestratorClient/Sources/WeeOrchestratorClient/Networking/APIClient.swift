@@ -166,8 +166,20 @@ final class APIClient: NSObject {
     }
 }
 
-/// Network operations needed by `AuthStore`, abstracted so tests can supply
+/// Network operations needed by `AppState`, abstracted so tests can supply
 /// a fake implementation without hitting the network.
+protocol AppStateAPI {
+    func fetchHealth() async throws -> HealthStatus
+    func fetchAgents() async throws -> [Agent]
+    func fetchServiceStatus() async throws -> ServiceStatusResponse
+    func fetchBackgroundTasks() async throws -> [BackgroundTaskSummary]
+    func fetchScheduledJobs() async throws -> [ScheduledJob]
+    func fetchBackgroundTask(taskId: String) async throws -> BackgroundTaskDetail
+    func createBackgroundTask(_ body: CreateBackgroundTaskRequest) async throws -> CreateBackgroundTaskResponse
+}
+
+extension APIClient: AppStateAPI {}
+
 protocol AuthAPI {
     func requestPairing(identity: String, channel: String) async throws -> PairingRequestResponse
     func verifyPairing(code: String, identity: String) async throws -> PairingVerificationResponse

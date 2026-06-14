@@ -13,16 +13,17 @@ final class AppState: ObservableObject {
     @Published var serviceStatus: ServiceStatusResponse?
     @Published var backgroundTasks: [BackgroundTaskSummary] = []
     @Published var scheduledJobs: [ScheduledJob] = []
+    @Published var scheduledJobsErrorMessage: String?
 
     @Published var isLoading = false
     @Published var errorMessage: String?
 
     let settings: SettingsStore
-    private var client: APIClient
+    private var client: AppStateAPI
 
-    init(settings: SettingsStore) {
+    init(settings: SettingsStore, client: AppStateAPI? = nil) {
         self.settings = settings
-        self.client = APIClient(settings: settings)
+        self.client = client ?? APIClient(settings: settings)
     }
 
     /// Rebuilds the API client, e.g. after Settings change.
@@ -54,11 +55,20 @@ final class AppState: ObservableObject {
         }
 
         // Scheduled jobs are fetched separately: users without scheduler
-        // access get a 403 here, which shouldn't block the rest of the page.
+        // access get a 403 here, which is expected and shouldn't block the
+        // rest of the page. Any other failure (network error, decoding
+        // error, 401, 500, ...) is a real problem and is surfaced via
+        // `scheduledJobsErrorMessage` instead of silently looking like
+        // "no scheduled tasks".
         do {
             scheduledJobs = try await client.fetchScheduledJobs()
+            scheduledJobsErrorMessage = nil
+        } catch APIError.http(403, _) {
+            scheduledJobs = []
+            scheduledJobsErrorMessage = nil
         } catch {
             scheduledJobs = []
+            scheduledJobsErrorMessage = error.localizedDescription
         }
     }
 

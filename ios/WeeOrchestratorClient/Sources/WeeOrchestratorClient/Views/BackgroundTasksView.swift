@@ -16,6 +16,11 @@ struct BackgroundTasksView: View {
                         ForEach(appState.scheduledJobs) { job in
                             scheduledJobRow(job)
                         }
+                    } else if let scheduledError = appState.scheduledJobsErrorMessage {
+                        sectionHeader("Scheduled Tasks")
+                        Text("Couldn't load scheduled tasks: \(scheduledError)")
+                            .font(.caption)
+                            .foregroundStyle(WeeTheme.textMuted)
                     }
 
                     if !appState.backgroundTasks.isEmpty {
@@ -30,7 +35,9 @@ struct BackgroundTasksView: View {
                         }
                     }
 
-                    if appState.backgroundTasks.isEmpty && appState.scheduledJobs.isEmpty {
+                    if appState.backgroundTasks.isEmpty
+                        && appState.scheduledJobs.isEmpty
+                        && appState.scheduledJobsErrorMessage == nil {
                         Text("No tasks yet.")
                             .foregroundStyle(WeeTheme.textMuted)
                             .padding(.top, 40)
