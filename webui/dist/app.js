@@ -6752,6 +6752,11 @@ if (document.readyState !== 'loading') {
   const btnEnvSave  = document.getElementById('btn-env-save');
   const btnEnvRestart = document.getElementById('btn-env-restart');
   const envStatus   = document.getElementById('asf-env-status');
+  const kanbanRepoInput = document.getElementById('asf-kanban-repo');
+  const kanbanEffective = document.getElementById('asf-kanban-effective');
+  const btnKanbanLoad = document.getElementById('btn-kanban-settings-load');
+  const btnKanbanSave = document.getElementById('btn-kanban-settings-save');
+  const kanbanStatus = document.getElementById('asf-kanban-status');
 
   function showEnvStatus(msg, isError) {
     if (!envStatus) return;
@@ -6799,6 +6804,49 @@ if (document.readyState !== 'loading') {
   if (btnEnvLoad)    btnEnvLoad.addEventListener('click', loadEnvFile);
   if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
   if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
+
+  function showKanbanSettingsStatus(msg, isError) {
+    if (!kanbanStatus) return;
+    kanbanStatus.textContent = msg;
+    kanbanStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    kanbanStatus.classList.remove('hidden');
+    setTimeout(() => kanbanStatus.classList.add('hidden'), 5000);
+  }
+
+  function renderKanbanSettings(data) {
+    if (kanbanRepoInput) kanbanRepoInput.value = data.github_repo || '';
+    if (kanbanEffective) {
+      const effective = data.effective_repo || 'none';
+      const fallback = data.github_repo ? '' : ' (default from deployment)';
+      kanbanEffective.textContent = `Effective source: ${effective}${fallback}`;
+    }
+  }
+
+  async function loadKanbanSettings() {
+    if (kanbanEffective) kanbanEffective.textContent = 'Loading current source...';
+    try {
+      const data = await apiRequest('GET', '/settings/kanban');
+      renderKanbanSettings(data);
+    } catch (e) {
+      showKanbanSettingsStatus('Failed to load Kanban settings: ' + e.message, true);
+      if (kanbanEffective) kanbanEffective.textContent = 'Effective source unavailable';
+    }
+  }
+
+  async function saveKanbanSettings() {
+    const repo = (kanbanRepoInput?.value || '').trim();
+    try {
+      const data = await apiRequest('PUT', '/settings/kanban', { github_repo: repo });
+      renderKanbanSettings(data);
+      showKanbanSettingsStatus('✓ Kanban source saved', false);
+      loadKanbanBoard(true);
+    } catch (e) {
+      showKanbanSettingsStatus('Failed to save Kanban source: ' + e.message, true);
+    }
+  }
+
+  if (btnKanbanLoad) btnKanbanLoad.addEventListener('click', loadKanbanSettings);
+  if (btnKanbanSave) btnKanbanSave.addEventListener('click', saveKanbanSettings);
 
 
   /* ── Mobile Bot Token Settings ─────────────────────────────────────────── */
@@ -6937,10 +6985,11 @@ if (document.readyState !== 'loading') {
     if (btnRemove)  btnRemove.addEventListener('click',  () => removeBotToken(ch));
   }
 
-  // Patch openSettings to also load bot token status when the panel opens
+  // Patch openSettings to also load settings that live outside agents.json.
   const _wrappedOpenForBots = openSettings;
   openSettings = async function() {
     await _wrappedOpenForBots();
+    await loadKanbanSettings();
     if (ASF.selectedName) await loadBotTokenStatus(ASF.selectedName);
   };
 

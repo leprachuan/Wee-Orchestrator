@@ -16962,6 +16962,105 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # --- .env File Editor API ---
     _env_file_path = Path(SCRIPT_BASE_DIR) / ".env"
 
+    def _read_env_lines() -> list[str]:
+        if not _env_file_path.exists():
+            return []
+        return _env_file_path.read_text().splitlines()
+
+    def _set_env_value(content: str, key: str, value: str) -> str:
+        lines = content.splitlines()
+        updated = False
+        next_lines: list[str] = []
+        for line in lines:
+            if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+                if value:
+                    next_lines.append(f"{key}={value}")
+                updated = True
+            else:
+                next_lines.append(line)
+        if value and not updated:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
+            next_lines.append(f"{key}={value}")
+        return "\n".join(next_lines).rstrip() + ("\n" if next_lines else "")
+
+    def _env_value(key: str) -> str:
+        for line in _read_env_lines():
+            if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+        return os.environ.get(key, "")
+
+    class KanbanSettingsRequest(BaseModel):
+        github_repo: str = ""
+
+    def _validate_repo_slug(value: str) -> str:
+        repo = value.strip()
+        if not repo:
+            return ""
+        if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
+            raise HTTPException(
+                status_code=400,
+                detail="github_repo must be in owner/repo format",
+            )
+        return repo
+
+    @app.get("/api/v1/settings/kanban")
+    async def get_kanban_settings(request: Request):
+        """Return Kanban board source settings."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from kanban import _repo_from_git_origin
+
+        configured = _env_value("KANBAN_GITHUB_REPO")
+        fallback = _repo_from_git_origin() or ""
+        return {
+            "github_repo": configured,
+            "effective_repo": configured or fallback,
+            "fallback_repo": fallback,
+            "path": str(_env_file_path),
+        }
+
+    @app.put("/api/v1/settings/kanban")
+    async def put_kanban_settings(body: KanbanSettingsRequest, request: Request):
+        """Persist Kanban board source settings."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        repo = _validate_repo_slug(body.github_repo)
+        try:
+            content = _env_file_path.read_text() if _env_file_path.exists() else ""
+            if _env_file_path.exists():
+                backup_path = Path(str(_env_file_path) + ".bak")
+                shutil.copy2(_env_file_path, backup_path)
+            _env_file_path.write_text(_set_env_value(content, "KANBAN_GITHUB_REPO", repo))
+            if repo:
+                os.environ["KANBAN_GITHUB_REPO"] = repo
+            else:
+                os.environ.pop("KANBAN_GITHUB_REPO", None)
+            from kanban import _repo_from_git_origin
+
+            fallback = _repo_from_git_origin() or ""
+            return {
+                "saved": True,
+                "github_repo": repo,
+                "effective_repo": repo or fallback,
+                "fallback_repo": fallback,
+                "path": str(_env_file_path),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save Kanban settings: {e}"
+            )
+
     @app.get("/api/v1/settings/env")
     async def get_env_file(request: Request):
         """Return .env file contents for editing."""

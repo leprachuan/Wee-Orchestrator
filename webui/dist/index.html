@@ -777,6 +777,23 @@
           </div>
         </div>
 
+        <!-- Kanban Board Settings -->
+        <div class="asf-section">
+          <div class="asf-section-title">▦ Kanban Board</div>
+          <div class="asf-grid">
+            <div class="asf-field asf-full">
+              <label class="asf-label" for="asf-kanban-repo">GitHub Issues Repository</label>
+              <input id="asf-kanban-repo" type="text" class="glass-input asf-input asf-mono" placeholder="owner/repo" autocomplete="off" />
+              <span id="asf-kanban-effective" class="asf-hint">Loading current source...</span>
+            </div>
+          </div>
+          <div class="asf-env-toolbar" style="margin-top:10px;">
+            <button id="btn-kanban-settings-load" class="btn btn-ghost btn-xs">Load</button>
+            <button id="btn-kanban-settings-save" class="btn btn-primary btn-xs">Save Kanban Source</button>
+          </div>
+          <div id="asf-kanban-status" class="asf-env-status hidden"></div>
+        </div>
+
         <!-- .env File Editor -->
         <div class="asf-section">
           <div class="asf-section-title">🔧 Environment Configuration (.env)</div>

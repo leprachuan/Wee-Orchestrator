@@ -176,3 +176,33 @@ def test_issue367_kanban_api_returns_board(monkeypatch):
     assert payload["kwargs"]["agent"] == "research"
     assert payload["kwargs"]["urgency"] == "urgent"
     assert payload["kwargs"]["source"] == "github"
+
+
+def test_issue367_kanban_settings_persist_repo(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    import agent_manager
+
+    monkeypatch.setenv("API_SHARED_KEY", "test_key_367")
+    monkeypatch.delenv("KANBAN_GITHUB_REPO", raising=False)
+    monkeypatch.setattr(agent_manager, "SCRIPT_BASE_DIR", str(tmp_path))
+
+    client = TestClient(agent_manager.create_api_app(), raise_server_exceptions=False)
+    headers = {"Authorization": "Bearer shared_test_key_367"}
+
+    response = client.put(
+        "/api/v1/settings/kanban",
+        headers=headers,
+        json={"github_repo": "leprachuan/fosterbot-home"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["effective_repo"] == "leprachuan/fosterbot-home"
+    assert (tmp_path / ".env").read_text() == (
+        "KANBAN_GITHUB_REPO=leprachuan/fosterbot-home\n"
+    )
+
+    response = client.get("/api/v1/settings/kanban", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["github_repo"] == "leprachuan/fosterbot-home"
