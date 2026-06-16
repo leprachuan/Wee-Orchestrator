@@ -18,6 +18,15 @@ from typing import Any
 
 
 KANBAN_COLUMNS = ("todo", "in-progress", "ai-active", "pending-review", "done")
+LABEL_PREFIXES = ("status:", "agent:", "due:", "priority:", "urgency:")
+
+
+class KanbanError(RuntimeError):
+    """Raised when a Kanban item operation cannot be completed."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _repo_from_git_origin() -> str | None:
@@ -67,6 +76,258 @@ def _default_repo() -> str | None:
         or os.environ.get("TODO_GITHUB_REPO")
         or _repo_from_git_origin()
     )
+
+
+def _run_gh(args: list[str], timeout: int = 20) -> str:
+    result = subprocess.run(
+        ["gh", *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "gh command failed").strip()
+        raise KanbanError(detail, status_code=502)
+    return result.stdout
+
+
+def _github_issue_number(item_id: str) -> int:
+    if not item_id.startswith("github:"):
+        raise KanbanError(
+            "Only GitHub-backed Kanban items can be edited right now.",
+            status_code=400,
+        )
+    raw = item_id.split(":", 1)[1]
+    if not raw.isdigit():
+        raise KanbanError("Invalid GitHub Kanban item id.", status_code=400)
+    return int(raw)
+
+
+def _ensure_repo(repo: str | None = None) -> str:
+    resolved = repo or _default_repo()
+    if not resolved:
+        raise KanbanError("No Kanban GitHub repository is configured.", status_code=400)
+    return resolved
+
+
+def _load_github_issue(repo: str, number: int) -> dict[str, Any]:
+    stdout = _run_gh(
+        [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,url,body,state,labels,comments,createdAt,updatedAt",
+        ]
+    )
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise KanbanError(f"Invalid gh issue response: {exc}", status_code=502)
+
+
+def _label_name(label: Any) -> str:
+    if isinstance(label, dict):
+        return str(label.get("name") or "")
+    return str(label or "")
+
+
+def _current_label_names(issue: dict[str, Any]) -> list[str]:
+    return [name for label in issue.get("labels") or [] if (name := _label_name(label))]
+
+
+def _ensure_label(repo: str, label: str) -> None:
+    if not label:
+        return
+    color = "57606a"
+    if label.startswith("status:"):
+        color = "0e8a16"
+    elif label.startswith("agent:"):
+        color = "1d76db"
+    elif label.startswith("due:"):
+        color = "fbca04"
+    elif label.startswith("priority:") or label.startswith("urgency:"):
+        color = "d93f0b"
+
+    subprocess.run(
+        [
+            "gh",
+            "label",
+            "create",
+            label,
+            "--repo",
+            repo,
+            "--color",
+            color,
+            "--description",
+            "Managed by Wee Kanban",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def _metadata_label_updates(
+    current_labels: list[str],
+    *,
+    status: str | None = None,
+    agent: str | None = None,
+    due: str | None = None,
+    priority: str | None = None,
+    urgency: str | None = None,
+) -> tuple[list[str], list[str]]:
+    remove: list[str] = []
+    add: list[str] = []
+    fields = {
+        "status:": status,
+        "agent:": agent,
+        "due:": due,
+        "priority:": priority,
+        "urgency:": urgency,
+    }
+
+    for prefix, value in fields.items():
+        if value is None:
+            continue
+        remove.extend(label for label in current_labels if label.lower().startswith(prefix))
+        normalized = value.strip()
+        if normalized:
+            if prefix == "status:" and normalized not in KANBAN_COLUMNS:
+                raise KanbanError(f"Invalid status '{normalized}'.", status_code=400)
+            if prefix == "urgency:" and normalized == "normal":
+                continue
+            add.append(f"{prefix}{normalized}")
+
+    if urgency is not None:
+        remove.extend(
+            label
+            for label in current_labels
+            if label.lower() in {"urgent", "urgency:high"}
+        )
+
+    return sorted(set(remove)), sorted(set(add))
+
+
+def _edit_issue(
+    repo: str,
+    number: int,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    add_labels: list[str] | None = None,
+    remove_labels: list[str] | None = None,
+) -> None:
+    args = ["issue", "edit", str(number), "--repo", repo]
+    if title is not None:
+        args.extend(["--title", title])
+    if body is not None:
+        args.extend(["--body", body])
+    for label in remove_labels or []:
+        args.extend(["--remove-label", label])
+    for label in add_labels or []:
+        _ensure_label(repo, label)
+        args.extend(["--add-label", label])
+    if len(args) == 5:
+        return
+    _run_gh(args)
+
+
+def github_item(repo: str | None, item_id: str) -> dict[str, Any]:
+    resolved = _ensure_repo(repo)
+    number = _github_issue_number(item_id)
+    issue = _load_github_issue(resolved, number)
+    card = issue_to_card(issue)
+    card["comments"] = issue.get("comments") or []
+    card["repo"] = resolved
+    return card
+
+
+def update_github_item(
+    repo: str | None,
+    item_id: str,
+    *,
+    title: str | None = None,
+    details: str | None = None,
+    status: str | None = None,
+    agent: str | None = None,
+    due: str | None = None,
+    priority: str | None = None,
+    urgency: str | None = None,
+) -> dict[str, Any]:
+    resolved = _ensure_repo(repo)
+    number = _github_issue_number(item_id)
+    issue = _load_github_issue(resolved, number)
+    remove, add = _metadata_label_updates(
+        _current_label_names(issue),
+        status=status,
+        agent=agent,
+        due=due,
+        priority=priority,
+        urgency=urgency,
+    )
+    _edit_issue(
+        resolved,
+        number,
+        title=title,
+        body=details,
+        add_labels=add,
+        remove_labels=remove,
+    )
+    return github_item(resolved, item_id)
+
+
+def comment_github_item(repo: str | None, item_id: str, body: str) -> dict[str, Any]:
+    resolved = _ensure_repo(repo)
+    number = _github_issue_number(item_id)
+    if not body.strip():
+        raise KanbanError("comment body is required.", status_code=400)
+    _run_gh(["issue", "comment", str(number), "--repo", resolved, "--body", body])
+    return github_item(resolved, item_id)
+
+
+def complete_github_item(repo: str | None, item_id: str) -> dict[str, Any]:
+    resolved = _ensure_repo(repo)
+    number = _github_issue_number(item_id)
+    issue = _load_github_issue(resolved, number)
+    remove, add = _metadata_label_updates(_current_label_names(issue), status="done")
+    _edit_issue(resolved, number, add_labels=add, remove_labels=remove)
+    _run_gh(["issue", "close", str(number), "--repo", resolved, "--comment", "Marked complete from Wee Kanban."])
+    return github_item(resolved, item_id)
+
+
+def close_github_item(repo: str | None, item_id: str) -> dict[str, Any]:
+    resolved = _ensure_repo(repo)
+    number = _github_issue_number(item_id)
+    _run_gh(["issue", "close", str(number), "--repo", resolved])
+    return github_item(resolved, item_id)
+
+
+def mark_github_item_ai_active(
+    repo: str | None,
+    item_id: str,
+    *,
+    agent: str,
+    comment: str | None = None,
+) -> dict[str, Any]:
+    resolved = _ensure_repo(repo)
+    number = _github_issue_number(item_id)
+    if not agent.strip():
+        raise KanbanError("agent is required.", status_code=400)
+    issue = _load_github_issue(resolved, number)
+    remove, add = _metadata_label_updates(
+        _current_label_names(issue),
+        status="ai-active",
+        agent=agent.strip(),
+    )
+    _edit_issue(resolved, number, add_labels=add, remove_labels=remove)
+    if comment:
+        _run_gh(["issue", "comment", str(number), "--repo", resolved, "--body", comment])
+    return github_item(resolved, item_id)
 
 
 def parse_due(value: str | None) -> datetime | None:

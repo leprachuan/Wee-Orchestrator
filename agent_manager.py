@@ -15021,6 +15021,34 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Kanban Board API (Issue #367) ---
 
+    class KanbanItemUpdateRequest(BaseModel):
+        title: Optional[str] = None
+        details: Optional[str] = None
+        status: Optional[str] = None
+        agent: Optional[str] = None
+        due: Optional[str] = None
+        priority: Optional[str] = None
+        urgency: Optional[str] = None
+
+    class KanbanCommentRequest(BaseModel):
+        body: str
+
+    class KanbanDispatchRequest(BaseModel):
+        agent: str
+        prompt: Optional[str] = None
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        timeout: Optional[int] = None
+        notify: Optional[bool] = None
+        permission_mode: Optional[str] = None
+
+    def _kanban_http_error(exc: Exception):
+        from kanban import KanbanError
+
+        if isinstance(exc, KanbanError):
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise exc
+
     @app.get("/api/v1/kanban/board")
     async def get_kanban_board(
         request: Request,
@@ -15051,6 +15079,171 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             date_to=date_to,
             source=source,
         )
+
+    @app.get("/api/v1/kanban/items/{item_id}")
+    async def get_kanban_item(request: Request, item_id: str, repo: Optional[str] = None):
+        """Return one Kanban item with comments when available."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import github_item
+
+            return github_item(repo, item_id)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.patch("/api/v1/kanban/items/{item_id}")
+    async def update_kanban_item(
+        request: Request,
+        item_id: str,
+        body: KanbanItemUpdateRequest,
+        repo: Optional[str] = None,
+    ):
+        """Edit a GitHub-backed Kanban item."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import update_github_item
+
+            return update_github_item(
+                repo,
+                item_id,
+                title=body.title,
+                details=body.details,
+                status=body.status,
+                agent=body.agent,
+                due=body.due,
+                priority=body.priority,
+                urgency=body.urgency,
+            )
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/comments")
+    async def comment_kanban_item(
+        request: Request,
+        item_id: str,
+        body: KanbanCommentRequest,
+        repo: Optional[str] = None,
+    ):
+        """Add a comment to a GitHub-backed Kanban item."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import comment_github_item
+
+            return comment_github_item(repo, item_id, body.body)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/complete")
+    async def complete_kanban_item(
+        request: Request,
+        item_id: str,
+        repo: Optional[str] = None,
+    ):
+        """Mark a GitHub-backed Kanban item complete and close it."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import complete_github_item
+
+            return complete_github_item(repo, item_id)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/close")
+    async def close_kanban_item(
+        request: Request,
+        item_id: str,
+        repo: Optional[str] = None,
+    ):
+        """Close a GitHub-backed Kanban item."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import close_github_item
+
+            return close_github_item(repo, item_id)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/dispatch")
+    async def dispatch_kanban_item(
+        request: Request,
+        item_id: str,
+        body: KanbanDispatchRequest,
+        repo: Optional[str] = None,
+    ):
+        """Dispatch a GitHub-backed Kanban item to an agent."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import github_item, mark_github_item_ai_active
+
+            item = github_item(repo, item_id)
+            item_repo = item.get("repo") or repo
+            issue = item.get("github_issue_number")
+            task_prompt = body.prompt or "Complete this TODO."
+            prompt = (
+                f"You have been dispatched from Wee Kanban to work on "
+                f"{item_repo} issue #{issue}: {item.get('title', '')}\n\n"
+                f"URL: {item.get('url', '')}\n\n"
+                f"Current details:\n{item.get('details', '')}\n\n"
+                f"Task:\n{task_prompt}\n\n"
+                "When work is complete, comment on the issue with a concise "
+                "summary and update the Kanban labels to status:pending-review."
+            )
+            task = await create_background_task(
+                BackgroundTaskRequest(
+                    prompt=prompt,
+                    agent=body.agent,
+                    runtime=body.runtime,
+                    model=body.model,
+                    timeout=body.timeout,
+                    notify=body.notify,
+                    permission_mode=body.permission_mode,
+                ),
+                request,
+            )
+            comment = (
+                f"Dispatched to agent `{body.agent}` from Wee Kanban.\n\n"
+                f"Background task: `{task.get('task_id')}`\n"
+                f"Requested by: `{user.get('identity', 'unknown')}`"
+            )
+            updated = mark_github_item_ai_active(
+                item_repo,
+                item_id,
+                agent=body.agent,
+                comment=comment,
+            )
+            return {"success": True, "task": task, "item": updated}
+        except Exception as exc:
+            _kanban_http_error(exc)
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:

@@ -125,6 +125,84 @@ def test_issue367_groups_and_filters_board(monkeypatch, tmp_path):
     assert board["columns"]["ai-active"][0]["id"] == "github:367"
 
 
+def test_issue367_update_github_item_rewrites_metadata_labels(monkeypatch):
+    import kanban
+
+    issue = {
+        "number": 3,
+        "title": "Test TODO",
+        "body": "Details",
+        "state": "open",
+        "url": "https://github.com/owner/repo/issues/3",
+        "labels": [
+            {"name": "status:todo"},
+            {"name": "agent:old"},
+            {"name": "urgent"},
+            {"name": "keep"},
+        ],
+    }
+    calls = {}
+
+    monkeypatch.setattr(kanban, "_load_github_issue", lambda repo, number: issue)
+    monkeypatch.setattr(kanban, "_ensure_label", lambda repo, label: None)
+
+    def fake_edit(repo, number, **kwargs):
+        calls.update(kwargs)
+
+    monkeypatch.setattr(kanban, "_edit_issue", fake_edit)
+
+    kanban.update_github_item(
+        "owner/repo",
+        "github:3",
+        status="ai-active",
+        agent="wee-dev",
+        urgency="normal",
+    )
+
+    assert calls["add_labels"] == ["agent:wee-dev", "status:ai-active"]
+    assert calls["remove_labels"] == ["agent:old", "status:todo", "urgent"]
+
+
+def test_issue367_dispatch_marks_github_item_ai_active(monkeypatch):
+    import kanban
+
+    issue = {
+        "number": 8,
+        "title": "Dispatch TODO",
+        "body": "Details",
+        "state": "open",
+        "url": "https://github.com/owner/repo/issues/8",
+        "labels": [{"name": "status:todo"}],
+    }
+    calls = {"comments": []}
+
+    monkeypatch.setattr(kanban, "_load_github_issue", lambda repo, number: issue)
+    monkeypatch.setattr(kanban, "_ensure_label", lambda repo, label: None)
+
+    def fake_edit(repo, number, **kwargs):
+        calls.update(kwargs)
+
+    def fake_run_gh(args, timeout=20):
+        calls["comments"].append(args)
+        return "{}"
+
+    monkeypatch.setattr(kanban, "_edit_issue", fake_edit)
+    monkeypatch.setattr(kanban, "_run_gh", fake_run_gh)
+
+    kanban.mark_github_item_ai_active(
+        "owner/repo",
+        "github:8",
+        agent="wee-dev",
+        comment="Dispatched",
+    )
+
+    assert calls["add_labels"] == ["agent:wee-dev", "status:ai-active"]
+    assert calls["remove_labels"] == ["status:todo"]
+    assert calls["comments"] == [
+        ["issue", "comment", "8", "--repo", "owner/repo", "--body", "Dispatched"]
+    ]
+
+
 def test_issue367_kanban_api_requires_auth():
     from fastapi.testclient import TestClient
 
@@ -176,6 +254,42 @@ def test_issue367_kanban_api_returns_board(monkeypatch):
     assert payload["kwargs"]["agent"] == "research"
     assert payload["kwargs"]["urgency"] == "urgent"
     assert payload["kwargs"]["source"] == "github"
+
+
+def test_issue367_kanban_api_updates_item(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import kanban
+    from agent_manager import create_api_app
+
+    monkeypatch.setenv("API_SHARED_KEY", "test_key_367")
+
+    def fake_update(repo, item_id, **kwargs):
+        return {
+            "id": item_id,
+            "repo": repo,
+            "title": kwargs["title"],
+            "status": kwargs["status"],
+            "agent": kwargs["agent"],
+        }
+
+    monkeypatch.setattr(kanban, "update_github_item", fake_update)
+
+    client = TestClient(create_api_app(), raise_server_exceptions=False)
+    response = client.patch(
+        "/api/v1/kanban/items/github:3?repo=owner/repo",
+        headers={"Authorization": "Bearer shared_test_key_367"},
+        json={"title": "Updated", "status": "ai-active", "agent": "wee-dev"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "github:3",
+        "repo": "owner/repo",
+        "title": "Updated",
+        "status": "ai-active",
+        "agent": "wee-dev",
+    }
 
 
 def test_issue367_kanban_settings_persist_repo(monkeypatch, tmp_path):
