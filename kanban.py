@@ -19,6 +19,7 @@ from typing import Any
 
 KANBAN_COLUMNS = ("todo", "in-progress", "ai-active", "pending-review", "done")
 LABEL_PREFIXES = ("status:", "agent:", "due:", "priority:", "urgency:")
+HIDDEN_LABEL = "kanban:hidden"
 
 
 class KanbanError(RuntimeError):
@@ -548,6 +549,10 @@ def _issue_labels(issue: dict[str, Any]) -> list[str]:
     return names
 
 
+def _is_hidden_issue(issue: dict[str, Any]) -> bool:
+    return any(label.lower() == HIDDEN_LABEL for label in _issue_labels(issue))
+
+
 def issue_to_card(issue: dict[str, Any]) -> dict[str, Any]:
     labels = _issue_labels(issue)
     metadata = extract_label_data(labels)
@@ -606,7 +611,7 @@ def load_github_cards(repo: str | None, limit: int = 100) -> list[dict[str, Any]
     except json.JSONDecodeError:
         return []
 
-    return [issue_to_card(issue) for issue in issues]
+    return [issue_to_card(issue) for issue in issues if not _is_hidden_issue(issue)]
 
 
 def normalize_card(card: dict[str, Any]) -> dict[str, Any]:

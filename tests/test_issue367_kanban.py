@@ -125,6 +125,38 @@ def test_issue367_groups_and_filters_board(monkeypatch, tmp_path):
     assert board["columns"]["ai-active"][0]["id"] == "github:367"
 
 
+def test_issue367_load_github_cards_skips_hidden_issues(monkeypatch):
+    import json
+    import subprocess
+
+    from kanban import load_github_cards
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps(
+            [
+                {
+                    "number": 1,
+                    "title": "Visible",
+                    "state": "open",
+                    "labels": [],
+                },
+                {
+                    "number": 2,
+                    "title": "Hidden",
+                    "state": "open",
+                    "labels": [{"name": "kanban:hidden"}],
+                },
+            ]
+        )
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: Result())
+
+    cards = load_github_cards("owner/repo")
+
+    assert [card["id"] for card in cards] == ["github:1"]
+
+
 def test_issue367_update_github_item_rewrites_metadata_labels(monkeypatch):
     import kanban
 
