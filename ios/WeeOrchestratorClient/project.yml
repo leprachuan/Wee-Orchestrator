@@ -1,0 +1,53 @@
+name: WeeOrchestratorClient
+options:
+  bundleIdPrefix: com.weeorchestrator
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    TARGETED_DEVICE_FAMILY: "1,2" # iPhone + iPad
+    SUPPORTS_MACCATALYST: false
+
+targets:
+  WeeOrchestratorClient:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/WeeOrchestratorClient
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.weeorchestrator.client
+        PRODUCT_NAME: "Wee Orchestrator"
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: "Wee Orchestrator"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Allows connecting to local/dev backends over HTTP or with
+        # self-signed TLS certificates. Tighten this (per-domain
+        # exceptions) before distributing the app.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+
+  WeeOrchestratorClientTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/WeeOrchestratorClientTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.weeorchestrator.client.tests
+    dependencies:
+      - target: WeeOrchestratorClient

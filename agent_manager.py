@@ -7028,6 +7028,7 @@ User Request:
                     import json as _json
 
                     _claude_text_block_count = 0  # track text blocks for separators
+                    _codex_text_chunk_count = 0  # track agent_message chunks for separators
                     _active_tool_calls = {}  # index → {id, name, input_parts}
                     _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
                     _codex_seen_item_ids = set()
@@ -7329,7 +7330,63 @@ User Request:
                                                     queue.put_nowait,
                                                     (_cx_kind, _cx_data),
                                                 )
-                                        continue
+                                                # Extract and strip [STATUS_UPDATE: ...]
+                                                # markers (F004) so mobile-channel
+                                                # progress markers embedded in the
+                                                # agent_message text don't render
+                                                # inline in the WebUI transcript.
+                                                if _cx_text:
+                                                    for _su_m in re.finditer(
+                                                        r"\[STATUS_UPDATE[:\s]*(.+?)\]",
+                                                        _cx_text,
+                                                    ):
+                                                        self.set_live_status(
+                                                            n8n_session_id,
+                                                            _su_m.group(1).strip(),
+                                                        )
+                                                    _cx_text = re.sub(
+                                                        r"\s*\[STATUS_UPDATE[:\s]*[^\]]*\]\s*",
+                                                        "\n\n",
+                                                        _cx_text,
+                                                    ).strip()
+                                                if _cx_text:
+                                                    # Separate consecutive
+                                                    # agent_message chunks with a
+                                                    # paragraph break so they don't
+                                                    # concatenate mid-sentence.
+                                                    if _codex_text_chunk_count > 0:
+                                                        if stream_buffer:
+                                                            stream_buffer.push(
+                                                                "chunk",
+                                                                {"text": "\n\n"},
+                                                            )
+                                                        else:
+                                                            loop.call_soon_threadsafe(
+                                                                queue.put_nowait,
+                                                                (
+                                                                    "chunk",
+                                                                    {"text": "\n\n"},
+                                                                ),
+                                                            )
+                                                    _codex_text_chunk_count += 1
+                                                    if stream_buffer:
+                                                        stream_buffer.push(
+                                                            "chunk", _cx_text
+                                                        )
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", _cx_text),
+                                                        )
+                                                continue
+                                            if _cx_type in (
+                                                "thread.started",
+                                                "thread.completed",
+                                                "turn.started",
+                                                "turn.completed",
+                                                "item.started",
+                                            ):
+                                                continue
 
                                     # Codex exec tool call patterns
                                     import re as _re_tc

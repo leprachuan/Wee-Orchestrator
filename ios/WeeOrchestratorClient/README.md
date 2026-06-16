@@ -1,0 +1,181 @@
+# Wee Orchestrator — iOS Client (Starter)
+
+A SwiftUI starter client for [Wee Orchestrator](https://github.com/leprachuan/Wee-Orchestrator),
+mirroring the visual language of the existing WebUI (dark "Emerald"
+glassmorphism theme) with responsive layouts for iPhone and iPad.
+
+This is an early starter: it covers the API surface needed for chat,
+health checks, agent listing, background task status/creation, and
+connection configuration.
+
+## Features
+
+- **Chat** — transcript view backed by `/api/v1/sessions/*` and
+  `/api/v1/history/sessions/*`. The header agent name opens an agent picker
+  that updates the active session's agent (via `/agent set`) or the agent
+  used for the next new session. A "New Chat" action clears the transcript
+  and starts a fresh session on next send. Previous sessions can be browsed
+  and reopened from a sheet.
+- **Dashboard** — backend health, service status (telegram/webex/api/scheduler).
+- **Agents** — list of configured agents with runtime/model.
+- **Tasks** — background task list, detail view with recent output, a
+  form to create new background tasks (`POST /api/v1/background-tasks`),
+  and a "Scheduled Tasks" section listing scheduler jobs
+  (`GET /api/v1/scheduler/jobs`) with name, agent, schedule, next/last run,
+  and enabled/paused status. Pull-to-refresh reloads both lists. A `403`
+  from `/api/v1/scheduler/jobs` (user not on the scheduler allowlist) is
+  treated as "no scheduled tasks" with no error shown; any other failure
+  (network error, decoding error, 401, 500, ...) shows an inline
+  "Couldn't load scheduled tasks" message in that section instead of
+  silently looking empty.
+- **Sign in (Telegram/WebEx pairing)** — the same pairing-code login flow as
+  the WebUI: enter your Telegram username/ID (or WebEx identity), receive a
+  one-time code via that channel, and verify it to obtain a session bearer
+  token. The token and identity metadata are stored securely in the iOS
+  Keychain and used automatically for all `/api/v1/*` requests, including
+  send/background-task calls. The login screen shows pending/expired/failed
+  states, and an "Advanced: Manual Token Entry" section remains available as
+  a fallback for pre-issued tokens.
+- **Settings** — configurable backend base URL, bearer token (stored in the
+  Keychain), a "use mock data" toggle for offline development, an
+  option to trust self-signed TLS certificates for local/dev backends, and
+  an Account section showing the signed-in identity with a Sign Out action.
+- **iPad/iPhone layouts** — `NavigationSplitView` sidebar on iPad (regular
+  width), tab bar on iPhone (compact width).
+- **Mock/offline mode** — enabled by default so the app is browsable
+  immediately without a configured backend.
+
+## Project layout
+
+```
+ios/WeeOrchestratorClient/
+├── project.yml                 # XcodeGen project definition
+├── Sources/WeeOrchestratorClient/
+│   ├── WeeOrchestratorApp.swift # App entry point
+│   ├── Models/Models.swift      # Codable API response types
+│   ├── Networking/APIClient.swift
+│   ├── Stores/
+│   │   ├── AppState.swift       # Observable app data + mock fallback
+│   │   ├── ChatStore.swift       # Chat session/transcript/agent state
+│   │   ├── SettingsStore.swift  # Base URL / token / mock toggle
+│   │   └── KeychainHelper.swift # Bearer token storage
+│   │   └── AuthStore.swift       # Telegram/WebEx pairing login state
+│   ├── Theme/Theme.swift         # Colors/components matching the WebUI theme
+│   ├── Mock/MockData.swift       # Sample data for offline mode
+│   └── Views/
+│       ├── RootView.swift
+│       ├── LoginView.swift       # Telegram/WebEx pairing login flow
+│       ├── ChatView.swift
+│       ├── DashboardView.swift
+│       ├── AgentsView.swift
+│       ├── BackgroundTasksView.swift
+│       ├── BackgroundTaskDetailView.swift
+│       ├── NewTaskView.swift
+│       └── SettingsView.swift
+└── Tests/WeeOrchestratorClientTests/
+    ├── ChatStoreTests.swift      # Chat session/agent/new-chat regression tests
+    └── AuthStoreTests.swift      # Pairing login flow / token storage regression tests
+```
+
+## Building locally
+
+Requires Xcode 15+ (iOS 17 SDK) on macOS.
+
+### Option A — XcodeGen (recommended)
+
+1. Install [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
+2. From `ios/WeeOrchestratorClient/`, run:
+   ```sh
+   xcodegen generate
+   open WeeOrchestratorClient.xcodeproj
+   ```
+3. Select the `WeeOrchestratorClient` scheme and an iPhone or iPad simulator,
+   then Run (`Cmd+R`).
+
+### Option B — Manual Xcode project
+
+1. In Xcode, create a new project: **App**, Interface: **SwiftUI**,
+   Language: **Swift**, name it `WeeOrchestratorClient`.
+2. Delete the generated `ContentView.swift` and default app file.
+3. Drag the contents of `Sources/WeeOrchestratorClient/` into the project,
+   keeping the folder structure (ensure "Copy items if needed" is checked).
+4. In the target's **Info** tab, add an **App Transport Security Settings**
+   entry with **Allow Arbitrary Loads** set to **YES** (only needed if your
+   backend uses HTTP or a self-signed certificate during development).
+5. Build and run on an iPhone or iPad simulator.
+
+## Signing in
+
+On first launch (with "Use mock data" off), the app shows a **Sign in**
+screen:
+
+1. Choose **Telegram** or **WebEx** and enter your username/ID. (For
+   Telegram, send any message to the bot first if the app reports the
+   username isn't recognized.)
+2. Tap **Send Pairing Code** — a one-time code is delivered via that
+   channel.
+3. Enter the code and tap **Verify**. The returned session token is stored
+   in the Keychain and used for all subsequent `/api/v1/*` requests.
+
+If the session token expires, or any request returns `401`, the app
+clears the stored token and returns to this screen with an "expired"
+message. The **Account** section in Settings shows the signed-in identity
+and channel, with a **Sign Out** action.
+
+The **"Advanced: Manual Token Entry"** section on the sign-in screen (and
+the Base URL / Bearer Token fields in Settings) remain available as a
+fallback for pre-issued tokens (e.g. a `shared_<key>` value), bypassing the
+pairing flow entirely.
+
+## Configuring the backend connection
+
+Open the **Settings** tab/section in the app:
+
+- **Base URL** — e.g. `https://192.168.1.100:8000` (the dev host's API).
+- **Bearer Token** — an API token accepted by `/api/v1/*` endpoints
+  (e.g. a `shared_<key>` or `session_<token>` value, the latter normally
+  obtained via the Sign in flow above). Stored in the iOS Keychain, not
+  `UserDefaults`.
+- **Allow self-signed certificates** — enable for dev backends using
+  self-signed TLS certs (mirrors the `curl -k` pattern used elsewhere in
+  this project). Leave disabled for production backends with valid certs.
+- **Use mock data** — on by default. Turn off once you've signed in (or
+  set a Bearer Token), then tap **Test Connection** to verify
+  `GET /api/v1/health` succeeds.
+
+## API endpoints used
+
+| Purpose | Endpoint |
+| --- | --- |
+| Health | `GET /api/v1/health` |
+| Agents | `GET /api/v1/agents` |
+| Service status | `GET /api/v1/service-status` |
+| List background tasks | `GET /api/v1/background-tasks` |
+| Background task detail | `GET /api/v1/background-tasks/{task_id}` |
+| Create background task | `POST /api/v1/background-tasks` |
+| List scheduled jobs | `GET /api/v1/scheduler/jobs` |
+| Request pairing code | `POST /api/v1/auth/request-pairing` |
+| Verify pairing code | `POST /api/v1/auth/verify-pairing` |
+
+All authenticated requests send `Authorization: Bearer <token>` and
+`X-Auth-Channel: ios` headers, matching the auth scheme implemented in
+`agent_manager.py`. The pairing endpoints do not require a prior token.
+
+## Validation performed
+
+- Verified against the live `/api/v1` route definitions in `agent_manager.py`
+  (health, agents, service-status, background-tasks endpoints and their
+  response shapes).
+- Reviewed `webui/dist/app.css` and `webui/dist/themes.css` for the default
+  "Emerald" theme's colors (`#3ecf8e` accent, dark glass background) used in
+  `Theme.swift`.
+- Swift sources were not compiled in this environment (no macOS/Xcode
+  toolchain available on the dev host). Build and run in Xcode to verify
+  compilation before relying on this starter.
+
+## Next steps (not in scope for this starter)
+
+- Chat/session UI (`/api/v1/sessions/*`, streaming).
+- Scheduler management (create/edit/pause/delete jobs via
+  `/api/v1/scheduler/jobs`) — currently read-only (list view).
+- Notifications, secrets manager, theme picker parity with the WebUI.
