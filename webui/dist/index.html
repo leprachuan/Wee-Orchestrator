@@ -758,6 +758,21 @@
           </div>
         </div>
 
+
+        <!-- Agent Instructions (AGENTS.md) Editor -->
+        <div class="asf-section" id="asf-instructions-section">
+          <div class="asf-section-title">📝 Agent Instructions (AGENTS.md)</div>
+          <p class="asf-hint" style="margin:0 0 10px;">Edit the behavior instructions file for this agent. Changes take effect on the next session start.</p>
+          <div class="asf-env-editor-wrap">
+            <div class="asf-env-toolbar">
+              <button id="btn-instructions-load" class="btn btn-ghost btn-xs">📥 Load</button>
+              <button id="btn-instructions-save" class="btn btn-primary btn-xs">💾 Save Instructions</button>
+            </div>
+            <textarea id="asf-instructions-editor" class="glass-input asf-env-textarea" rows="16" placeholder="# Loading AGENTS.md..." spellcheck="false"></textarea>
+            <div id="asf-instructions-status" class="asf-env-status hidden"></div>
+          </div>
+        </div>
+
         <!-- .env File Editor -->
         <div class="asf-section">
           <div class="asf-section-title">🔧 Environment Configuration (.env)</div>

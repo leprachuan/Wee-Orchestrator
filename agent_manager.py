@@ -16944,6 +16944,86 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
 
 
+
+    # --- Per-agent Instructions (AGENTS.md) API ---
+
+    @app.get("/api/v1/agents/{agent_name}/instructions")
+    async def get_agent_instructions(agent_name: str, request: Request):
+        """Return the AGENTS.md content for the given agent."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        agent_info = session_mgr.AGENTS.get(agent_name)
+        if agent_info is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent_path = Path(agent_info["path"]).expanduser().resolve()
+        instructions_path = agent_path / "AGENTS.md"
+
+        # Path traversal guard
+        try:
+            instructions_path.resolve().relative_to(agent_path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+
+        if not instructions_path.exists():
+            return JSONResponse(content={"content": "", "exists": False})
+
+        try:
+            content = instructions_path.read_text(encoding="utf-8")
+            return JSONResponse(content={"content": content, "exists": True})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read AGENTS.md: {exc}")
+
+    @app.put("/api/v1/agents/{agent_name}/instructions")
+    async def put_agent_instructions(agent_name: str, request: Request):
+        """Write updated content to the agent's AGENTS.md file."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        agent_info = session_mgr.AGENTS.get(agent_name)
+        if agent_info is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+        if not isinstance(body, dict) or "content" not in body:
+            raise HTTPException(status_code=400, detail="Body must contain a 'content' field")
+
+        content = body["content"]
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="'content' must be a string")
+
+        agent_path = Path(agent_info["path"]).expanduser().resolve()
+        instructions_path = agent_path / "AGENTS.md"
+
+        # Path traversal guard
+        try:
+            instructions_path.resolve().relative_to(agent_path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+
+        try:
+            agent_path.mkdir(parents=True, exist_ok=True)
+            instructions_path.write_text(content, encoding="utf-8")
+            print(
+                f"[API] AGENTS.md updated for '{agent_name}' by {auth.get('identity', 'unknown')}",
+                file=sys.stderr,
+            )
+            return JSONResponse(content={"status": "saved", "path": str(instructions_path)})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write AGENTS.md: {exc}")
+
+
     # --- Per-agent Bot Token Management API ---
 
     _VALID_BOT_CHANNELS = frozenset({"telegram", "webex"})

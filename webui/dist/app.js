@@ -6564,6 +6564,53 @@ if (document.readyState !== 'loading') {
   if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
 
 
+
+
+  /* ── Agent Instructions (AGENTS.md) Editor ─────────────────────────────── */
+  const instructionsEditor = document.getElementById('asf-instructions-editor');
+  const btnInstructionsLoad = document.getElementById('btn-instructions-load');
+  const btnInstructionsSave = document.getElementById('btn-instructions-save');
+  const instructionsStatus  = document.getElementById('asf-instructions-status');
+
+  function showInstructionsStatus(msg, isError) {
+    if (!instructionsStatus) return;
+    instructionsStatus.textContent = msg;
+    instructionsStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    instructionsStatus.classList.remove('hidden');
+    setTimeout(() => instructionsStatus && instructionsStatus.classList.add('hidden'), 5000);
+  }
+
+  async function loadInstructions(agentName) {
+    if (!instructionsEditor) return;
+    const name = agentName || ASF.selectedName;
+    if (!name) return;
+    instructionsEditor.value = 'Loading...';
+    try {
+      const data = await apiRequest('GET', '/agents/' + name + '/instructions');
+      instructionsEditor.value = data.content || '';
+      if (!data.exists) showInstructionsStatus('No AGENTS.md found — a new one will be created on save.', false);
+    } catch (e) {
+      instructionsEditor.value = '';
+      showInstructionsStatus('Failed to load AGENTS.md: ' + e.message, true);
+    }
+  }
+
+  async function saveInstructions() {
+    if (!instructionsEditor) return;
+    const name = ASF.selectedName;
+    if (!name) { showInstructionsStatus('No agent selected', true); return; }
+    try {
+      await apiRequest('PUT', '/agents/' + name + '/instructions', { content: instructionsEditor.value });
+      showInstructionsStatus('✓ AGENTS.md saved', false);
+    } catch (e) {
+      showInstructionsStatus('Failed to save: ' + e.message, true);
+    }
+  }
+
+  if (btnInstructionsLoad) btnInstructionsLoad.addEventListener('click', () => loadInstructions());
+  if (btnInstructionsSave) btnInstructionsSave.addEventListener('click', saveInstructions);
+
+
   /* ── Mobile Bot Token Settings ─────────────────────────────────────────── */
 
   const BOT_CHANNELS = ['telegram', 'webex'];
@@ -6727,6 +6774,26 @@ if (document.readyState !== 'loading') {
       btnSettings.removeEventListener('click', openSettings);
       btnSettings.addEventListener('click', _wrappedOpen);
     }
+  }
+
+  // Auto-load AGENTS.md when settings panel opens and when agent selector changes
+  const _origOpenSettingsInstr = typeof openSettings === 'function' ? openSettings : null;
+  if (_origOpenSettingsInstr) {
+    const _wrappedOpenInstr = async function() {
+      await _origOpenSettingsInstr();
+      if (ASF.selectedName) loadInstructions(ASF.selectedName);
+    };
+    if (btnSettings) {
+      btnSettings.removeEventListener('click', openSettings);
+      btnSettings.addEventListener('click', _wrappedOpenInstr);
+    }
+  }
+
+  // Reload instructions when agent selection changes
+  if (asfSelector) {
+    asfSelector.addEventListener('change', () => {
+      loadInstructions(asfSelector.value);
+    });
   }
 
   // Agent selector change
