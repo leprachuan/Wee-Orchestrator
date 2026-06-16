@@ -15019,6 +15019,39 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             ),
         }
 
+    # --- Kanban Board API (Issue #367) ---
+
+    @app.get("/api/v1/kanban/board")
+    async def get_kanban_board(
+        request: Request,
+        agent: Optional[str] = None,
+        urgency: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        source: Optional[str] = None,
+        repo: Optional[str] = None,
+        limit: int = 200,
+    ):
+        """Return Kanban cards grouped by board column."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from kanban import load_kanban_board
+
+        return load_kanban_board(
+            todo_path=_resolve_todo_file(agent),
+            repo=repo,
+            limit=limit,
+            agent=agent,
+            urgency=urgency,
+            date_from=date_from,
+            date_to=date_to,
+            source=source,
+        )
+
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
         # Lazy-load TaskScheduler so the API starts even if the scheduler dirs don't exist yet.

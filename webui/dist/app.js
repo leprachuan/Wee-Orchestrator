@@ -2381,6 +2381,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- View nav ---
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
+  $('btn-nav-kanban').addEventListener('click', showKanbanPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
 
@@ -2633,6 +2634,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
   $('btn-sched-new').addEventListener('click', openNewJobForm);
 
+  // --- Kanban UI events ---
+  $('btn-kanban-refresh').addEventListener('click', () => loadKanbanBoard(true));
+  if ($('btn-kanban-open-sidebar')) $('btn-kanban-open-sidebar').addEventListener('click', () => toggleSidebar(true));
+
   // --- Background Tasks UI events ---
   $('btn-bg-refresh').addEventListener('click', () => loadBackgroundTasks(true));
 
@@ -2665,6 +2670,7 @@ function showChatPanel() {
   hide($('secrets-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
+  hide($('kanban-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
   hide($('bg-sidebar-list'));
@@ -2673,6 +2679,7 @@ function showChatPanel() {
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
@@ -2681,6 +2688,7 @@ function showChatPanel() {
 
 function showSchedulerPanel() {
   hide($('secrets-panel'));
+  hide($('kanban-panel'));
   hide($('chat-panel'));
   show($('scheduler-panel'));
   hide($('background-panel'));
@@ -2692,6 +2700,7 @@ function showSchedulerPanel() {
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
@@ -2705,6 +2714,7 @@ function showBackgroundPanel() {
   hide($('secrets-panel'));
   hide($('chat-panel'));
   hide($('scheduler-panel'));
+  hide($('kanban-panel'));
   show($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
@@ -2714,12 +2724,212 @@ function showBackgroundPanel() {
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   loadBackgroundTasks();
   // On mobile, keep sidebar open so task list is visible immediately
   if (isMobileViewport()) toggleSidebar(true);
+}
+
+function showKanbanPanel() {
+  hide($('secrets-panel'));
+  hide($('chat-panel'));
+  hide($('scheduler-panel'));
+  hide($('background-panel'));
+  show($('kanban-panel'));
+  hide($('btn-new-chat'));
+  hide($('sessions-list'));
+  hide($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
+  hide($('request-queue-panel'));
+  $('btn-nav-kanban').classList.add('active');
+  $('btn-nav-chat').classList.remove('active');
+  $('btn-nav-background').classList.remove('active');
+  $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
+  hideNotificationPanel();
+  loadKanbanBoard();
+  if (isMobileViewport()) toggleSidebar(false);
+}
+
+const KANBAN_COLUMNS = [
+  ['todo', 'To Do'],
+  ['in-progress', 'In Progress'],
+  ['ai-active', 'AI Active'],
+  ['pending-review', 'Review'],
+  ['done', 'Done'],
+];
+
+async function loadKanbanBoard(showToast = false) {
+  const columnsEl = $('kanban-columns');
+  const dueEl = $('kanban-due');
+  if (!columnsEl) return;
+
+  columnsEl.innerHTML = '<p class="kanban-empty">Loading board…</p>';
+  hide(dueEl);
+
+  try {
+    const board = await apiRequest('GET', '/kanban/board');
+    renderKanbanBoard(board);
+    if (showToast) schedToast('Kanban refreshed', 'success');
+  } catch (err) {
+    try {
+      const todos = await apiRequest('GET', '/todos');
+      renderKanbanBoard(legacyTodosToKanban(todos));
+      if (showToast) schedToast('Kanban refreshed from TODOs', 'success');
+    } catch (fallbackErr) {
+      columnsEl.innerHTML = `<p class="kanban-empty kanban-error">Kanban unavailable: ${escHtml(fallbackErr.message || String(fallbackErr))}</p>`;
+      updateKanbanBadges(0, 0);
+    }
+  }
+}
+
+function legacyTodosToKanban(response) {
+  const cards = (response.todos || []).map((todo, index) => {
+    const labels = todo.labels || [];
+    const status = labelValue(labels, 'status:') || 'todo';
+    const normalizedStatus = KANBAN_COLUMNS.some(([key]) => key === status) ? status : 'todo';
+    const dueBucket = dueBucketFor(todo.due);
+    return {
+      id: `legacy-todo:${index}:${todo.description || ''}`,
+      title: todo.description || 'Untitled',
+      source: 'todo',
+      status: normalizedStatus,
+      agent: labelValue(labels, 'agent:') || response.agent,
+      priority: labelValue(labels, 'priority:') || 'normal',
+      urgency: labels.some(label => ['urgent', 'urgency:urgent', 'urgency:high'].includes(String(label).toLowerCase())) ? 'urgent' : 'normal',
+      due: todo.due,
+      due_bucket: dueBucket,
+      is_overdue: dueBucket === 'overdue',
+      labels,
+      details: todo.details || '',
+      url: null,
+      github_issue_number: null,
+    };
+  });
+  const columns = Object.fromEntries(KANBAN_COLUMNS.map(([key]) => [key, []]));
+  cards.forEach(card => columns[card.status].push(card));
+  return {
+    success: true,
+    columns,
+    agents: [...new Set(cards.map(card => card.agent).filter(Boolean))].sort(),
+    sources: cards.length ? ['todo'] : [],
+    total: cards.length,
+    repo: null,
+  };
+}
+
+function labelValue(labels, prefix) {
+  const found = labels.find(label => String(label).toLowerCase().startsWith(prefix));
+  if (!found) return null;
+  const parts = String(found).split(':');
+  return parts.length > 1 ? parts.slice(1).join(':').trim() : null;
+}
+
+function dueBucketFor(value) {
+  if (!value) return 'none';
+  const date = parseKanbanDate(value);
+  if (!date || Number.isNaN(date.getTime())) return 'none';
+  const now = new Date();
+  if (date < now) return 'overdue';
+  if (date.toDateString() === now.toDateString()) return 'today';
+  const soon = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+  return date <= soon ? 'soon' : 'future';
+}
+
+function parseKanbanDate(value) {
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  return new Date(raw);
+}
+
+function renderKanbanBoard(board) {
+  const columnsEl = $('kanban-columns');
+  const dueCards = KANBAN_COLUMNS.flatMap(([key]) => board.columns?.[key] || [])
+    .filter(card => ['overdue', 'today', 'soon'].includes(card.due_bucket));
+
+  updateKanbanBadges(board.total || 0, dueCards.length);
+  renderKanbanDue(dueCards);
+
+  columnsEl.innerHTML = KANBAN_COLUMNS.map(([key, title]) => {
+    const cards = board.columns?.[key] || [];
+    return `
+      <section class="kanban-column">
+        <div class="kanban-column-header">
+          <span class="kanban-column-title">${title}</span>
+          <span class="badge-muted">${cards.length}</span>
+        </div>
+        <div class="kanban-card-list">
+          ${cards.length ? cards.map(renderKanbanCard).join('') : '<p class="kanban-column-empty">No cards</p>'}
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+function renderKanbanDue(cards) {
+  const dueEl = $('kanban-due');
+  if (!dueEl) return;
+  if (!cards.length) {
+    hide(dueEl);
+    return;
+  }
+
+  show(dueEl);
+  dueEl.innerHTML = `
+    <div class="kanban-due-header">
+      <strong>Due Soon</strong>
+      <span class="badge-warn">${cards.length}</span>
+    </div>
+    <div class="kanban-due-grid">
+      ${cards.slice(0, 6).map(renderKanbanCard).join('')}
+    </div>
+  `;
+}
+
+function renderKanbanCard(card) {
+  const due = card.due ? `<span class="kanban-pill kanban-due-${card.due_bucket || 'none'}">${escHtml(shortKanbanDate(card.due, card.due_bucket))}</span>` : '';
+  const agent = card.agent ? `<span class="kanban-pill">${escHtml(card.agent)}</span>` : '';
+  const urgent = card.urgency === 'urgent' ? '<span class="kanban-pill kanban-urgent">urgent</span>' : '';
+  const issue = card.github_issue_number ? `<span class="kanban-issue">#${card.github_issue_number}</span>` : '';
+  const link = card.url ? `<a class="kanban-link" href="${escHtml(card.url)}" target="_blank" rel="noopener">↗</a>` : '';
+  return `
+    <article class="kanban-card">
+      <div class="kanban-card-top">
+        <span class="kanban-source">${escHtml(card.source || 'card')}</span>
+        ${issue}
+        ${link}
+      </div>
+      <h3>${escHtml(card.title || 'Untitled')}</h3>
+      <div class="kanban-card-meta">${agent}${due}${urgent}</div>
+      ${card.details ? `<p>${escHtml(card.details)}</p>` : ''}
+    </article>
+  `;
+}
+
+function shortKanbanDate(value, bucket) {
+  const short = String(value).replace('T', ' ').replace('Z', '');
+  if (bucket === 'overdue') return `Overdue ${short}`;
+  if (bucket === 'today') return `Today ${short}`;
+  if (bucket === 'soon') return `Soon ${short}`;
+  return short;
+}
+
+function updateKanbanBadges(total, dueCount) {
+  const countBadge = $('kanban-count-badge');
+  if (countBadge) countBadge.textContent = `${total} card${total === 1 ? '' : 's'}`;
+
+  const dueBadge = $('kanban-due-badge');
+  if (dueBadge) {
+    dueBadge.textContent = dueCount;
+    dueBadge.classList.toggle('hidden', dueCount === 0);
+  }
 }
 
 
@@ -2731,6 +2941,7 @@ function showSecretsPanel() {
   hide($('chat-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
+  hide($('kanban-panel'));
   show($('secrets-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
@@ -2741,6 +2952,7 @@ function showSecretsPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   hideNotificationPanel();
   checkKeyringStatus();
