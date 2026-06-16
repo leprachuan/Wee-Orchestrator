@@ -1,0 +1,389 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0DDF378F7C2A92F7431F3D48 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 679E84F737B1481515FC6C1F /* AppRootView.swift */; };
+		281B70189A0328613A9F0AA0 /* WeeTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 797A48D0FB90E675E3270CA2 /* WeeTheme.swift */; };
+		2A58484CB2E91D916214876F /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8B9F655BC03521C3624313 /* SidebarView.swift */; };
+		6828382350A283C9A1468CED /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8007D5B2F2A3B3517FB178C /* KeychainStore.swift */; };
+		701D180620B82D64DD242B4D /* WeeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D4064917EAF679C89D75F64 /* WeeModels.swift */; };
+		8161592D71CE0992540412BF /* AgentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AFD35C1C1EB97B58B888578 /* AgentsView.swift */; };
+		82C5D72E88F84742AD2CC6D9 /* KanbanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A7FBB450C7A4C359A3E0F51 /* KanbanView.swift */; };
+		890FB311F073C1CB00DAA47D /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 028BD7A490C226F37E618BE5 /* Foundation.framework */; };
+		9925D5722FBD900FBF979B86 /* WeeAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AD359807025DC561080A9F5 /* WeeAPIClient.swift */; };
+		9D8055DD8F67CD8D17BA0A83 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1F8FE215B8329281ABA75E10 /* Assets.xcassets */; };
+		B77EEF856E794A83959E090F /* WeeOrchestratorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03B707F8FB530C35A55B4FD9 /* WeeOrchestratorApp.swift */; };
+		B9612AFD416A69B4C16398B8 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F99CB7AA29C04BCF76864730 /* SettingsView.swift */; };
+		BC93D4FD1AEDD7659818AD53 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7ED57A94C9B0AD2ACEF75D6 /* ChatView.swift */; };
+		DC433519F0E0BB5CAAECB928 /* WeeAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DECEDD3DF483E539AA491F0 /* WeeAppModel.swift */; };
+		F78F2E229BDB15331F8473C7 /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F101E29ACB180CD36383D0 /* TasksView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		028BD7A490C226F37E618BE5 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		03B707F8FB530C35A55B4FD9 /* WeeOrchestratorApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WeeOrchestratorApp.swift; sourceTree = "<group>"; };
+		1AFD35C1C1EB97B58B888578 /* AgentsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentsView.swift; path = Views/AgentsView.swift; sourceTree = "<group>"; };
+		1F8FE215B8329281ABA75E10 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2D4064917EAF679C89D75F64 /* WeeModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WeeModels.swift; path = Models/WeeModels.swift; sourceTree = "<group>"; };
+		3AD359807025DC561080A9F5 /* WeeAPIClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WeeAPIClient.swift; path = Services/WeeAPIClient.swift; sourceTree = "<group>"; };
+		4A7FBB450C7A4C359A3E0F51 /* KanbanView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KanbanView.swift; path = Views/KanbanView.swift; sourceTree = "<group>"; };
+		679E84F737B1481515FC6C1F /* AppRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
+		797A48D0FB90E675E3270CA2 /* WeeTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WeeTheme.swift; path = Theme/WeeTheme.swift; sourceTree = "<group>"; };
+		8B8B9F655BC03521C3624313 /* SidebarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SidebarView.swift; path = Views/SidebarView.swift; sourceTree = "<group>"; };
+		8DECEDD3DF483E539AA491F0 /* WeeAppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WeeAppModel.swift; path = Services/WeeAppModel.swift; sourceTree = "<group>"; };
+		9AA8D8772258025A61EB033A /* WeeOrchestrator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WeeOrchestrator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1F101E29ACB180CD36383D0 /* TasksView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TasksView.swift; path = Views/TasksView.swift; sourceTree = "<group>"; };
+		C7ED57A94C9B0AD2ACEF75D6 /* ChatView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ChatView.swift; path = Views/ChatView.swift; sourceTree = "<group>"; };
+		E8007D5B2F2A3B3517FB178C /* KeychainStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeychainStore.swift; path = Services/KeychainStore.swift; sourceTree = "<group>"; };
+		F99CB7AA29C04BCF76864730 /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		EB668E11DF2DE06AE753176D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				890FB311F073C1CB00DAA47D /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		24910E74B1784188A976CDCB /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				CD7665D5EF0AD2CA5BE01E1B /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		6F928637C36CE9FABAB414EA = {
+			isa = PBXGroup;
+			children = (
+				B0A6959F70810E3FB4D1E320 /* Products */,
+				24910E74B1784188A976CDCB /* Frameworks */,
+				CD6E0F35AF716FD27912C25D /* WeeOrchestrator */,
+			);
+			sourceTree = "<group>";
+		};
+		B0A6959F70810E3FB4D1E320 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9AA8D8772258025A61EB033A /* WeeOrchestrator.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		CD6E0F35AF716FD27912C25D /* WeeOrchestrator */ = {
+			isa = PBXGroup;
+			children = (
+				679E84F737B1481515FC6C1F /* AppRootView.swift */,
+				2D4064917EAF679C89D75F64 /* WeeModels.swift */,
+				E8007D5B2F2A3B3517FB178C /* KeychainStore.swift */,
+				3AD359807025DC561080A9F5 /* WeeAPIClient.swift */,
+				8DECEDD3DF483E539AA491F0 /* WeeAppModel.swift */,
+				797A48D0FB90E675E3270CA2 /* WeeTheme.swift */,
+				1AFD35C1C1EB97B58B888578 /* AgentsView.swift */,
+				C7ED57A94C9B0AD2ACEF75D6 /* ChatView.swift */,
+				4A7FBB450C7A4C359A3E0F51 /* KanbanView.swift */,
+				F99CB7AA29C04BCF76864730 /* SettingsView.swift */,
+				8B8B9F655BC03521C3624313 /* SidebarView.swift */,
+				B1F101E29ACB180CD36383D0 /* TasksView.swift */,
+				03B707F8FB530C35A55B4FD9 /* WeeOrchestratorApp.swift */,
+				1F8FE215B8329281ABA75E10 /* Assets.xcassets */,
+			);
+			name = WeeOrchestrator;
+			path = WeeOrchestrator;
+			sourceTree = "<group>";
+		};
+		CD7665D5EF0AD2CA5BE01E1B /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				028BD7A490C226F37E618BE5 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EC6880D7D6DB70931E1AA7E9 /* WeeOrchestrator */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 61483AE5977A6A93581B0666 /* Build configuration list for PBXNativeTarget "WeeOrchestrator" */;
+			buildPhases = (
+				19EC1B15241C954092AE4AE5 /* Sources */,
+				EB668E11DF2DE06AE753176D /* Frameworks */,
+				02FB75A863EBCE4A50DD28E7 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WeeOrchestrator;
+			productName = WeeOrchestrator;
+			productReference = 9AA8D8772258025A61EB033A /* WeeOrchestrator.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		39FA5C2403BDBF9F32FFD248 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = D149D257FF686A66E479AA66 /* Build configuration list for PBXProject "WeeOrchestrator" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 6F928637C36CE9FABAB414EA;
+			minimizedProjectReferenceProxies = 0;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = B0A6959F70810E3FB4D1E320 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EC6880D7D6DB70931E1AA7E9 /* WeeOrchestrator */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		02FB75A863EBCE4A50DD28E7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9D8055DD8F67CD8D17BA0A83 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		19EC1B15241C954092AE4AE5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0DDF378F7C2A92F7431F3D48 /* AppRootView.swift in Sources */,
+				701D180620B82D64DD242B4D /* WeeModels.swift in Sources */,
+				6828382350A283C9A1468CED /* KeychainStore.swift in Sources */,
+				9925D5722FBD900FBF979B86 /* WeeAPIClient.swift in Sources */,
+				DC433519F0E0BB5CAAECB928 /* WeeAppModel.swift in Sources */,
+				281B70189A0328613A9F0AA0 /* WeeTheme.swift in Sources */,
+				8161592D71CE0992540412BF /* AgentsView.swift in Sources */,
+				BC93D4FD1AEDD7659818AD53 /* ChatView.swift in Sources */,
+				82C5D72E88F84742AD2CC6D9 /* KanbanView.swift in Sources */,
+				B9612AFD416A69B4C16398B8 /* SettingsView.swift in Sources */,
+				2A58484CB2E91D916214876F /* SidebarView.swift in Sources */,
+				F78F2E229BDB15331F8473C7 /* TasksView.swift in Sources */,
+				B77EEF856E794A83959E090F /* WeeOrchestratorApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		972EDA23224684225B381D2A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WeeOrchestrator/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.lipkey.weeorchestrator;
+				PRODUCT_NAME = WeeOrchestrator;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9A362F8102B20D4D3CC38CBE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		B8BA651F3719B5AB915FA647 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WeeOrchestrator/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.lipkey.weeorchestrator;
+				PRODUCT_NAME = WeeOrchestrator;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F39293D581D7B65D5F68A725 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		61483AE5977A6A93581B0666 /* Build configuration list for PBXNativeTarget "WeeOrchestrator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B8BA651F3719B5AB915FA647 /* Release */,
+				972EDA23224684225B381D2A /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D149D257FF686A66E479AA66 /* Build configuration list for PBXProject "WeeOrchestrator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A362F8102B20D4D3CC38CBE /* Debug */,
+				F39293D581D7B65D5F68A725 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 39FA5C2403BDBF9F32FFD248 /* Project object */;
+}
