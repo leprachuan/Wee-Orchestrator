@@ -203,6 +203,29 @@ def test_issue367_dispatch_marks_github_item_ai_active(monkeypatch):
     ]
 
 
+def test_issue367_dispatch_preserves_existing_agent_label(monkeypatch):
+    import kanban
+
+    issue = {
+        "number": 9,
+        "title": "Dispatch TODO",
+        "body": "Details",
+        "state": "open",
+        "url": "https://github.com/owner/repo/issues/9",
+        "labels": [{"name": "status:in-progress"}, {"name": "agent:wee-dev"}],
+    }
+    calls = {}
+
+    monkeypatch.setattr(kanban, "_load_github_issue", lambda repo, number: issue)
+    monkeypatch.setattr(kanban, "_ensure_label", lambda repo, label: None)
+    monkeypatch.setattr(kanban, "_edit_issue", lambda repo, number, **kwargs: calls.update(kwargs))
+
+    kanban.mark_github_item_ai_active("owner/repo", "github:9", agent="wee-dev")
+
+    assert calls["add_labels"] == ["agent:wee-dev", "status:ai-active"]
+    assert calls["remove_labels"] == ["status:in-progress"]
+
+
 def test_issue367_kanban_api_requires_auth():
     from fastapi.testclient import TestClient
 

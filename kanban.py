@@ -210,6 +210,9 @@ def _metadata_label_updates(
             if label.lower() in {"urgent", "urgency:high"}
         )
 
+    add_keys = {label.lower() for label in add}
+    remove = [label for label in remove if label.lower() not in add_keys]
+
     return sorted(set(remove)), sorted(set(add))
 
 
