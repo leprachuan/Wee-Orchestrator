@@ -27,6 +27,22 @@ def test_issue367_extracts_board_metadata_from_labels():
     }
 
 
+def test_issue367_defaults_repo_from_git_origin(monkeypatch):
+    import subprocess
+
+    import kanban
+
+    class Result:
+        returncode = 0
+        stdout = "https://github.com/leprachuan/Wee-Orchestrator.git\n"
+
+    monkeypatch.delenv("KANBAN_GITHUB_REPO", raising=False)
+    monkeypatch.delenv("TODO_GITHUB_REPO", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert kanban._default_repo() == "leprachuan/Wee-Orchestrator"
+
+
 @pytest.mark.parametrize(
     ("due", "expected"),
     [

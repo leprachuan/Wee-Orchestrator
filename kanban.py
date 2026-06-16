@@ -20,8 +20,53 @@ from typing import Any
 KANBAN_COLUMNS = ("todo", "in-progress", "ai-active", "pending-review", "done")
 
 
+def _repo_from_git_origin() -> str | None:
+    """Infer owner/repo from the current checkout's GitHub origin."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(Path(__file__).resolve().parent),
+                "config",
+                "--get",
+                "remote.origin.url",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    origin = result.stdout.strip()
+    if not origin:
+        return None
+
+    if origin.startswith("git@github.com:"):
+        origin = origin.split(":", 1)[1]
+    elif "github.com/" in origin:
+        origin = origin.split("github.com/", 1)[1]
+    else:
+        return None
+
+    origin = origin.removesuffix(".git").strip("/")
+    parts = origin.split("/")
+    if len(parts) < 2:
+        return None
+    return "/".join(parts[:2])
+
+
 def _default_repo() -> str | None:
-    return os.environ.get("KANBAN_GITHUB_REPO") or os.environ.get("TODO_GITHUB_REPO")
+    return (
+        os.environ.get("KANBAN_GITHUB_REPO")
+        or os.environ.get("TODO_GITHUB_REPO")
+        or _repo_from_git_origin()
+    )
 
 
 def parse_due(value: str | None) -> datetime | None:
