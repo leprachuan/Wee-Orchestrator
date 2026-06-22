@@ -77,6 +77,7 @@
       <div class="sidebar-nav">
         <button id="btn-nav-chat" class="sidebar-nav-btn active" title="Chat">💬 Chat</button>
         <button id="btn-nav-background" class="sidebar-nav-btn" title="Background Tasks">⚡ Tasks <span id="bg-task-badge" class="nav-badge hidden">0</span></button>
+        <button id="btn-nav-kanban" class="sidebar-nav-btn" title="Kanban Board">▦ Kanban <span id="kanban-due-badge" class="nav-badge hidden">0</span></button>
         <button id="btn-nav-scheduler" class="sidebar-nav-btn" title="Scheduled Tasks">📅 Scheduler</button>
       </div>
 
@@ -326,6 +327,24 @@
             <p class="bg-detail-empty">Select a task from the sidebar to view details</p>
           </div>
         </aside>
+      </div>
+    </section>
+
+    <!-- Kanban panel -->
+    <section id="kanban-panel" class="kanban-panel hidden">
+      <header class="kanban-header glass-panel">
+        <div class="kanban-header-left">
+          <button id="btn-kanban-open-sidebar" class="btn-icon sidebar-open-btn hidden" title="Open sidebar">☰</button>
+          <h2 class="kanban-title">Kanban Board</h2>
+          <span id="kanban-count-badge" class="badge-muted">0 cards</span>
+        </div>
+        <div class="kanban-header-actions">
+          <button id="btn-kanban-refresh" class="btn btn-ghost btn-sm">↺ Refresh</button>
+        </div>
+      </header>
+      <div class="kanban-body">
+        <div id="kanban-due" class="kanban-due glass-panel hidden"></div>
+        <div id="kanban-columns" class="kanban-columns"></div>
       </div>
     </section>
 
@@ -771,6 +790,22 @@
             <textarea id="asf-instructions-editor" class="glass-input asf-env-textarea" rows="16" placeholder="# Loading AGENTS.md..." spellcheck="false"></textarea>
             <div id="asf-instructions-status" class="asf-env-status hidden"></div>
           </div>
+
+        <!-- Kanban Board Settings -->
+        <div class="asf-section">
+          <div class="asf-section-title">▦ Kanban Board</div>
+          <div class="asf-grid">
+            <div class="asf-field asf-full">
+              <label class="asf-label" for="asf-kanban-repo">GitHub Issues Repository</label>
+              <input id="asf-kanban-repo" type="text" class="glass-input asf-input asf-mono" placeholder="owner/repo" autocomplete="off" />
+              <span id="asf-kanban-effective" class="asf-hint">Loading current source...</span>
+            </div>
+          </div>
+          <div class="asf-env-toolbar" style="margin-top:10px;">
+            <button id="btn-kanban-settings-load" class="btn btn-ghost btn-xs">Load</button>
+            <button id="btn-kanban-settings-save" class="btn btn-primary btn-xs">Save Kanban Source</button>
+          </div>
+          <div id="asf-kanban-status" class="asf-env-status hidden"></div>
         </div>
 
         <!-- .env File Editor -->

@@ -123,7 +123,7 @@ class NotificationManager:
         """Store notification preference for a specific agent.
 
         ``identity`` is the normalized user identity.
-        ``agent`` is the agent name (e.g. "research", "wee-qa", "smarthome").
+        ``agent`` is the agent name (e.g. "research", "wee-dev", "smarthome").
         ``preference`` is "on" or "off".
 
         Per-agent preferences override the global user preference.

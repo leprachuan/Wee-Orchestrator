@@ -29,11 +29,14 @@ class ChatPanel(RichLog):
 
     def on_mount(self) -> None:
         """Show placeholder on first mount"""
+        self._cleared_placeholder = False
         self.write(Align.center(Text.from_markup(PLACEHOLDER), vertical="middle"))
 
     async def add_message(self, role: str, content: str) -> None:
         """Add a message to the chat panel."""
-        self.clear()
+        if not self._cleared_placeholder:
+            self.clear()
+            self._cleared_placeholder = True
         style = self.ROLE_STYLES.get(role, "white")
         prefix = Text(f"[{role.upper()}] ", style=style)
         message = Text.assemble(prefix, content)
@@ -42,6 +45,7 @@ class ChatPanel(RichLog):
     async def load_transcript(self, messages: List[Dict[str, Any]]) -> None:
         """Clear and populate the panel with a historical transcript."""
         self.clear()
+        self._cleared_placeholder = True
         if not messages:
             self.write(Align.center(Text.from_markup("[dim]No messages in this session[/dim]"), vertical="middle"))
             return

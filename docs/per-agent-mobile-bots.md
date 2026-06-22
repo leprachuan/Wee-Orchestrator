@@ -7,8 +7,8 @@
 
 ## Overview
 
-Every agent in `agents.json` can have its own Telegram and/or WebEx bot.  
-The **orchestrator** uses the primary/general bot (configured via the Settings panel or the legacy env-var/config-file path).  
+Every agent in `agents.json` can have its own Telegram and/or WebEx bot.
+The **orchestrator** uses the primary/general bot (configured via the Settings panel or the legacy env-var/config-file path).
 All other agents use dedicated bots managed by `agent_bot_manager.py`.
 
 ### Bot routing rules
@@ -28,8 +28,8 @@ All other agents use dedicated bots managed by `agent_bot_manager.py`.
 4. For **Telegram**: click **Set Token**, paste the bot token, click **Save**.
 5. For **WebEx**: click **Set Token**, paste the bot token, click **Save**.
 
-The token is stored in the file-backend keyring under a name like  
-`wee.agent.<agent-name>.<channel>.bot_token`  
+The token is stored in the file-backend keyring under a name like
+`wee.agent.<agent-name>.<channel>.bot_token`
 and the `agents.json` entry is updated to reference it via `token_secret`.
 
 Tokens are displayed only as **configured / not configured** — the actual value is never returned by the API.
@@ -44,20 +44,20 @@ Tokens are displayed only as **configured / not configured** — the actual valu
 2. **CLI argument** (`--token`) or **environment variable** (`TELEGRAM_BOT_TOKEN` / `WEBEX_BOT_TOKEN`)
 3. **Config file** (`telegram_config.json` / `webex_config.json` `token` field)
 
-This means existing installations continue to work without changes.  
+This means existing installations continue to work without changes.
 Once a token is configured via Settings, it becomes the primary source and the env-var/config-file is used only as a fallback if the Settings token is absent.
 
 ---
 
 ## How per-agent bots are managed
 
-`agent_bot_manager.py` reads `agents.json` on startup and polls for changes every 30 seconds (configurable via `--reload-interval`).  
+`agent_bot_manager.py` reads `agents.json` on startup and polls for changes every 30 seconds (configurable via `--reload-interval`).
 For each agent with a `bots.telegram` or `bots.webex` block:
 
 1. Resolves the token from `secret_tool --backend file` using the `token_secret` name.
 2. Starts a dedicated polling thread (`TelegramAgentBot`) or RabbitMQ consumer (`WebExAgentBot`).
 3. All messages are routed directly to the configured agent — no orchestrator hop.
-4. `/agent set` (and all `/agent` subcommands) are rejected with:  
+4. `/agent set` (and all `/agent` subcommands) are rejected with:
    > `⚠️ Agent switching is disabled on per-agent bots. This bot is dedicated to <agent-name>.`
 
 Hot-reload: when `agents.json` changes, affected bot threads are restarted automatically.
@@ -101,7 +101,7 @@ Hot-reload: when `agents.json` changes, affected bot threads are restarted autom
 
 ## Starting the agent bot manager
 
-The `agent-bot-manager-dev.service` systemd unit runs the bot manager automatically.  
+The `agent-bot-manager-dev.service` systemd unit runs the bot manager automatically.
 To start it manually:
 
 ```bash
@@ -128,8 +128,8 @@ The `--api-key` value must match the `API_SHARED_KEY` environment variable used 
 
 ## Removing a bot token
 
-In the Settings panel, click **Remove** next to the configured channel.  
-This deletes the secret from the keyring and clears the `token_secret` field in `agents.json`.  
+In the Settings panel, click **Remove** next to the configured channel.
+This deletes the secret from the keyring and clears the `token_secret` field in `agents.json`.
 The bot manager will detect the change on the next reload cycle and stop the corresponding bot thread.
 
 ---

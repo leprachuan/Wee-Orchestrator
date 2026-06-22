@@ -17,8 +17,6 @@ NORD = {
 AGENT_COLORS = {
     "orchestrator": "green",
     "wee-dev": "blue",
-    "wee-qa": "yellow",
-    "wee-doc": "cyan",
     "email-triage": "magenta",
     "family-knowledge": "red",
     "research": "white",

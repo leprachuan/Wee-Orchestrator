@@ -2,13 +2,13 @@
   "agents": [
     {
       "name": "orchestrator",
-      "path": "/opt/",
+      "path": "/mnt/nas/Agents/",
       "description": "Main orchestrator agent. Coordinates multi-agent workflows and routes tasks to specialized sub-agents (email-triage, family-knowledge, opencode, smarthome, devops). Manages skill definitions for Claude, Gemini, and Copilot CLI.",
       "primary_runtime": "claude",
       "primary_model": "haiku",
       "fallback_runtime": "copilot",
       "fallback_model": "auto",
-      "max_concurrent": 1,
+      "max_concurrent": 3,
       "permissions": {
         "mode": "elevated",
         "directories": {
@@ -38,7 +38,7 @@
     },
     {
       "name": "email-triage",
-      "path": "/opt/email_triage",
+      "path": "/mnt/nas/Agents/email_triage",
       "description": "Gmail inbox management agent. Triages Foster's email using confidence-based classification - stars important emails, archives unimportant ones, flags uncertain ones for review.",
       "primary_runtime": "claude",
       "primary_model": "haiku",
@@ -74,7 +74,7 @@
     },
     {
       "name": "family-knowledge",
-      "path": "/opt/family_knowledge",
+      "path": "/mnt/nas/Agents/family_knowledge",
       "description": "Lipkey family knowledge agent. Manages family info, recipes, vacation planning (Italy 2026), holidays, monthly tasks, and personal interests for Foster, Leslie, Parker, and Oliver.",
       "primary_runtime": "codex",
       "primary_model": "gpt-5.4-mini",
@@ -110,7 +110,7 @@
     },
     {
       "name": "research",
-      "path": "/opt/research",
+      "path": "/mnt/nas/Agents/research",
       "description": "Multi-source research and analysis agent. Handles product comparisons, travel research, current events, tech evaluations, and deep-dives using Perplexity, web search, and document parsing.",
       "primary_runtime": "codex",
       "primary_model": "gpt-5.5",
@@ -146,7 +146,7 @@
     },
     {
       "name": "devops",
-      "path": "/opt/MyHomeDevops",
+      "path": "/mnt/nas/Agents/MyHomeDevops",
       "description": "DevOps and infrastructure management agent. Handles cluster management, deployments, monitoring, and system operations.",
       "primary_runtime": "claude",
       "primary_model": "haiku",
@@ -182,8 +182,8 @@
     },
     {
       "name": "wee-dev",
-      "path": "/opt/wee-dev",
-      "description": "Wee Orchestrator developer agent - handles feature development, bug fixes, and testing exclusively on the dev environment (192.168.1.100)",
+      "path": "/mnt/nas/Agents/wee-dev",
+      "description": "Wee Orchestrator engineering agent - consolidated responsibility for feature development, bug fixes, QA validation, and documentation/README/starter-kit maintenance on the dev environment (192.168.1.100). Handles implementation, cross-vendor QA review, and documentation updates within a single issue lifecycle.",
       "primary_runtime": "claude",
       "primary_model": "sonnet",
       "fallback_runtime": "copilot",
@@ -220,82 +220,10 @@
     },
     {
       "name": "smarthome",
-      "path": "/opt/smarthome",
+      "path": "/mnt/nas/Agents/smarthome",
       "description": "Lipkey smart home control agent. Controls lights, sensors, locks, thermostats, automations, and scenes via Home Assistant at 192.168.1.5:8123.",
       "primary_runtime": "claude",
       "primary_model": "haiku",
-      "fallback_runtime": "copilot",
-      "fallback_model": "auto",
-      "max_concurrent": 1,
-      "permissions": {
-        "mode": "restricted",
-        "directories": {
-          "allow_read": [],
-          "allow_write": [],
-          "deny": []
-        },
-        "tools": {
-          "allow": [
-            "*"
-          ],
-          "deny": []
-        },
-        "network": {
-          "allow_urls": [
-            "*"
-          ],
-          "deny_urls": []
-        },
-        "mcp": {
-          "allow": [],
-          "deny": [
-            "*"
-          ]
-        }
-      }
-    },
-    {
-      "name": "wee-qa",
-      "path": "/opt/wee-qa",
-      "description": "QA validation agent for Wee Orchestrator. You are a QA agent in a bad mood \u2014 scrutinize everything, trust nothing, and be brutal. Tear apart every change wee-dev submits. If it can break, assume it will. Reject anything that isn't airtight. CROSS-VENDOR REVIEW: You will always be dispatched with a different model vendor than the one that wrote the code \u2014 the author model and vendor will be stated in your prompt. Use your independent judgment and look for blind spots the author model's vendor commonly exhibits. Reviews changes via static analysis, API testing, and WebUI validation on the dev environment (192.168.1.100).",
-      "primary_runtime": "codex",
-      "primary_model": "gpt-5.4-mini",
-      "fallback_runtime": "copilot",
-      "fallback_model": "auto",
-      "max_concurrent": 1,
-      "permissions": {
-        "mode": "elevated",
-        "directories": {
-          "allow_read": [],
-          "allow_write": [],
-          "deny": []
-        },
-        "tools": {
-          "allow": [
-            "*"
-          ],
-          "deny": []
-        },
-        "network": {
-          "allow_urls": [
-            "*"
-          ],
-          "deny_urls": []
-        },
-        "mcp": {
-          "allow": [],
-          "deny": [
-            "*"
-          ]
-        }
-      }
-    },
-    {
-      "name": "wee-doc",
-      "path": "/opt/wee-doc",
-      "description": "Documentation and starter-kit maintenance agent for Wee Orchestrator. Updates README/docs, keeps the starter kit in sync, and verifies documentation changes after feature work.",
-      "primary_runtime": "codex",
-      "primary_model": "gpt-5.4-mini",
       "fallback_runtime": "copilot",
       "fallback_model": "auto",
       "max_concurrent": 1,

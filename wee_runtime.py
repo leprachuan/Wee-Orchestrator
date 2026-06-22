@@ -90,17 +90,17 @@ def fetch_openrouter_pricing():
                 api_key = keyring.get_password("openrouter", "api_key")
             except:
                 pass
-        
+
         if not api_key:
             return {}
-        
+
         req = urllib.request.Request(
             "https://openrouter.ai/api/v1/models",
             headers={"Authorization": "Bearer " + api_key},
         )
         resp = urllib.request.urlopen(req, timeout=10)
         data = json.loads(resp.read())
-        
+
         pricing = {}
         for model in data.get("data", []):
             model_id = model.get("id", "")
@@ -116,14 +116,14 @@ def calculate_openrouter_cost(model_id: str, prompt_tokens: int, completion_toke
     """Calculate estimated cost for OpenRouter API call."""
     if pricing_cache is None:
         pricing_cache = fetch_openrouter_pricing()
-    
+
     if model_id not in pricing_cache:
         return None
-    
+
     p = pricing_cache[model_id]
     if p["prompt"] == 0 and p["completion"] == 0:
         return None
-    
+
     cost = (prompt_tokens * p["prompt"] + completion_tokens * p["completion"]) / 1000
     return f"${cost:.6f}"
 
@@ -484,7 +484,7 @@ def _execute_search(func_args: dict) -> str:
     count = min(int(count_raw if count_raw is not None else 5), 20)
     output_format = (func_args.get("format") or "text").lower()
 
-    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://192.168.1.100:8888")
+    searxng_url = os.environ.get("WEE_SEARXNG_URL", "http://127.0.0.1:8888")
     searxng_url = searxng_url.rstrip("/")
 
     params = urllib.parse.urlencode(
@@ -497,7 +497,12 @@ def _execute_search(func_args: dict) -> str:
     )
     url = f"{searxng_url}/search?{params}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Wee-Runtime/1.0"})
+        headers = {
+            "User-Agent": "Wee-Runtime/1.0",
+            "X-Forwarded-For": "127.0.0.1",
+            "X-Real-IP": "127.0.0.1"
+        }
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.URLError as e:
@@ -653,7 +658,7 @@ _WEE_TOOLS = [
             "description": (
                 "PREFERRED: Call a Wee Orchestrator agent to execute a task asynchronously. "
                 "Use for delegating work to specialized agents: devops, email-triage, "
-                "family-knowledge, research, wee-dev, wee-qa, wee-doc. Supports runtime/model "
+                "family-knowledge, research, wee-dev. Supports runtime/model "
                 "overrides. Returns task_id for background mode or result for quick mode."
             ),
             "parameters": {
@@ -1739,7 +1744,7 @@ def main():
             pricing_cache = {}
             if "openrouter" in (api_base or "").lower():
                 pricing_cache = fetch_openrouter_pricing()
-            
+
             stream = client.chat.completions.create(**create_kwargs)
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -1753,11 +1758,11 @@ def main():
                     }
             sys.stdout.write("\n")
             sys.stdout.flush()
-            
+
             # Output usage metadata if available
             if usage_info and (usage_info.get('prompt_tokens', 0) or usage_info.get('completion_tokens', 0)):
                 print(f"[Wee Usage] prompt_tokens={usage_info.get('prompt_tokens', 0)} completion_tokens={usage_info.get('completion_tokens', 0)} total={usage_info.get('total_tokens', 0)}", file=sys.stderr)
-                
+
                 # Check for OpenRouter and calculate cost
                 if "openrouter" in (api_base or "").lower() and pricing_cache:
                     or_model_id = model.replace("openrouter/", "") if "openrouter/" in model else model

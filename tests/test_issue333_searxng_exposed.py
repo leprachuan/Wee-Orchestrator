@@ -30,15 +30,15 @@ class TestIssue333SearchToolExposed(unittest.TestCase):
         result = self.mgr._wee_augment_system_prompt_with_tools(
             "You are a helpful assistant."
         )
-        self.assertIn("**search**", result, 
+        self.assertIn("**search**", result,
                      "Search tool declaration missing from system prompt")
 
     def test_search_tool_description(self):
         """The search tool description should mention SearXNG."""
         result = self.mgr._wee_augment_system_prompt_with_tools("")
-        self.assertIn("SearXNG", result, 
+        self.assertIn("SearXNG", result,
                      "SearXNG description missing")
-        self.assertIn("web search results", result, 
+        self.assertIn("web search results", result,
                      "Search tool description incomplete")
 
     def test_search_tool_parameters(self):
@@ -51,9 +51,9 @@ class TestIssue333SearchToolExposed(unittest.TestCase):
     def test_search_tool_env_requirement(self):
         """The search tool environment requirement should be documented."""
         result = self.mgr._wee_augment_system_prompt_with_tools("")
-        self.assertIn("WEE_SEARXNG_URL", result, 
+        self.assertIn("WEE_SEARXNG_URL", result,
                      "WEE_SEARXNG_URL environment variable not documented")
-        self.assertIn("http://localhost:8888", result, 
+        self.assertIn("http://localhost:8888", result,
                      "Default SearXNG URL not documented")
 
     def test_all_tools_present(self):
@@ -71,7 +71,7 @@ class TestIssue333SearchToolExposed(unittest.TestCase):
         search_idx = result.find("**search**")
         self.assertGreater(python_idx, 0, "python tool not found")
         self.assertGreater(search_idx, 0, "search tool not found")
-        self.assertLess(python_idx, search_idx, 
+        self.assertLess(python_idx, search_idx,
                        "Search tool should appear after python tool in the list")
 
 

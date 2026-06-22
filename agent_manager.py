@@ -205,6 +205,145 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
     return sanitized
 
 
+def _codex_item_name(item: dict) -> str:
+    """Return a UI-friendly tool/event name for a Codex transport item."""
+    if not isinstance(item, dict):
+        return "codex_event"
+    item_type = str(item.get("type") or "codex_event").strip() or "codex_event"
+    if item_type == "command_execution" or item.get("command"):
+        return "shell"
+    return str(item.get("name") or item_type)
+
+
+def _codex_item_text_value(value) -> str:
+    """Normalize a Codex item field to a display string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _codex_item_input(item: dict) -> str:
+    """Extract the most useful input summary from a Codex transport item."""
+    if not isinstance(item, dict):
+        return ""
+    for field in ("command", "input", "arguments", "args", "path", "prompt"):
+        value = _codex_item_text_value(item.get(field))
+        if value:
+            return value
+    return ""
+
+
+def _codex_item_output(item: dict) -> str:
+    """Extract the most useful output summary from a Codex transport item."""
+    if not isinstance(item, dict):
+        return ""
+    for field in ("aggregated_output", "output", "result", "content", "text"):
+        value = _codex_item_text_value(item.get(field))
+        if value:
+            return value
+    return ""
+
+
+def _parse_codex_transport_line(
+    line: str, seen_item_ids: Optional[set] = None
+) -> Optional[list]:
+    """Parse one Codex JSONL transport line into text/tool UI events.
+
+    Returns:
+    - ``None`` when the line is not a Codex JSON transport frame.
+    - ``[]`` when the frame is structured metadata that should not render as text.
+    - A list of ``(channel, payload)`` tuples for assistant text/tool events.
+    """
+    stripped = (line or "").strip()
+    if not stripped.startswith("{"):
+        return None
+
+    try:
+        event = json.loads(stripped)
+    except (ValueError, TypeError):
+        return None
+
+    event_type = event.get("type", "")
+    if event_type in (
+        "thread.started",
+        "thread.completed",
+        "turn.started",
+        "turn.completed",
+        "response.started",
+        "response.completed",
+    ):
+        return []
+
+    if event_type not in ("item.started", "item.completed"):
+        return []
+
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return []
+
+    item_type = item.get("type", "")
+    if item_type == "agent_message":
+        if event_type != "item.completed":
+            return []
+        text = item.get("text", "")
+        if not isinstance(text, str) or not text:
+            return []
+        return [("chunk", text)]
+
+    item_id = str(item.get("id") or f"codex_{item_type or 'event'}")
+    tool_name = _codex_item_name(item)
+    tool_input = _codex_item_input(item)
+    tool_output = _codex_item_output(item)
+    tool_events = []
+
+    already_seen = seen_item_ids is not None and item_id in seen_item_ids
+    if not already_seen:
+        tool_events.append(
+            (
+                "tool_call",
+                {
+                    "event": "detected",
+                    "id": item_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                    "runtime": "codex",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        )
+        if seen_item_ids is not None:
+            seen_item_ids.add(item_id)
+
+    if event_type == "item.completed":
+        is_error = bool(
+            item.get("is_error")
+            or item.get("error")
+            or str(item.get("status", "")).lower() in ("error", "failed", "failure")
+        )
+        tool_events.append(
+            (
+                "tool_call",
+                {
+                    "event": "completed",
+                    "id": item_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                    "output": tool_output,
+                    "is_error": is_error,
+                    "runtime": "codex",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        )
+
+    return tool_events
+
+
 # ---------------------------------------------------------------------------
 # SSH command sanitization (Issue #113)
 # ---------------------------------------------------------------------------
@@ -3932,6 +4071,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         "openai/gpt-4.1",
         "openai/gpt-4.1-mini",
         "deepseek/deepseek-v3.2",
+        "qwen/qwen3.6-flash",
         "qwen/qwen3.6-plus",
         "mistralai/mistral-small-2603",
         "cohere/command-r-plus-08-2024",
@@ -4136,6 +4276,11 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "openrouter/deepseek/deepseek-v3.2",
                 "DeepSeek V3.2 via OpenRouter",
                 ["or-deepseek"],
+            ),
+            (
+                "openrouter/qwen/qwen3.6-flash",
+                "Qwen 3.6 Flash via OpenRouter",
+                ["qwen3.6-flash", "qwen-flash"],
             ),
         ],
         "Wee Native (OpenRouter Free)": [
@@ -5266,7 +5411,7 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Substring matching with longest-match preference
         matches = [m for m in all_models if name_lower in m.lower()]
-        
+
         # Issue #142 B01: For wee runtime, exclude multi-namespace models from substring
         # matching (e.g., "openrouter/openai/gpt-5-mini" has 2+ slashes = multi-namespace)
         if runtime == "wee" and matches:
@@ -5276,7 +5421,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             if has_multi_ns:
                 # Don't use substring matching when multi-namespace models are present
                 matches = single_ns if single_ns else []
-        
+
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -5322,13 +5467,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         """
         if prompt_mode != "restricted":
             return prompt_mode
-        
+
         # Check environment variables (set by scheduler executor for elevated/sandboxed modes)
         if os.environ.get("WEE_ELEVATED", "").lower() in ("true", "1"):
             return "elevated"
         if os.environ.get("WEE_SANDBOXED", "").lower() in ("true", "1"):
             return "sandboxed"
-        
+
         perms = (
             session_data.get("permissions") or {}
         )  # Handle None from session template
@@ -5342,6 +5487,40 @@ You can mention an agent in your prompt and it will auto-delegate:
         if yolo == "on":
             return "elevated"
         return "restricted"
+
+    def _clean_tool_result_json_from_text(self, text: str) -> str:
+        """Strip machine-readable tool-result JSON from assistant-visible text."""
+        if not isinstance(text, str) or not text:
+            return text
+
+        def _looks_like_tool_result_blob(candidate: str) -> bool:
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                return False
+            if not isinstance(parsed, dict):
+                return False
+            tool_keys = {
+                "exit_code",
+                "status",
+                "aggregated_output",
+                "stdout",
+                "stderr",
+                "command",
+                "duration_ms",
+            }
+            return bool(tool_keys.intersection(parsed.keys()))
+
+        stripped = text.strip()
+        if _looks_like_tool_result_blob(stripped):
+            return ""
+
+        cleaned = re.sub(
+            r"\{[^{}]*\"(?:exit_code|status|aggregated_output|stdout|stderr|command|duration_ms)\"[^{}]*\}",
+            "",
+            text,
+        )
+        return cleaned.strip()
 
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
@@ -5572,7 +5751,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                     ):
                         _text = _event["item"].get("text", "")
                         if _text:
-                            jsonl_texts.append(_text)
+                            _text = self._clean_tool_result_json_from_text(_text)
+                            if _text:
+                                jsonl_texts.append(_text)
                     elif _etype == "turn.failed":
                         _codex_turn_failed = True
                         _err = _event.get("error") or {}
@@ -6875,6 +7056,7 @@ User Request:
                     _codex_text_chunk_count = 0  # track agent_message chunks for separators
                     _active_tool_calls = {}  # index → {id, name, input_parts}
                     _tool_call_counter = [0]  # mutable counter for non-Claude runtimes
+                    _codex_seen_item_ids = set()
                     try:
                         for line in process.stdout:
                             stdout_chunks.append(line)
@@ -7159,23 +7341,19 @@ User Request:
                                     # exec is invoked with --json. Parse assistant text
                                     # here so the WebUI streams human-readable content
                                     # instead of raw thread/turn metadata.
-                                    if _line_stripped.startswith("{"):
-                                        try:
-                                            _cx_obj = _json.loads(_line_stripped)
-                                        except (ValueError, KeyError):
-                                            _cx_obj = None
-                                        if _cx_obj:
-                                            _cx_type = _cx_obj.get("type", "")
-                                            if (
-                                                _cx_type == "item.completed"
-                                                and isinstance(
-                                                    _cx_obj.get("item"), dict
+                                    _cx_events = _parse_codex_transport_line(
+                                        _line_stripped, _codex_seen_item_ids
+                                    )
+                                    if _cx_events is not None:
+                                        for _cx_kind, _cx_data in _cx_events:
+                                            if stream_buffer:
+                                                stream_buffer.push(
+                                                    _cx_kind, _cx_data
                                                 )
-                                                and _cx_obj["item"].get("type")
-                                                == "agent_message"
-                                            ):
-                                                _cx_text = _cx_obj["item"].get(
-                                                    "text", ""
+                                            else:
+                                                loop.call_soon_threadsafe(
+                                                    queue.put_nowait,
+                                                    (_cx_kind, _cx_data),
                                                 )
                                                 # Extract and strip [STATUS_UPDATE: ...]
                                                 # markers (F004) so mobile-channel
@@ -9731,11 +9909,11 @@ User Request:
         """Fetch and cache OpenRouter model pricing."""
         if hasattr(self, '_openrouter_pricing_cache'):
             return self._openrouter_pricing_cache
-        
+
         try:
             import urllib.request
             import json
-            
+
             api_key = os.environ.get("OPENROUTER_API_KEY")
             if not api_key:
                 try:
@@ -9743,18 +9921,18 @@ User Request:
                     api_key = keyring.get_password("openrouter", "api_key")
                 except:
                     pass
-            
+
             if not api_key:
                 self._openrouter_pricing_cache = {}
                 return {}
-            
+
             req = urllib.request.Request(
                 "https://openrouter.ai/api/v1/models",
                 headers={"Authorization": "Bearer " + api_key},
             )
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read())
-            
+
             pricing = {}
             for model in data.get("data", []):
                 model_id = model.get("id", "")
@@ -9762,7 +9940,7 @@ User Request:
                     "prompt": float(model.get("pricing", {}).get("prompt", 0) or 0),
                     "completion": float(model.get("pricing", {}).get("completion", 0) or 0),
                 }
-            
+
             self._openrouter_pricing_cache = pricing
             return pricing
         except Exception:
@@ -9772,14 +9950,14 @@ User Request:
     def _wee_calculate_openrouter_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int):
         """Calculate estimated cost for OpenRouter API call."""
         pricing_cache = self._wee_fetch_openrouter_pricing()
-        
+
         if model_id not in pricing_cache:
             return None
-        
+
         p = pricing_cache[model_id]
         if p["prompt"] == 0 and p["completion"] == 0:
             return None
-        
+
         cost = (prompt_tokens * p["prompt"] + completion_tokens * p["completion"]) / 1000
         return f"${cost:.6f}"
 
@@ -14133,7 +14311,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
                 if _is_infra_error and (_fb_runtime or _fb_model) and not _already_fb:
                     _eff_fb_runtime = _fb_runtime or runtime
-                    _eff_fb_model = _fb_model or model
+                    # Smart model selection: if switching runtimes, use fallback_model
+                    # If no fallback_model configured and runtime changed, use "auto"
+                    if _fb_model:
+                        _eff_fb_model = _fb_model
+                    elif _fb_runtime and _fb_runtime != runtime:
+                        _eff_fb_model = "auto"  # Safe default for new runtime
+                    else:
+                        _eff_fb_model = model
                     bg_task_mgr.append_output(
                         task_id,
                         f"[Fallback] Primary failed ({primary_error_msg[:120]}), retrying with runtime={_eff_fb_runtime}, model={_eff_fb_model}",
@@ -14902,6 +15087,232 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 else "Notifications suppressed globally (critical alerts still delivered)"
             ),
         }
+
+    # --- Kanban Board API (Issue #367) ---
+
+    class KanbanItemUpdateRequest(BaseModel):
+        title: Optional[str] = None
+        details: Optional[str] = None
+        status: Optional[str] = None
+        agent: Optional[str] = None
+        due: Optional[str] = None
+        priority: Optional[str] = None
+        urgency: Optional[str] = None
+
+    class KanbanCommentRequest(BaseModel):
+        body: str
+
+    class KanbanDispatchRequest(BaseModel):
+        agent: str
+        prompt: Optional[str] = None
+        runtime: Optional[str] = None
+        model: Optional[str] = None
+        timeout: Optional[int] = None
+        notify: Optional[bool] = None
+        permission_mode: Optional[str] = None
+
+    def _kanban_http_error(exc: Exception):
+        from kanban import KanbanError
+
+        if isinstance(exc, KanbanError):
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise exc
+
+    @app.get("/api/v1/kanban/board")
+    async def get_kanban_board(
+        request: Request,
+        agent: Optional[str] = None,
+        urgency: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        source: Optional[str] = None,
+        repo: Optional[str] = None,
+        limit: int = 200,
+    ):
+        """Return Kanban cards grouped by board column."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from kanban import load_kanban_board
+
+        return load_kanban_board(
+            todo_path=_resolve_todo_file(agent),
+            repo=repo,
+            limit=limit,
+            agent=agent,
+            urgency=urgency,
+            date_from=date_from,
+            date_to=date_to,
+            source=source,
+        )
+
+    @app.get("/api/v1/kanban/items/{item_id}")
+    async def get_kanban_item(request: Request, item_id: str, repo: Optional[str] = None):
+        """Return one Kanban item with comments when available."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import github_item
+
+            return github_item(repo, item_id)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.patch("/api/v1/kanban/items/{item_id}")
+    async def update_kanban_item(
+        request: Request,
+        item_id: str,
+        body: KanbanItemUpdateRequest,
+        repo: Optional[str] = None,
+    ):
+        """Edit a GitHub-backed Kanban item."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import update_github_item
+
+            return update_github_item(
+                repo,
+                item_id,
+                title=body.title,
+                details=body.details,
+                status=body.status,
+                agent=body.agent,
+                due=body.due,
+                priority=body.priority,
+                urgency=body.urgency,
+            )
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/comments")
+    async def comment_kanban_item(
+        request: Request,
+        item_id: str,
+        body: KanbanCommentRequest,
+        repo: Optional[str] = None,
+    ):
+        """Add a comment to a GitHub-backed Kanban item."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import comment_github_item
+
+            return comment_github_item(repo, item_id, body.body)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/complete")
+    async def complete_kanban_item(
+        request: Request,
+        item_id: str,
+        repo: Optional[str] = None,
+    ):
+        """Mark a GitHub-backed Kanban item complete and close it."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import complete_github_item
+
+            return complete_github_item(repo, item_id)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/close")
+    async def close_kanban_item(
+        request: Request,
+        item_id: str,
+        repo: Optional[str] = None,
+    ):
+        """Close a GitHub-backed Kanban item."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import close_github_item
+
+            return close_github_item(repo, item_id)
+        except Exception as exc:
+            _kanban_http_error(exc)
+
+    @app.post("/api/v1/kanban/items/{item_id}/dispatch")
+    async def dispatch_kanban_item(
+        request: Request,
+        item_id: str,
+        body: KanbanDispatchRequest,
+        repo: Optional[str] = None,
+    ):
+        """Dispatch a GitHub-backed Kanban item to an agent."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        try:
+            from kanban import github_item, mark_github_item_ai_active
+
+            item = github_item(repo, item_id)
+            item_repo = item.get("repo") or repo
+            issue = item.get("github_issue_number")
+            task_prompt = body.prompt or "Complete this TODO."
+            prompt = (
+                f"You have been dispatched from Wee Kanban to work on "
+                f"{item_repo} issue #{issue}: {item.get('title', '')}\n\n"
+                f"URL: {item.get('url', '')}\n\n"
+                f"Current details:\n{item.get('details', '')}\n\n"
+                f"Task:\n{task_prompt}\n\n"
+                "When work is complete, comment on the issue with a concise "
+                "summary and update the Kanban labels to status:pending-review."
+            )
+            task = await create_background_task(
+                BackgroundTaskRequest(
+                    prompt=prompt,
+                    agent=body.agent,
+                    runtime=body.runtime,
+                    model=body.model,
+                    timeout=body.timeout,
+                    notify=body.notify,
+                    permission_mode=body.permission_mode,
+                ),
+                request,
+            )
+            comment = (
+                f"Dispatched to agent `{body.agent}` from Wee Kanban.\n\n"
+                f"Background task: `{task.get('task_id')}`\n"
+                f"Requested by: `{user.get('identity', 'unknown')}`"
+            )
+            updated = mark_github_item_ai_active(
+                item_repo,
+                item_id,
+                agent=body.agent,
+                comment=comment,
+            )
+            return {"success": True, "task": task, "item": updated}
+        except Exception as exc:
+            _kanban_http_error(exc)
 
     # --- Task Scheduler ---
     if SCHEDULER_ENABLED:
@@ -16813,6 +17224,105 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # --- .env File Editor API ---
     _env_file_path = Path(SCRIPT_BASE_DIR) / ".env"
 
+    def _read_env_lines() -> list[str]:
+        if not _env_file_path.exists():
+            return []
+        return _env_file_path.read_text().splitlines()
+
+    def _set_env_value(content: str, key: str, value: str) -> str:
+        lines = content.splitlines()
+        updated = False
+        next_lines: list[str] = []
+        for line in lines:
+            if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+                if value:
+                    next_lines.append(f"{key}={value}")
+                updated = True
+            else:
+                next_lines.append(line)
+        if value and not updated:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
+            next_lines.append(f"{key}={value}")
+        return "\n".join(next_lines).rstrip() + ("\n" if next_lines else "")
+
+    def _env_value(key: str) -> str:
+        for line in _read_env_lines():
+            if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+        return os.environ.get(key, "")
+
+    class KanbanSettingsRequest(BaseModel):
+        github_repo: str = ""
+
+    def _validate_repo_slug(value: str) -> str:
+        repo = value.strip()
+        if not repo:
+            return ""
+        if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
+            raise HTTPException(
+                status_code=400,
+                detail="github_repo must be in owner/repo format",
+            )
+        return repo
+
+    @app.get("/api/v1/settings/kanban")
+    async def get_kanban_settings(request: Request):
+        """Return Kanban board source settings."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        from kanban import _repo_from_git_origin
+
+        configured = _env_value("KANBAN_GITHUB_REPO")
+        fallback = _repo_from_git_origin() or ""
+        return {
+            "github_repo": configured,
+            "effective_repo": configured or fallback,
+            "fallback_repo": fallback,
+            "path": str(_env_file_path),
+        }
+
+    @app.put("/api/v1/settings/kanban")
+    async def put_kanban_settings(body: KanbanSettingsRequest, request: Request):
+        """Persist Kanban board source settings."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        repo = _validate_repo_slug(body.github_repo)
+        try:
+            content = _env_file_path.read_text() if _env_file_path.exists() else ""
+            if _env_file_path.exists():
+                backup_path = Path(str(_env_file_path) + ".bak")
+                shutil.copy2(_env_file_path, backup_path)
+            _env_file_path.write_text(_set_env_value(content, "KANBAN_GITHUB_REPO", repo))
+            if repo:
+                os.environ["KANBAN_GITHUB_REPO"] = repo
+            else:
+                os.environ.pop("KANBAN_GITHUB_REPO", None)
+            from kanban import _repo_from_git_origin
+
+            fallback = _repo_from_git_origin() or ""
+            return {
+                "saved": True,
+                "github_repo": repo,
+                "effective_repo": repo or fallback,
+                "fallback_repo": fallback,
+                "path": str(_env_file_path),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save Kanban settings: {e}"
+            )
+
     @app.get("/api/v1/settings/env")
     async def get_env_file(request: Request):
         """Return .env file contents for editing."""
@@ -17892,31 +18402,31 @@ def main():
 Examples:
   # Execute a prompt with default settings
   %(prog)s "What is the status of the cluster?"
-  
+
   # Set agent via CLI
   %(prog)s --agent devops "Check server status"
-  
+
   # Set model and runtime via CLI
   %(prog)s --runtime gemini --model gemini-1.5-pro "Analyze this code"
-  
+
   # Use custom configuration file
   %(prog)s --config my-agents.json "What can you do?"
-  
+
   # List available agents
   %(prog)s --list-agents
-  
+
   # List available agents with custom config
   %(prog)s --list-agents --config my-agents.json
-  
+
   # List available models for current runtime
   %(prog)s --list-models
-  
+
   # List available runtimes
   %(prog)s --list-runtimes
-  
+
   # Combine multiple options
   %(prog)s --agent family --runtime claude --model sonnet "Find recipes"
-  
+
   # Backwards compatible: positional arguments
   %(prog)s "What's the weather?" my_session my-config.json
 """,

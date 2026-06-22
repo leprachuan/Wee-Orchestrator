@@ -52,8 +52,8 @@ def test_theme_agent_colors():
     """Test agent color mapping"""
     assert get_agent_color("orchestrator") == "green"
     assert get_agent_color("wee-dev") == "blue"
-    assert get_agent_color("wee-qa") == "yellow"
-    assert get_agent_color("wee-doc") == "cyan"
+    assert get_agent_color("wee-dev") == "yellow"
+    assert get_agent_color("wee-dev") == "cyan"
     assert get_agent_color("email-triage") == "magenta"
     assert get_agent_color("research") == "white"
 
@@ -79,8 +79,8 @@ def test_agent_colors_mapping_complete():
     expected_agents = [
         "orchestrator",
         "wee-dev",
-        "wee-qa",
-        "wee-doc",
+        "wee-dev",
+        "wee-dev",
         "email-triage",
         "family-knowledge",
         "research",

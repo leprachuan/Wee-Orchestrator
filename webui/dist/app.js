@@ -1476,11 +1476,17 @@ function looksLikeCodexTransportFrames(text) {
     trimmed.includes('"type":"thread.started"') ||
     trimmed.includes('"type":"turn.started"') ||
     trimmed.includes('"type":"turn.completed"') ||
+    trimmed.includes('"type":"item.started"') ||
     trimmed.includes('"type":"item.completed"') ||
+    trimmed.includes('"type":"response.started"') ||
+    trimmed.includes('"type":"response.completed"') ||
     trimmed.includes('"type": "thread.started"') ||
     trimmed.includes('"type": "turn.started"') ||
     trimmed.includes('"type": "turn.completed"') ||
+    trimmed.includes('"type": "item.started"') ||
     trimmed.includes('"type": "item.completed"')
+    || trimmed.includes('"type": "response.started"') ||
+    trimmed.includes('"type": "response.completed"')
   );
 }
 
@@ -1523,10 +1529,15 @@ function normalizeCodexStreamText(text) {
         evt.type === 'thread.completed' ||
         evt.type === 'turn.started' ||
         evt.type === 'turn.completed' ||
-        evt.type === 'item.started'
+        evt.type === 'item.started' ||
+        evt.type === 'response.started' ||
+        evt.type === 'response.completed'
       ) {
         continue;
       }
+      // Any other structured Codex transport frame is operational metadata
+      // and must not render as raw JSON in the transcript.
+      continue;
     } catch {
       out.push({ text: line, isAgentMessage: false });
       continue;
@@ -2370,6 +2381,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- View nav ---
   $('btn-nav-chat').addEventListener('click', showChatPanel);
   $('btn-nav-background').addEventListener('click', showBackgroundPanel);
+  $('btn-nav-kanban').addEventListener('click', showKanbanPanel);
   $('btn-nav-scheduler').addEventListener('click', showSchedulerPanel);
   $('btn-nav-notifications').addEventListener('click', toggleNotificationPanel);
 
@@ -2622,6 +2634,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-sched-refresh').addEventListener('click', () => loadSchedulerJobs(true));
   $('btn-sched-new').addEventListener('click', openNewJobForm);
 
+  // --- Kanban UI events ---
+  $('btn-kanban-refresh').addEventListener('click', () => loadKanbanBoard(true));
+  if ($('btn-kanban-open-sidebar')) $('btn-kanban-open-sidebar').addEventListener('click', () => toggleSidebar(true));
+
   // --- Background Tasks UI events ---
   $('btn-bg-refresh').addEventListener('click', () => loadBackgroundTasks(true));
 
@@ -2654,6 +2670,7 @@ function showChatPanel() {
   hide($('secrets-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
+  hide($('kanban-panel'));
   show($('btn-new-chat'));
   show($('sessions-list'));
   hide($('bg-sidebar-list'));
@@ -2662,6 +2679,7 @@ function showChatPanel() {
   $('btn-nav-chat').classList.add('active');
   $('btn-nav-scheduler').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
@@ -2670,6 +2688,7 @@ function showChatPanel() {
 
 function showSchedulerPanel() {
   hide($('secrets-panel'));
+  hide($('kanban-panel'));
   hide($('chat-panel'));
   show($('scheduler-panel'));
   hide($('background-panel'));
@@ -2681,6 +2700,7 @@ function showSchedulerPanel() {
   $('btn-nav-scheduler').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
@@ -2694,6 +2714,7 @@ function showBackgroundPanel() {
   hide($('secrets-panel'));
   hide($('chat-panel'));
   hide($('scheduler-panel'));
+  hide($('kanban-panel'));
   show($('background-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
@@ -2703,12 +2724,212 @@ function showBackgroundPanel() {
   $('btn-nav-background').classList.add('active');
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   $('btn-nav-secrets').classList.remove('active');
   hideNotificationPanel();
   loadBackgroundTasks();
   // On mobile, keep sidebar open so task list is visible immediately
   if (isMobileViewport()) toggleSidebar(true);
+}
+
+function showKanbanPanel() {
+  hide($('secrets-panel'));
+  hide($('chat-panel'));
+  hide($('scheduler-panel'));
+  hide($('background-panel'));
+  show($('kanban-panel'));
+  hide($('btn-new-chat'));
+  hide($('sessions-list'));
+  hide($('bg-sidebar-list'));
+  hide($('sched-sidebar-list'));
+  hide($('request-queue-panel'));
+  $('btn-nav-kanban').classList.add('active');
+  $('btn-nav-chat').classList.remove('active');
+  $('btn-nav-background').classList.remove('active');
+  $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-notifications').classList.remove('active');
+  $('btn-nav-secrets').classList.remove('active');
+  hideNotificationPanel();
+  loadKanbanBoard();
+  if (isMobileViewport()) toggleSidebar(false);
+}
+
+const KANBAN_COLUMNS = [
+  ['todo', 'To Do'],
+  ['in-progress', 'In Progress'],
+  ['ai-active', 'AI Active'],
+  ['pending-review', 'Review'],
+  ['done', 'Done'],
+];
+
+async function loadKanbanBoard(showToast = false) {
+  const columnsEl = $('kanban-columns');
+  const dueEl = $('kanban-due');
+  if (!columnsEl) return;
+
+  columnsEl.innerHTML = '<p class="kanban-empty">Loading board…</p>';
+  hide(dueEl);
+
+  try {
+    const board = await apiRequest('GET', '/kanban/board');
+    renderKanbanBoard(board);
+    if (showToast) schedToast('Kanban refreshed', 'success');
+  } catch (err) {
+    try {
+      const todos = await apiRequest('GET', '/todos');
+      renderKanbanBoard(legacyTodosToKanban(todos));
+      if (showToast) schedToast('Kanban refreshed from TODOs', 'success');
+    } catch (fallbackErr) {
+      columnsEl.innerHTML = `<p class="kanban-empty kanban-error">Kanban unavailable: ${escHtml(fallbackErr.message || String(fallbackErr))}</p>`;
+      updateKanbanBadges(0, 0);
+    }
+  }
+}
+
+function legacyTodosToKanban(response) {
+  const cards = (response.todos || []).map((todo, index) => {
+    const labels = todo.labels || [];
+    const status = labelValue(labels, 'status:') || 'todo';
+    const normalizedStatus = KANBAN_COLUMNS.some(([key]) => key === status) ? status : 'todo';
+    const dueBucket = dueBucketFor(todo.due);
+    return {
+      id: `legacy-todo:${index}:${todo.description || ''}`,
+      title: todo.description || 'Untitled',
+      source: 'todo',
+      status: normalizedStatus,
+      agent: labelValue(labels, 'agent:') || response.agent,
+      priority: labelValue(labels, 'priority:') || 'normal',
+      urgency: labels.some(label => ['urgent', 'urgency:urgent', 'urgency:high'].includes(String(label).toLowerCase())) ? 'urgent' : 'normal',
+      due: todo.due,
+      due_bucket: dueBucket,
+      is_overdue: dueBucket === 'overdue',
+      labels,
+      details: todo.details || '',
+      url: null,
+      github_issue_number: null,
+    };
+  });
+  const columns = Object.fromEntries(KANBAN_COLUMNS.map(([key]) => [key, []]));
+  cards.forEach(card => columns[card.status].push(card));
+  return {
+    success: true,
+    columns,
+    agents: [...new Set(cards.map(card => card.agent).filter(Boolean))].sort(),
+    sources: cards.length ? ['todo'] : [],
+    total: cards.length,
+    repo: null,
+  };
+}
+
+function labelValue(labels, prefix) {
+  const found = labels.find(label => String(label).toLowerCase().startsWith(prefix));
+  if (!found) return null;
+  const parts = String(found).split(':');
+  return parts.length > 1 ? parts.slice(1).join(':').trim() : null;
+}
+
+function dueBucketFor(value) {
+  if (!value) return 'none';
+  const date = parseKanbanDate(value);
+  if (!date || Number.isNaN(date.getTime())) return 'none';
+  const now = new Date();
+  if (date < now) return 'overdue';
+  if (date.toDateString() === now.toDateString()) return 'today';
+  const soon = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+  return date <= soon ? 'soon' : 'future';
+}
+
+function parseKanbanDate(value) {
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  return new Date(raw);
+}
+
+function renderKanbanBoard(board) {
+  const columnsEl = $('kanban-columns');
+  const dueCards = KANBAN_COLUMNS.flatMap(([key]) => board.columns?.[key] || [])
+    .filter(card => ['overdue', 'today', 'soon'].includes(card.due_bucket));
+
+  updateKanbanBadges(board.total || 0, dueCards.length);
+  renderKanbanDue(dueCards);
+
+  columnsEl.innerHTML = KANBAN_COLUMNS.map(([key, title]) => {
+    const cards = board.columns?.[key] || [];
+    return `
+      <section class="kanban-column">
+        <div class="kanban-column-header">
+          <span class="kanban-column-title">${title}</span>
+          <span class="badge-muted">${cards.length}</span>
+        </div>
+        <div class="kanban-card-list">
+          ${cards.length ? cards.map(renderKanbanCard).join('') : '<p class="kanban-column-empty">No cards</p>'}
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+function renderKanbanDue(cards) {
+  const dueEl = $('kanban-due');
+  if (!dueEl) return;
+  if (!cards.length) {
+    hide(dueEl);
+    return;
+  }
+
+  show(dueEl);
+  dueEl.innerHTML = `
+    <div class="kanban-due-header">
+      <strong>Due Soon</strong>
+      <span class="badge-warn">${cards.length}</span>
+    </div>
+    <div class="kanban-due-grid">
+      ${cards.slice(0, 6).map(renderKanbanCard).join('')}
+    </div>
+  `;
+}
+
+function renderKanbanCard(card) {
+  const due = card.due ? `<span class="kanban-pill kanban-due-${card.due_bucket || 'none'}">${escHtml(shortKanbanDate(card.due, card.due_bucket))}</span>` : '';
+  const agent = card.agent ? `<span class="kanban-pill">${escHtml(card.agent)}</span>` : '';
+  const urgent = card.urgency === 'urgent' ? '<span class="kanban-pill kanban-urgent">urgent</span>' : '';
+  const issue = card.github_issue_number ? `<span class="kanban-issue">#${card.github_issue_number}</span>` : '';
+  const link = card.url ? `<a class="kanban-link" href="${escHtml(card.url)}" target="_blank" rel="noopener">↗</a>` : '';
+  return `
+    <article class="kanban-card">
+      <div class="kanban-card-top">
+        <span class="kanban-source">${escHtml(card.source || 'card')}</span>
+        ${issue}
+        ${link}
+      </div>
+      <h3>${escHtml(card.title || 'Untitled')}</h3>
+      <div class="kanban-card-meta">${agent}${due}${urgent}</div>
+      ${card.details ? `<p>${escHtml(card.details)}</p>` : ''}
+    </article>
+  `;
+}
+
+function shortKanbanDate(value, bucket) {
+  const short = String(value).replace('T', ' ').replace('Z', '');
+  if (bucket === 'overdue') return `Overdue ${short}`;
+  if (bucket === 'today') return `Today ${short}`;
+  if (bucket === 'soon') return `Soon ${short}`;
+  return short;
+}
+
+function updateKanbanBadges(total, dueCount) {
+  const countBadge = $('kanban-count-badge');
+  if (countBadge) countBadge.textContent = `${total} card${total === 1 ? '' : 's'}`;
+
+  const dueBadge = $('kanban-due-badge');
+  if (dueBadge) {
+    dueBadge.textContent = dueCount;
+    dueBadge.classList.toggle('hidden', dueCount === 0);
+  }
 }
 
 
@@ -2720,6 +2941,7 @@ function showSecretsPanel() {
   hide($('chat-panel'));
   hide($('scheduler-panel'));
   hide($('background-panel'));
+  hide($('kanban-panel'));
   show($('secrets-panel'));
   hide($('btn-new-chat'));
   hide($('sessions-list'));
@@ -2730,6 +2952,7 @@ function showSecretsPanel() {
   $('btn-nav-chat').classList.remove('active');
   $('btn-nav-background').classList.remove('active');
   $('btn-nav-scheduler').classList.remove('active');
+  $('btn-nav-kanban').classList.remove('active');
   $('btn-nav-notifications').classList.remove('active');
   hideNotificationPanel();
   checkKeyringStatus();
@@ -3208,6 +3431,9 @@ function renderJobEditForm(job, container) {
     } catch (err) {
       schedToast('Update failed: ' + err.message, 'error');
     }
+  }, {
+    fallbackRuntime: job?.fallback_runtime || '',
+    fallbackModel: job?.fallback_model || '',
   });
 }
 
@@ -3470,7 +3696,9 @@ async function populateFallbackRuntimeDropdown(selectEl, current = '') {
 }
 
 async function populateFallbackModelDropdown(selectEl, runtime = '', current = '') {
-  const selectedRuntime = runtime || document.getElementById('sched-fallback-runtime')?.value || 'copilot';
+  const form = selectEl?.closest('form');
+  const runtimeEl = form?.querySelector('#sched-fallback-runtime');
+  const selectedRuntime = runtime || runtimeEl?.value || 'copilot';
   current = current || selectEl.dataset.current || '';
   selectEl.innerHTML = '<option value="">None (no fallback)</option>';
   try {
@@ -3490,16 +3718,25 @@ async function populateFallbackModelDropdown(selectEl, runtime = '', current = '
   }
 }
 
-function wireJobForm(container, onSubmit) {
-  // Populate fallback dropdowns (Issue #159)
-  const fbRtEl = document.getElementById('sched-fallback-runtime');
-  const fbModelEl = document.getElementById('sched-fallback-model');
+function wireJobForm(container, onSubmit, options = {}) {
+  // Populate fallback dropdowns with the current saved values before async
+  // options loading completes, otherwise edit-mode selections can be reset.
+  const fbRtEl = container.querySelector('#sched-fallback-runtime');
+  const fbModelEl = container.querySelector('#sched-fallback-model');
+  const currentFallbackRuntime = options.fallbackRuntime || '';
+  const currentFallbackModel = options.fallbackModel || '';
   if (fbRtEl) {
-    populateFallbackRuntimeDropdown(fbRtEl).then(() => {
-      if (fbModelEl) populateFallbackModelDropdown(fbModelEl, fbRtEl.value, fbModelEl.dataset.current || '');
+    populateFallbackRuntimeDropdown(fbRtEl, currentFallbackRuntime).then(() => {
+      if (fbModelEl) {
+        populateFallbackModelDropdown(
+          fbModelEl,
+          fbRtEl.value || currentFallbackRuntime,
+          currentFallbackModel,
+        );
+      }
     });
   } else if (fbModelEl) {
-    populateFallbackModelDropdown(fbModelEl);
+    populateFallbackModelDropdown(fbModelEl, '', currentFallbackModel);
   }
   if (fbRtEl && fbModelEl) {
     fbRtEl.addEventListener('change', () => populateFallbackModelDropdown(fbModelEl, fbRtEl.value));
@@ -3612,8 +3849,8 @@ function wireJobForm(container, onSubmit) {
       payload.agent   = data.agent || 'orchestrator';
       payload.runtime = data.runtime || 'claude';
       payload.model   = data.model?.trim() || null;
-      const fbRt = document.getElementById('sched-fallback-runtime')?.value || '';
-      const fbModel = document.getElementById('sched-fallback-model')?.value || '';
+      const fbRt = container.querySelector('#sched-fallback-runtime')?.value || '';
+      const fbModel = container.querySelector('#sched-fallback-model')?.value || '';
       payload.fallback_runtime = fbRt;
       payload.fallback_model = fbModel;
     } else {
@@ -6515,6 +6752,11 @@ if (document.readyState !== 'loading') {
   const btnEnvSave  = document.getElementById('btn-env-save');
   const btnEnvRestart = document.getElementById('btn-env-restart');
   const envStatus   = document.getElementById('asf-env-status');
+  const kanbanRepoInput = document.getElementById('asf-kanban-repo');
+  const kanbanEffective = document.getElementById('asf-kanban-effective');
+  const btnKanbanLoad = document.getElementById('btn-kanban-settings-load');
+  const btnKanbanSave = document.getElementById('btn-kanban-settings-save');
+  const kanbanStatus = document.getElementById('asf-kanban-status');
 
   function showEnvStatus(msg, isError) {
     if (!envStatus) return;
@@ -6562,6 +6804,49 @@ if (document.readyState !== 'loading') {
   if (btnEnvLoad)    btnEnvLoad.addEventListener('click', loadEnvFile);
   if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
   if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
+
+  function showKanbanSettingsStatus(msg, isError) {
+    if (!kanbanStatus) return;
+    kanbanStatus.textContent = msg;
+    kanbanStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    kanbanStatus.classList.remove('hidden');
+    setTimeout(() => kanbanStatus.classList.add('hidden'), 5000);
+  }
+
+  function renderKanbanSettings(data) {
+    if (kanbanRepoInput) kanbanRepoInput.value = data.github_repo || '';
+    if (kanbanEffective) {
+      const effective = data.effective_repo || 'none';
+      const fallback = data.github_repo ? '' : ' (default from deployment)';
+      kanbanEffective.textContent = `Effective source: ${effective}${fallback}`;
+    }
+  }
+
+  async function loadKanbanSettings() {
+    if (kanbanEffective) kanbanEffective.textContent = 'Loading current source...';
+    try {
+      const data = await apiRequest('GET', '/settings/kanban');
+      renderKanbanSettings(data);
+    } catch (e) {
+      showKanbanSettingsStatus('Failed to load Kanban settings: ' + e.message, true);
+      if (kanbanEffective) kanbanEffective.textContent = 'Effective source unavailable';
+    }
+  }
+
+  async function saveKanbanSettings() {
+    const repo = (kanbanRepoInput?.value || '').trim();
+    try {
+      const data = await apiRequest('PUT', '/settings/kanban', { github_repo: repo });
+      renderKanbanSettings(data);
+      showKanbanSettingsStatus('✓ Kanban source saved', false);
+      loadKanbanBoard(true);
+    } catch (e) {
+      showKanbanSettingsStatus('Failed to save Kanban source: ' + e.message, true);
+    }
+  }
+
+  if (btnKanbanLoad) btnKanbanLoad.addEventListener('click', loadKanbanSettings);
+  if (btnKanbanSave) btnKanbanSave.addEventListener('click', saveKanbanSettings);
 
 
 
@@ -6747,10 +7032,11 @@ if (document.readyState !== 'loading') {
     if (btnRemove)  btnRemove.addEventListener('click',  () => removeBotToken(ch));
   }
 
-  // Patch openSettings to also load bot token status when the panel opens
+  // Patch openSettings to also load settings that live outside agents.json.
   const _wrappedOpenForBots = openSettings;
   openSettings = async function() {
     await _wrappedOpenForBots();
+    await loadKanbanSettings();
     if (ASF.selectedName) await loadBotTokenStatus(ASF.selectedName);
   };
 

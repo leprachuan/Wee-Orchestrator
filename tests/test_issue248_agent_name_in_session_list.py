@@ -78,11 +78,11 @@ def test_update_session_agent():
     mgr, path = _make_history_manager()
     try:
         mgr.create_session("telegram", "testuser", "sess004", agent="orchestrator")
-        result = mgr.update_session_agent("telegram", "testuser", "sess004", "wee-qa")
+        result = mgr.update_session_agent("telegram", "testuser", "sess004", "wee-dev")
         assert result is True, "update_session_agent should return True on success"
         sessions = mgr.get_sessions("telegram", "testuser")
         assert (
-            sessions[0]["agent"] == "wee-qa"
+            sessions[0]["agent"] == "wee-dev"
         ), f"Expected 'wee-qa', got {sessions[0].get('agent')}"
     finally:
         os.unlink(path)

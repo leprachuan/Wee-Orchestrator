@@ -27,9 +27,9 @@ from agent_manager import SessionManager  # noqa: E402
 AGENTS_WITH_DISPATCH = {
     "agents": [
         {
-            "name": "wee-qa",
+            "name": "wee-dev",
             "description": "QA agent",
-            "path": "/opt/wee-qa",
+            "path": "/opt/wee-dev",
             "dispatch_config": {
                 "runtime": "openai",
                 "model": "gpt-5.4-mini",
@@ -77,8 +77,8 @@ class TestDispatchConfigPreservedOnLoad(unittest.TestCase):
     def test_load_agents_config_preserves_dispatch_config(self):
         """_load_agents_config must keep dispatch_config in the AGENTS dict."""
         mgr = SessionManager(str(self.cfg_path))
-        self.assertIn("wee-qa", mgr.AGENTS)
-        dc = mgr.AGENTS["wee-qa"].get("dispatch_config", {})
+        self.assertIn("wee-dev", mgr.AGENTS)
+        dc = mgr.AGENTS["wee-dev"].get("dispatch_config", {})
         self.assertNotEqual(dc, {}, "dispatch_config must not be stripped on load")
         self.assertEqual(dc.get("runtime"), "openai")
         self.assertEqual(dc.get("model"), "gpt-5.4-mini")
@@ -98,7 +98,7 @@ class TestDispatchConfigPreservedOnLoad(unittest.TestCase):
         # Force a reload
         ok, msg = mgr.reload_agents_from_disk()
         self.assertTrue(ok, f"Reload failed: {msg}")
-        dc = mgr.AGENTS["wee-qa"].get("dispatch_config", {})
+        dc = mgr.AGENTS["wee-dev"].get("dispatch_config", {})
         self.assertNotEqual(
             dc, {}, "dispatch_config stripped by reload_agents_from_disk"
         )
@@ -109,7 +109,7 @@ class TestDispatchConfigPreservedOnLoad(unittest.TestCase):
         """AGENTS.get(...).get('dispatch_config', {}) returns real values."""
         mgr = SessionManager(str(self.cfg_path))
         # Simulate what create_background_task does:
-        dc = mgr.AGENTS.get("wee-qa", {}).get("dispatch_config", {})
+        dc = mgr.AGENTS.get("wee-dev", {}).get("dispatch_config", {})
         self.assertEqual(dc.get("runtime"), "openai")
         self.assertEqual(dc.get("model"), "gpt-5.4-mini")
         self.assertIsNotNone(dc.get("timeout"))
@@ -235,9 +235,9 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
                 {
                     "agents": [
                         {
-                            "name": "wee-qa",
+                            "name": "wee-dev",
                             "description": "QA agent",
-                            "path": "/opt/wee-qa",
+                            "path": "/opt/wee-dev",
                             "dispatch_config": {
                                 "runtime": "openai",
                                 "model": "gpt-5.4-mini",
@@ -284,7 +284,7 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
         data = self._post(
             {
                 "prompt": "test",
-                "agent": "wee-qa",
+                "agent": "wee-dev",
                 "runtime": "my-runtime",
                 "model": "my-model",
                 "permission_mode": "sandboxed",
@@ -296,7 +296,7 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
 
     def test_dispatch_config_overrides_session_defaults(self):
         """dispatch_config.permission_mode beats session defaults when body is empty."""
-        data = self._post({"prompt": "test", "agent": "wee-qa"})
+        data = self._post({"prompt": "test", "agent": "wee-dev"})
         # wee-qa has dispatch_config.yolo=True → should resolve to "elevated"
         self.assertEqual(
             data.get("permission_mode"),
@@ -306,7 +306,7 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
 
     def test_wee_qa_dispatch_config_scenario(self):
         """Full wee-qa scenario: runtime/model/permission_mode from dispatch_config."""
-        data = self._post({"prompt": "test", "agent": "wee-qa"})
+        data = self._post({"prompt": "test", "agent": "wee-dev"})
         self.assertEqual(data.get("runtime"), "openai")
         self.assertEqual(data.get("model"), "gpt-5.4-mini")
         self.assertEqual(data.get("permission_mode"), "elevated")
@@ -332,7 +332,7 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
         data = self._post(
             {
                 "prompt": "test",
-                "agent": "wee-qa",
+                "agent": "wee-dev",
                 "permission_mode": "sandboxed",
                 "yolo": True,
             }
@@ -350,7 +350,7 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
         data = self._post(
             {
                 "prompt": "test",
-                "agent": "wee-qa",  # dispatch_config has yolo=True
+                "agent": "wee-dev",  # dispatch_config has yolo=True
                 "yolo": False,  # explicit False must win
             }
         )
@@ -363,7 +363,7 @@ class TestDispatchConfigPriorityResolution(unittest.TestCase):
     def test_body_yolo_none_still_uses_dispatch_config(self):
         """Omitted body.yolo (None) should fall through to dispatch_config."""
         # wee-qa has dispatch_config.yolo=True
-        data = self._post({"prompt": "test", "agent": "wee-qa"})
+        data = self._post({"prompt": "test", "agent": "wee-dev"})
         self.assertEqual(
             data.get("permission_mode"),
             "elevated",
@@ -390,7 +390,7 @@ class TestBackgroundTaskRequestYoloField(unittest.TestCase):
         """POST /api/v1/background-tasks must accept yolo field (no 422)."""
         resp = self.client.post(
             "/api/v1/background-tasks",
-            json={"prompt": "test", "agent": "wee-qa", "yolo": True},
+            json={"prompt": "test", "agent": "wee-dev", "yolo": True},
             headers=self.headers,
         )
         self.assertNotEqual(
@@ -403,7 +403,7 @@ class TestBackgroundTaskRequestYoloField(unittest.TestCase):
         """POST /api/v1/background-tasks must accept yolo=false."""
         resp = self.client.post(
             "/api/v1/background-tasks",
-            json={"prompt": "test", "agent": "wee-qa", "yolo": False},
+            json={"prompt": "test", "agent": "wee-dev", "yolo": False},
             headers=self.headers,
         )
         self.assertNotEqual(resp.status_code, 422)
@@ -412,7 +412,7 @@ class TestBackgroundTaskRequestYoloField(unittest.TestCase):
         """POST /api/v1/background-tasks must accept requests without yolo."""
         resp = self.client.post(
             "/api/v1/background-tasks",
-            json={"prompt": "test", "agent": "wee-qa"},
+            json={"prompt": "test", "agent": "wee-dev"},
             headers=self.headers,
         )
         self.assertNotEqual(resp.status_code, 422)
@@ -462,7 +462,7 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                 session_id="s1",
                 user_identity="user1",
                 channel="telegram",
-                agent="wee-qa",
+                agent="wee-dev",
                 runtime="copilot",
                 model="auto",
                 prompt="first task",
@@ -476,7 +476,7 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                 session_id="s2",
                 user_identity="user1",
                 channel="telegram",
-                agent="wee-qa",
+                agent="wee-dev",
                 runtime="copilot",
                 model="auto",
                 prompt="second task",
@@ -510,7 +510,7 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                 session_id="s-old",
                 user_identity="user1",
                 channel="telegram",
-                agent="wee-qa",
+                agent="wee-dev",
                 runtime="copilot",
                 model="auto",
                 prompt="queued task",
@@ -566,9 +566,9 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                         {
                             "agents": [
                                 {
-                                    "name": "wee-qa",
+                                    "name": "wee-dev",
                                     "description": "QA agent",
-                                    "path": "/opt/wee-qa",
+                                    "path": "/opt/wee-dev",
                                     "max_concurrent": 1,
                                     "dispatch_config": {
                                         "runtime": "openai",
@@ -610,7 +610,7 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                     session_id="seed-session-slot",
                     user_identity=_resolved_identity,
                     channel="telegram",
-                    agent="wee-qa",
+                    agent="wee-dev",
                     runtime="openai",
                     model="gpt-5.4-mini",
                     prompt="seed task holding the slot",
@@ -622,7 +622,7 @@ class TestQueuedTaskPermissionModePreserved(unittest.TestCase):
                 # POST a second task — slot is occupied, so it must be queued.
                 r2 = client.post(
                     "/api/v1/background-tasks",
-                    json={"prompt": "second", "agent": "wee-qa"},
+                    json={"prompt": "second", "agent": "wee-dev"},
                     headers=headers,
                 )
                 self.assertIn(r2.status_code, (200, 201), r2.text[:200])
@@ -703,7 +703,7 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
                         "t1",
                         "s1",
                         "prompt",
-                        "wee-qa",
+                        "wee-dev",
                         runtime,
                         model,
                         "telegram",
@@ -822,9 +822,9 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
                         {
                             "agents": [
                                 {
-                                    "name": "wee-qa",
+                                    "name": "wee-dev",
                                     "description": "QA agent",
-                                    "path": "/opt/wee-qa",
+                                    "path": "/opt/wee-dev",
                                     "dispatch_config": {
                                         "runtime": "openai",
                                         "model": "gpt-5.4-mini",
@@ -849,7 +849,7 @@ class TestRuntimeOpenaiAliasForWee(unittest.TestCase):
 
                     resp = client.post(
                         "/api/v1/background-tasks",
-                        json={"prompt": "test", "agent": "wee-qa"},
+                        json={"prompt": "test", "agent": "wee-dev"},
                         headers=headers,
                     )
                     self.assertIn(resp.status_code, (200, 201), resp.text[:200])
