@@ -5733,15 +5733,19 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # v0.125.0+: output is JSONL events from --json flag
             # Extract text from item.completed events where item.type == "agent_message"
+            # Also track turn failures and errors to avoid returning only planning messages
             jsonl_texts = []
+            _codex_turn_failed = False
+            _codex_error_msg = ""
             for _line in lines:
                 _line = _line.strip()
                 if not _line:
                     continue
                 try:
                     _event = _json.loads(_line)
+                    _etype = _event.get("type", "")
                     if (
-                        _event.get("type") == "item.completed"
+                        _etype == "item.completed"
                         and isinstance(_event.get("item"), dict)
                         and _event["item"].get("type") == "agent_message"
                     ):
@@ -5750,12 +5754,33 @@ You can mention an agent in your prompt and it will auto-delegate:
                             _text = self._clean_tool_result_json_from_text(_text)
                             if _text:
                                 jsonl_texts.append(_text)
+                    elif _etype == "turn.failed":
+                        _codex_turn_failed = True
+                        _err = _event.get("error") or {}
+                        _codex_error_msg = (
+                            _err.get("message", "") if isinstance(_err, dict)
+                            else str(_err)
+                        )
+                    elif _etype == "error":
+                        _codex_error_msg = _event.get("message", "") or str(
+                            _event.get("error", "")
+                        )
                 except (ValueError, KeyError):
                     continue
 
             if jsonl_texts:
-                # Use the last agent_message (most complete response)
-                result.extend(jsonl_texts[-1].splitlines())
+                _last_msg = jsonl_texts[-1]
+                # If the turn failed and we only have planning/intent messages
+                # (no concrete answer), append the error so the user sees why
+                if _codex_turn_failed and len(jsonl_texts) == 1:
+                    _err_detail = _codex_error_msg or "unknown error"
+                    _last_msg += (
+                        "\n\n⚠️ Codex turn failed before completing: " + _err_detail
+                    )
+                result.extend(_last_msg.splitlines())
+            elif _codex_turn_failed or _codex_error_msg:
+                _err_detail = _codex_error_msg or "unknown error"
+                result.append("⚠️ Codex execution failed: " + _err_detail)
             else:
                 # Fallback: legacy marker-based parsing for pre-v0.125.0 output
                 found_codex_marker = False
@@ -7385,7 +7410,51 @@ User Request:
                                                 "turn.started",
                                                 "turn.completed",
                                                 "item.started",
+                                                "item.failed",
+                                                "collab_tool_call",
                                             ):
+                                                continue
+                                            if _cx_type == "turn.failed":
+                                                _err = _cx_obj.get("error") or {}
+                                                _err_msg = (
+                                                    _err.get("message", "")
+                                                    if isinstance(_err, dict)
+                                                    else str(_err)
+                                                ) or "unknown error"
+                                                _fail_text = (
+                                                    "\n\n⚠️ Codex turn failed: "
+                                                    + _err_msg
+                                                )
+                                                if stream_buffer:
+                                                    stream_buffer.push(
+                                                        "chunk", _fail_text
+                                                    )
+                                                else:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait,
+                                                        ("chunk", _fail_text),
+                                                    )
+                                                continue
+                                            if _cx_type == "error":
+                                                _err_msg = _cx_obj.get(
+                                                    "message", ""
+                                                ) or str(
+                                                    _cx_obj.get("error", "")
+                                                )
+                                                if _err_msg:
+                                                    _err_text = (
+                                                        "\n\n⚠️ Codex error: "
+                                                        + _err_msg
+                                                    )
+                                                    if stream_buffer:
+                                                        stream_buffer.push(
+                                                            "chunk", _err_text
+                                                        )
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", _err_text),
+                                                        )
                                                 continue
 
                                     # Codex exec tool call patterns
@@ -17452,6 +17521,86 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
             raise HTTPException(status_code=500, detail=f"Reload failed: {msg}")
 
+
+
+
+    # --- Per-agent Instructions (AGENTS.md) API ---
+
+    @app.get("/api/v1/agents/{agent_name}/instructions")
+    async def get_agent_instructions(agent_name: str, request: Request):
+        """Return the AGENTS.md content for the given agent."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        agent_info = session_mgr.AGENTS.get(agent_name)
+        if agent_info is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent_path = Path(agent_info["path"]).expanduser().resolve()
+        instructions_path = agent_path / "AGENTS.md"
+
+        # Path traversal guard
+        try:
+            instructions_path.resolve().relative_to(agent_path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+
+        if not instructions_path.exists():
+            return JSONResponse(content={"content": "", "exists": False})
+
+        try:
+            content = instructions_path.read_text(encoding="utf-8")
+            return JSONResponse(content={"content": content, "exists": True})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read AGENTS.md: {exc}")
+
+    @app.put("/api/v1/agents/{agent_name}/instructions")
+    async def put_agent_instructions(agent_name: str, request: Request):
+        """Write updated content to the agent's AGENTS.md file."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        agent_info = session_mgr.AGENTS.get(agent_name)
+        if agent_info is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+        if not isinstance(body, dict) or "content" not in body:
+            raise HTTPException(status_code=400, detail="Body must contain a 'content' field")
+
+        content = body["content"]
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="'content' must be a string")
+
+        agent_path = Path(agent_info["path"]).expanduser().resolve()
+        instructions_path = agent_path / "AGENTS.md"
+
+        # Path traversal guard
+        try:
+            instructions_path.resolve().relative_to(agent_path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+
+        try:
+            agent_path.mkdir(parents=True, exist_ok=True)
+            instructions_path.write_text(content, encoding="utf-8")
+            print(
+                f"[API] AGENTS.md updated for '{agent_name}' by {auth.get('identity', 'unknown')}",
+                file=sys.stderr,
+            )
+            return JSONResponse(content={"status": "saved", "path": str(instructions_path)})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write AGENTS.md: {exc}")
 
 
     # --- Per-agent Bot Token Management API ---
