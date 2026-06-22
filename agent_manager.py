@@ -5554,27 +5554,52 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             # v0.125.0+: output is JSONL events from --json flag
             # Extract text from item.completed events where item.type == "agent_message"
+            # Also track turn failures and errors to avoid returning only planning messages
             jsonl_texts = []
+            _codex_turn_failed = False
+            _codex_error_msg = ""
             for _line in lines:
                 _line = _line.strip()
                 if not _line:
                     continue
                 try:
                     _event = _json.loads(_line)
+                    _etype = _event.get("type", "")
                     if (
-                        _event.get("type") == "item.completed"
+                        _etype == "item.completed"
                         and isinstance(_event.get("item"), dict)
                         and _event["item"].get("type") == "agent_message"
                     ):
                         _text = _event["item"].get("text", "")
                         if _text:
                             jsonl_texts.append(_text)
+                    elif _etype == "turn.failed":
+                        _codex_turn_failed = True
+                        _err = _event.get("error") or {}
+                        _codex_error_msg = (
+                            _err.get("message", "") if isinstance(_err, dict)
+                            else str(_err)
+                        )
+                    elif _etype == "error":
+                        _codex_error_msg = _event.get("message", "") or str(
+                            _event.get("error", "")
+                        )
                 except (ValueError, KeyError):
                     continue
 
             if jsonl_texts:
-                # Use the last agent_message (most complete response)
-                result.extend(jsonl_texts[-1].splitlines())
+                _last_msg = jsonl_texts[-1]
+                # If the turn failed and we only have planning/intent messages
+                # (no concrete answer), append the error so the user sees why
+                if _codex_turn_failed and len(jsonl_texts) == 1:
+                    _err_detail = _codex_error_msg or "unknown error"
+                    _last_msg += (
+                        "\n\n⚠️ Codex turn failed before completing: " + _err_detail
+                    )
+                result.extend(_last_msg.splitlines())
+            elif _codex_turn_failed or _codex_error_msg:
+                _err_detail = _codex_error_msg or "unknown error"
+                result.append("⚠️ Codex execution failed: " + _err_detail)
             else:
                 # Fallback: legacy marker-based parsing for pre-v0.125.0 output
                 found_codex_marker = False
@@ -7207,7 +7232,51 @@ User Request:
                                                 "turn.started",
                                                 "turn.completed",
                                                 "item.started",
+                                                "item.failed",
+                                                "collab_tool_call",
                                             ):
+                                                continue
+                                            if _cx_type == "turn.failed":
+                                                _err = _cx_obj.get("error") or {}
+                                                _err_msg = (
+                                                    _err.get("message", "")
+                                                    if isinstance(_err, dict)
+                                                    else str(_err)
+                                                ) or "unknown error"
+                                                _fail_text = (
+                                                    "\n\n⚠️ Codex turn failed: "
+                                                    + _err_msg
+                                                )
+                                                if stream_buffer:
+                                                    stream_buffer.push(
+                                                        "chunk", _fail_text
+                                                    )
+                                                else:
+                                                    loop.call_soon_threadsafe(
+                                                        queue.put_nowait,
+                                                        ("chunk", _fail_text),
+                                                    )
+                                                continue
+                                            if _cx_type == "error":
+                                                _err_msg = _cx_obj.get(
+                                                    "message", ""
+                                                ) or str(
+                                                    _cx_obj.get("error", "")
+                                                )
+                                                if _err_msg:
+                                                    _err_text = (
+                                                        "\n\n⚠️ Codex error: "
+                                                        + _err_msg
+                                                    )
+                                                    if stream_buffer:
+                                                        stream_buffer.push(
+                                                            "chunk", _err_text
+                                                        )
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", _err_text),
+                                                        )
                                                 continue
 
                                     # Codex exec tool call patterns
