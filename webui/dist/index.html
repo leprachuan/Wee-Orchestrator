@@ -1067,5 +1067,16 @@
     });
   })();
   </script>
+
+  <!-- Kanban Card Detail Modal -->
+  <div id="kanban-detail-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeKanbanDetail()">
+    <div class="modal-box kanban-detail-modal-box glass-panel">
+      <div class="modal-header">
+        <h3>TODO Detail</h3>
+        <button class="modal-close-btn" onclick="closeKanbanDetail()">✕</button>
+      </div>
+      <div class="kanban-detail-body modal-body"></div>
+    </div>
+  </div>
 </body>
 </html>

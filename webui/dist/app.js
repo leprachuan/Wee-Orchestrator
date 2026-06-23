@@ -2911,9 +2911,10 @@ function renderKanbanCard(card) {
   const agent = card.agent ? `<span class="kanban-pill">${escHtml(card.agent)}</span>` : '';
   const urgent = card.urgency === 'urgent' ? '<span class="kanban-pill kanban-urgent">urgent</span>' : '';
   const issue = card.github_issue_number ? `<span class="kanban-issue">#${card.github_issue_number}</span>` : '';
-  const link = card.url ? `<a class="kanban-link" href="${escHtml(card.url)}" target="_blank" rel="noopener">↗</a>` : '';
+  const link = card.url ? `<a class="kanban-link" href="${escHtml(card.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>` : '';
+  const cardId = card.id || (card.github_issue_number ? String(card.github_issue_number) : '');
   return `
-    <article class="kanban-card">
+    <article class="kanban-card kanban-card-clickable" data-kanban-id="${escHtml(cardId)}">
       <div class="kanban-card-top">
         <span class="kanban-source">${escHtml(card.source || 'card')}</span>
         ${issue}
@@ -2943,6 +2944,233 @@ function updateKanbanBadges(total, dueCount) {
     dueBadge.textContent = dueCount;
     dueBadge.classList.toggle('hidden', dueCount === 0);
   }
+}
+
+// ── Kanban Card Detail Modal ─────────────────────────────────────────────────
+
+let _kanbanDetailCard = null;
+
+document.addEventListener('click', (e) => {
+  const card = e.target.closest('.kanban-card-clickable');
+  if (!card) return;
+  const id = card.dataset.kanbanId;
+  if (id) openKanbanDetail(id);
+});
+
+async function openKanbanDetail(itemId) {
+  if (!itemId) return;
+  const modal = $('kanban-detail-modal');
+  if (!modal) return;
+
+  modal.querySelector('.kanban-detail-body').innerHTML = '<p class="kanban-detail-loading">Loading…</p>';
+  modal.classList.remove('hidden');
+
+  try {
+    const item = await apiRequest('GET', `/kanban/items/${encodeURIComponent(itemId)}`);
+    _kanbanDetailCard = item;
+    renderKanbanDetailContent(item);
+  } catch (err) {
+    modal.querySelector('.kanban-detail-body').innerHTML =
+      `<p class="kanban-detail-error">Failed to load: ${escHtml(err.message)}</p>`;
+  }
+}
+
+function closeKanbanDetail() {
+  const modal = $('kanban-detail-modal');
+  if (modal) modal.classList.add('hidden');
+  _kanbanDetailCard = null;
+}
+
+function renderKanbanDetailContent(item) {
+  const body = document.querySelector('#kanban-detail-modal .kanban-detail-body');
+  if (!body) return;
+
+  const statusOptions = ['todo', 'backlog', 'in_progress', 'pending_review', 'done']
+    .map(s => `<option value="${s}"${item.status === s ? ' selected' : ''}>${s.replace(/_/g, ' ')}</option>`)
+    .join('');
+
+  const urgencyOptions = ['normal', 'urgent']
+    .map(u => `<option value="${u}"${item.urgency === u ? ' selected' : ''}>${u}</option>`)
+    .join('');
+
+  const issueNum = item.github_issue_number ? `<span class="kanban-issue">#${item.github_issue_number}</span>` : '';
+  const urlLink = item.url ? `<a href="${escHtml(item.url)}" target="_blank" rel="noopener" class="kanban-detail-link">Open in GitHub ↗</a>` : '';
+
+  body.innerHTML = `
+    <div class="kanban-detail-summary glass-panel">
+      <div class="kanban-detail-summary-top">
+        <span class="kanban-source">${escHtml(item.source || 'github')}</span>
+        ${issueNum}
+        ${urlLink}
+      </div>
+      <div id="kanban-detail-status-msg" class="kanban-detail-status-msg hidden"></div>
+    </div>
+
+    <div class="kanban-detail-section glass-panel">
+      <h4>Edit</h4>
+      <label>Title</label>
+      <input id="kbd-title" type="text" class="kanban-detail-input" value="${escHtml(item.title || '')}">
+      <label>Details</label>
+      <textarea id="kbd-details" class="kanban-detail-textarea" rows="4">${escHtml(item.details || '')}</textarea>
+      <div class="kanban-detail-row">
+        <div class="kanban-detail-field">
+          <label>Status</label>
+          <select id="kbd-status" class="kanban-detail-select">${statusOptions}</select>
+        </div>
+        <div class="kanban-detail-field">
+          <label>Agent</label>
+          <input id="kbd-agent" type="text" class="kanban-detail-input" value="${escHtml(item.agent || '')}">
+        </div>
+      </div>
+      <div class="kanban-detail-row">
+        <div class="kanban-detail-field">
+          <label>Due</label>
+          <input id="kbd-due" type="text" class="kanban-detail-input" value="${escHtml(item.due || '')}" placeholder="YYYY-MM-DD">
+        </div>
+        <div class="kanban-detail-field">
+          <label>Priority</label>
+          <input id="kbd-priority" type="text" class="kanban-detail-input" value="${escHtml(item.priority || 'normal')}">
+        </div>
+        <div class="kanban-detail-field">
+          <label>Urgency</label>
+          <select id="kbd-urgency" class="kanban-detail-select">${urgencyOptions}</select>
+        </div>
+      </div>
+      <button class="kanban-detail-btn kanban-detail-btn-primary" onclick="saveKanbanDetail()">Save Changes</button>
+    </div>
+
+    <div class="kanban-detail-section glass-panel">
+      <h4>Comment</h4>
+      <textarea id="kbd-comment" class="kanban-detail-textarea" rows="3" placeholder="Add a comment…"></textarea>
+      <button class="kanban-detail-btn" onclick="addKanbanComment()">Add Comment</button>
+    </div>
+
+    <div class="kanban-detail-section glass-panel">
+      <h4>Dispatch</h4>
+      <div class="kanban-detail-row">
+        <div class="kanban-detail-field">
+          <label>Agent</label>
+          <input id="kbd-dispatch-agent" type="text" class="kanban-detail-input" value="${escHtml(item.agent || '')}" placeholder="agent name">
+        </div>
+      </div>
+      <textarea id="kbd-dispatch-prompt" class="kanban-detail-textarea" rows="2" placeholder="Task prompt (optional)"></textarea>
+      <button class="kanban-detail-btn kanban-detail-btn-primary" onclick="dispatchKanbanItem()">Dispatch to Agent</button>
+    </div>
+
+    <div class="kanban-detail-section kanban-detail-actions">
+      <button class="kanban-detail-btn kanban-detail-btn-success" onclick="completeKanbanItem()">✓ Complete</button>
+      <button class="kanban-detail-btn kanban-detail-btn-danger" onclick="closeKanbanItem()">✕ Close</button>
+    </div>
+
+    ${renderKanbanComments(item.comments || [])}
+  `;
+}
+
+function renderKanbanComments(comments) {
+  if (!comments.length) return '';
+  return `
+    <div class="kanban-detail-section glass-panel">
+      <h4>Comments</h4>
+      ${comments.map(c => `
+        <div class="kanban-detail-comment">
+          <span class="kanban-detail-comment-author">${escHtml((c.author && c.author.login) || c.user || 'comment')}</span>
+          <p>${escHtml(c.body || '')}</p>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function _kanbanStatusMsg(text, isError) {
+  const el = $('kanban-detail-status-msg');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'kanban-detail-status-msg' + (isError ? ' kanban-detail-status-error' : '');
+  el.classList.remove('hidden');
+  if (!isError) setTimeout(() => el.classList.add('hidden'), 3000);
+}
+
+async function saveKanbanDetail() {
+  if (!_kanbanDetailCard) return;
+  const id = _kanbanDetailCard.id || _kanbanDetailCard.github_issue_number;
+  try {
+    const body = {
+      title: $('kbd-title').value,
+      details: $('kbd-details').value,
+      status: $('kbd-status').value,
+      agent: $('kbd-agent').value,
+      due: $('kbd-due').value,
+      priority: $('kbd-priority').value,
+      urgency: $('kbd-urgency').value,
+    };
+    const updated = await apiRequest('PATCH', `/kanban/items/${encodeURIComponent(id)}`, body);
+    _kanbanDetailCard = updated;
+    _kanbanStatusMsg('Saved.');
+    refreshKanbanBoard();
+  } catch (err) {
+    _kanbanStatusMsg('Save failed: ' + err.message, true);
+  }
+}
+
+async function addKanbanComment() {
+  if (!_kanbanDetailCard) return;
+  const id = _kanbanDetailCard.id || _kanbanDetailCard.github_issue_number;
+  const comment = $('kbd-comment').value.trim();
+  if (!comment) return;
+  try {
+    const updated = await apiRequest('POST', `/kanban/items/${encodeURIComponent(id)}/comments`, { body: comment });
+    _kanbanDetailCard = updated;
+    renderKanbanDetailContent(updated);
+    _kanbanStatusMsg('Comment added.');
+  } catch (err) {
+    _kanbanStatusMsg('Comment failed: ' + err.message, true);
+  }
+}
+
+async function dispatchKanbanItem() {
+  if (!_kanbanDetailCard) return;
+  const id = _kanbanDetailCard.id || _kanbanDetailCard.github_issue_number;
+  const agent = $('kbd-dispatch-agent').value.trim();
+  if (!agent) return;
+  try {
+    const body = { agent, prompt: $('kbd-dispatch-prompt').value.trim() || undefined };
+    const result = await apiRequest('POST', `/kanban/items/${encodeURIComponent(id)}/dispatch`, body);
+    const taskId = result.task && result.task.task_id || 'unknown';
+    _kanbanStatusMsg('Dispatched as ' + taskId);
+    refreshKanbanBoard();
+  } catch (err) {
+    _kanbanStatusMsg('Dispatch failed: ' + err.message, true);
+  }
+}
+
+async function completeKanbanItem() {
+  if (!_kanbanDetailCard) return;
+  const id = _kanbanDetailCard.id || _kanbanDetailCard.github_issue_number;
+  try {
+    const updated = await apiRequest('POST', `/kanban/items/${encodeURIComponent(id)}/complete`);
+    _kanbanDetailCard = updated;
+    _kanbanStatusMsg('Marked complete.');
+    refreshKanbanBoard();
+  } catch (err) {
+    _kanbanStatusMsg('Complete failed: ' + err.message, true);
+  }
+}
+
+async function closeKanbanItem() {
+  if (!_kanbanDetailCard) return;
+  const id = _kanbanDetailCard.id || _kanbanDetailCard.github_issue_number;
+  try {
+    const updated = await apiRequest('POST', `/kanban/items/${encodeURIComponent(id)}/close`);
+    _kanbanDetailCard = updated;
+    _kanbanStatusMsg('Closed.');
+    refreshKanbanBoard();
+  } catch (err) {
+    _kanbanStatusMsg('Close failed: ' + err.message, true);
+  }
+}
+
+function refreshKanbanBoard() {
+  apiRequest('GET', '/kanban/board').then(renderKanbanBoard).catch(() => {});
 }
 
 
