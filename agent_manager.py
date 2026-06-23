@@ -1193,8 +1193,18 @@ def get_default_agent() -> str:
     return os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator")
 
 
-def get_default_model() -> str:
-    """Get default model from environment or use gpt-5-mini"""
+def get_default_model(runtime: str = "") -> str:
+    """Get default model for the given runtime."""
+    _runtime_defaults = {
+        "codex": "gpt-5.4",
+        "claude": "haiku",
+        "claude-sdk": "haiku",
+        "gemini": "gemini-2.5-flash",
+        "devin": "claude-sonnet-4",
+        "wee": "ollama/gemma4:e4b",
+    }
+    if runtime and runtime in _runtime_defaults:
+        return _runtime_defaults[runtime]
     return os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini")
 
 
@@ -13763,13 +13773,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
             elif rt == "codex":
                 _codex_bin = _which_bin("codex") or "codex"
-                _cmd = [_codex_bin, "exec"]
+                _cmd = [_codex_bin, "exec", "--json", "--skip-git-repo-check"]
                 if perm_mode == "elevated":
                     _cmd.extend([
                         "--dangerously-bypass-approvals-and-sandbox",
                         "-c",
                         "shell_environment_policy.inherit=all",
                     ])
+                else:
+                    _cmd.append("--full-auto")
                 if mdl:
                     _cmd.extend(["-m", mdl])
                 _cmd.append(ctx_prompt)
@@ -14118,7 +14130,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 # ── Structured JSON parsing for stream-json runtimes ──
                 # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
                 # Claude (stream-json) emits nested stream_event objects with tool_use blocks
+                # Codex (--json) emits JSONL transport frames parsed by _parse_codex_transport_line
                 tc = None
+                if runtime == "codex" and line_text.strip().startswith("{"):
+                    _cx_bg_events = _parse_codex_transport_line(line_text.strip())
+                    if _cx_bg_events is not None:
+                        for _cx_bg_kind, _cx_bg_data in _cx_bg_events:
+                            if _cx_bg_kind == "tool_call" and isinstance(_cx_bg_data, dict):
+                                _tool_call_counter += 1
+                                bg_task_mgr.append_tool_call(task_id, {
+                                    "id": _cx_bg_data.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                    "name": _cx_bg_data.get("name", "tool"),
+                                    "input": _cx_bg_data.get("input", ""),
+                                    "status": "running" if _cx_bg_data.get("event") == "detected" else "completed",
+                                    "runtime": "codex",
+                                    "timestamp": _cx_bg_data.get("timestamp", ""),
+                                })
+                        continue
+
                 if runtime in ("gemini", "claude") and line_text.strip().startswith(
                     "{"
                 ):

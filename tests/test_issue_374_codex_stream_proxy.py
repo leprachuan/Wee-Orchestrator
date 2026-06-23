@@ -261,3 +261,61 @@ class TestIssue374CodexStreamProxy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIssue374BackgroundTaskCodexParsing(unittest.TestCase):
+    """Background tasks must parse Codex JSONL and not forward raw protocol JSON."""
+
+    def test_codex_bg_protocol_frames_excluded_from_output(self):
+        """Codex protocol frames should be parsed, not included as raw output."""
+        from agent_manager import _parse_codex_transport_line
+
+        lines = [
+            json.dumps({"type": "thread.started", "thread_id": "t1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps({
+                "type": "item.completed",
+                "item": {"id": "item_0", "type": "agent_message", "text": "bg result"},
+            }),
+            json.dumps({"type": "turn.completed"}),
+        ]
+        parsed_texts = []
+        for line in lines:
+            events = _parse_codex_transport_line(line.strip())
+            if events is not None:
+                for kind, data in events:
+                    if kind == "chunk" and isinstance(data, str):
+                        parsed_texts.append(data)
+        self.assertIn("bg result", " ".join(parsed_texts))
+        combined = " ".join(parsed_texts)
+        self.assertNotIn("thread.started", combined)
+        self.assertNotIn("turn.started", combined)
+
+
+class TestIssue374RuntimeAwareModelDefault(unittest.TestCase):
+    """get_default_model must return a valid model for each runtime."""
+
+    def test_codex_default_not_gpt5_mini(self):
+        from agent_manager import get_default_model
+
+        model = get_default_model("codex")
+        self.assertNotEqual(model, "gpt-5-mini")
+        self.assertIn("gpt-5", model)
+
+    def test_copilot_default_is_gpt5_mini(self):
+        from agent_manager import get_default_model
+
+        model = get_default_model("copilot")
+        self.assertEqual(model, "gpt-5-mini")
+
+    def test_no_runtime_returns_env_default(self):
+        from agent_manager import get_default_model
+
+        model = get_default_model()
+        self.assertEqual(model, "gpt-5-mini")
+
+    def test_claude_default(self):
+        from agent_manager import get_default_model
+
+        model = get_default_model("claude")
+        self.assertEqual(model, "haiku")
