@@ -1312,6 +1312,25 @@ html, body {
   margin-bottom: 14px;
 }
 
+.kanban-due-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.kanban-due-chevron {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.kanban-due-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.kanban-due-hidden {
+  display: none !important;
+}
+
 .kanban-due-header,
 .kanban-column-header,
 .kanban-card-top,

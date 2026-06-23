@@ -2881,16 +2881,29 @@ function renderKanbanDue(cards) {
     return;
   }
 
+  const collapsed = localStorage.getItem('kanban-due-collapsed') === '1';
   show(dueEl);
   dueEl.innerHTML = `
-    <div class="kanban-due-header">
-      <strong>Due Soon</strong>
-      <span class="badge-warn">${cards.length}</span>
+    <div class="kanban-due-header kanban-due-toggle" onclick="toggleKanbanDue()">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="kanban-due-chevron${collapsed ? ' collapsed' : ''}">&#9660;</span>
+        <strong>Due Soon</strong>
+        <span class="badge-warn">${cards.length}</span>
+      </div>
     </div>
-    <div class="kanban-due-grid">
+    <div class="kanban-due-grid${collapsed ? ' kanban-due-hidden' : ''}">
       ${cards.slice(0, 6).map(renderKanbanCard).join('')}
     </div>
   `;
+}
+
+function toggleKanbanDue() {
+  const grid = document.querySelector('.kanban-due-grid');
+  const chevron = document.querySelector('.kanban-due-chevron');
+  if (!grid) return;
+  const isHidden = grid.classList.toggle('kanban-due-hidden');
+  if (chevron) chevron.classList.toggle('collapsed', isHidden);
+  localStorage.setItem('kanban-due-collapsed', isHidden ? '1' : '0');
 }
 
 function renderKanbanCard(card) {
