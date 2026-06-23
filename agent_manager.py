@@ -279,6 +279,19 @@ def _parse_codex_transport_line(
     ):
         return []
 
+    if event_type == "turn.failed":
+        err = event.get("error") or {}
+        err_msg = (
+            err.get("message", "") if isinstance(err, dict) else str(err)
+        ) or "unknown error"
+        return [("chunk", "\n\n\u26a0\ufe0f Codex turn failed: " + err_msg)]
+
+    if event_type == "error":
+        err_msg = event.get("message", "") or str(event.get("error", ""))
+        if err_msg:
+            return [("chunk", "\n\n\u26a0\ufe0f Codex error: " + err_msg)]
+        return []
+
     if event_type not in ("item.started", "item.completed"):
         return []
 
@@ -1180,8 +1193,18 @@ def get_default_agent() -> str:
     return os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator")
 
 
-def get_default_model() -> str:
-    """Get default model from environment or use gpt-5-mini"""
+def get_default_model(runtime: str = "") -> str:
+    """Get default model for the given runtime."""
+    _runtime_defaults = {
+        "codex": "gpt-5.4",
+        "claude": "haiku",
+        "claude-sdk": "haiku",
+        "gemini": "gemini-2.5-flash",
+        "devin": "claude-sonnet-4",
+        "wee": "ollama/gemma4:e4b",
+    }
+    if runtime and runtime in _runtime_defaults:
+        return _runtime_defaults[runtime]
     return os.environ.get("COPILOT_DEFAULT_MODEL", "gpt-5-mini")
 
 
@@ -7346,6 +7369,34 @@ User Request:
                                     )
                                     if _cx_events is not None:
                                         for _cx_kind, _cx_data in _cx_events:
+                                            if _cx_kind == "chunk" and isinstance(_cx_data, str):
+                                                for _su_m in re.finditer(
+                                                    r"\[STATUS_UPDATE[:\s]*(.+?)\]",
+                                                    _cx_data,
+                                                ):
+                                                    self.set_live_status(
+                                                        n8n_session_id,
+                                                        _su_m.group(1).strip(),
+                                                    )
+                                                _cx_data = re.sub(
+                                                    r"\s*\[STATUS_UPDATE[:\s]*[^\]]*\]\s*",
+                                                    "\n\n",
+                                                    _cx_data,
+                                                ).strip()
+                                                if not _cx_data:
+                                                    continue
+                                                if _codex_text_chunk_count > 0:
+                                                    if stream_buffer:
+                                                        stream_buffer.push(
+                                                            "chunk",
+                                                            {"text": "\n\n"},
+                                                        )
+                                                    else:
+                                                        loop.call_soon_threadsafe(
+                                                            queue.put_nowait,
+                                                            ("chunk", {"text": "\n\n"}),
+                                                        )
+                                                _codex_text_chunk_count += 1
                                             if stream_buffer:
                                                 stream_buffer.push(
                                                     _cx_kind, _cx_data
@@ -7355,107 +7406,7 @@ User Request:
                                                     queue.put_nowait,
                                                     (_cx_kind, _cx_data),
                                                 )
-                                                # Extract and strip [STATUS_UPDATE: ...]
-                                                # markers (F004) so mobile-channel
-                                                # progress markers embedded in the
-                                                # agent_message text don't render
-                                                # inline in the WebUI transcript.
-                                                if _cx_text:
-                                                    for _su_m in re.finditer(
-                                                        r"\[STATUS_UPDATE[:\s]*(.+?)\]",
-                                                        _cx_text,
-                                                    ):
-                                                        self.set_live_status(
-                                                            n8n_session_id,
-                                                            _su_m.group(1).strip(),
-                                                        )
-                                                    _cx_text = re.sub(
-                                                        r"\s*\[STATUS_UPDATE[:\s]*[^\]]*\]\s*",
-                                                        "\n\n",
-                                                        _cx_text,
-                                                    ).strip()
-                                                if _cx_text:
-                                                    # Separate consecutive
-                                                    # agent_message chunks with a
-                                                    # paragraph break so they don't
-                                                    # concatenate mid-sentence.
-                                                    if _codex_text_chunk_count > 0:
-                                                        if stream_buffer:
-                                                            stream_buffer.push(
-                                                                "chunk",
-                                                                {"text": "\n\n"},
-                                                            )
-                                                        else:
-                                                            loop.call_soon_threadsafe(
-                                                                queue.put_nowait,
-                                                                (
-                                                                    "chunk",
-                                                                    {"text": "\n\n"},
-                                                                ),
-                                                            )
-                                                    _codex_text_chunk_count += 1
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", _cx_text
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", _cx_text),
-                                                        )
-                                                continue
-                                            if _cx_type in (
-                                                "thread.started",
-                                                "thread.completed",
-                                                "turn.started",
-                                                "turn.completed",
-                                                "item.started",
-                                                "item.failed",
-                                                "collab_tool_call",
-                                            ):
-                                                continue
-                                            if _cx_type == "turn.failed":
-                                                _err = _cx_obj.get("error") or {}
-                                                _err_msg = (
-                                                    _err.get("message", "")
-                                                    if isinstance(_err, dict)
-                                                    else str(_err)
-                                                ) or "unknown error"
-                                                _fail_text = (
-                                                    "\n\n⚠️ Codex turn failed: "
-                                                    + _err_msg
-                                                )
-                                                if stream_buffer:
-                                                    stream_buffer.push(
-                                                        "chunk", _fail_text
-                                                    )
-                                                else:
-                                                    loop.call_soon_threadsafe(
-                                                        queue.put_nowait,
-                                                        ("chunk", _fail_text),
-                                                    )
-                                                continue
-                                            if _cx_type == "error":
-                                                _err_msg = _cx_obj.get(
-                                                    "message", ""
-                                                ) or str(
-                                                    _cx_obj.get("error", "")
-                                                )
-                                                if _err_msg:
-                                                    _err_text = (
-                                                        "\n\n⚠️ Codex error: "
-                                                        + _err_msg
-                                                    )
-                                                    if stream_buffer:
-                                                        stream_buffer.push(
-                                                            "chunk", _err_text
-                                                        )
-                                                    else:
-                                                        loop.call_soon_threadsafe(
-                                                            queue.put_nowait,
-                                                            ("chunk", _err_text),
-                                                        )
-                                                continue
+                                        continue
 
                                     # Codex exec tool call patterns
                                     import re as _re_tc
@@ -13822,13 +13773,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
             elif rt == "codex":
                 _codex_bin = _which_bin("codex") or "codex"
-                _cmd = [_codex_bin, "exec"]
+                _cmd = [_codex_bin, "exec", "--json", "--skip-git-repo-check"]
                 if perm_mode == "elevated":
                     _cmd.extend([
                         "--dangerously-bypass-approvals-and-sandbox",
                         "-c",
                         "shell_environment_policy.inherit=all",
                     ])
+                else:
+                    _cmd.append("--full-auto")
                 if mdl:
                     _cmd.extend(["-m", mdl])
                 _cmd.append(ctx_prompt)
@@ -14177,7 +14130,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 # ── Structured JSON parsing for stream-json runtimes ──
                 # Gemini (stream-json) emits {"type":"tool_use",...} and {"type":"tool_result",...}
                 # Claude (stream-json) emits nested stream_event objects with tool_use blocks
+                # Codex (--json) emits JSONL transport frames parsed by _parse_codex_transport_line
                 tc = None
+                if runtime == "codex" and line_text.strip().startswith("{"):
+                    _cx_bg_events = _parse_codex_transport_line(line_text.strip())
+                    if _cx_bg_events is not None:
+                        for _cx_bg_kind, _cx_bg_data in _cx_bg_events:
+                            if _cx_bg_kind == "tool_call" and isinstance(_cx_bg_data, dict):
+                                _tool_call_counter += 1
+                                bg_task_mgr.append_tool_call(task_id, {
+                                    "id": _cx_bg_data.get("id", f"bg_{task_id[:8]}_{_tool_call_counter}"),
+                                    "name": _cx_bg_data.get("name", "tool"),
+                                    "input": _cx_bg_data.get("input", ""),
+                                    "status": "running" if _cx_bg_data.get("event") == "detected" else "completed",
+                                    "runtime": "codex",
+                                    "timestamp": _cx_bg_data.get("timestamp", ""),
+                                })
+                        continue
+
                 if runtime in ("gemini", "claude") and line_text.strip().startswith(
                     "{"
                 ):
