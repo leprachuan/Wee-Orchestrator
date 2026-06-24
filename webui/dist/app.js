@@ -2990,6 +2990,7 @@ function toggleKanbanDue() {
   localStorage.setItem('kanban-due-collapsed', isHidden ? '1' : '0');
 }
 
+
 function renderKanbanCard(card) {
   const due = card.due ? `<span class="kanban-pill kanban-due-${card.due_bucket || 'none'}">${escHtml(shortKanbanDate(card.due, card.due_bucket))}</span>` : '';
   const agent = card.agent ? `<span class="kanban-pill">${escHtml(card.agent)}</span>` : '';
@@ -3256,6 +3257,18 @@ async function closeKanbanItem() {
 function refreshKanbanBoard() {
   apiRequest('GET', '/kanban/board').then(renderKanbanBoard).catch(() => {});
 }
+
+// Expose kanban functions to window for inline onclick handlers (ES module scope)
+window.toggleKanbanDue = toggleKanbanDue;
+window.openKanbanDetail = openKanbanDetail;
+window.closeKanbanDetail = closeKanbanDetail;
+window.saveKanbanDetail = saveKanbanDetail;
+window.addKanbanComment = addKanbanComment;
+window.dispatchKanbanItem = dispatchKanbanItem;
+window.completeKanbanItem = completeKanbanItem;
+window.closeKanbanItem = closeKanbanItem;
+window.applyKanbanFilters = applyKanbanFilters;
+window.clearKanbanFilters = clearKanbanFilters;
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
