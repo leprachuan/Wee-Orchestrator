@@ -2999,7 +2999,7 @@ function renderKanbanCard(card) {
   const link = card.url ? `<a class="kanban-link" href="${escHtml(card.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>` : '';
   const cardId = card.id || (card.github_issue_number ? String(card.github_issue_number) : '');
   return `
-    <article class="kanban-card kanban-card-clickable" data-kanban-id="${escHtml(cardId)}">
+    <article class="kanban-card kanban-card-clickable" data-kanban-id="${escHtml(cardId)}" onclick="openKanbanDetail(this.dataset.kanbanId)">
       <div class="kanban-card-top">
         <span class="kanban-source">${escHtml(card.source || 'card')}</span>
         ${issue}
@@ -3035,12 +3035,7 @@ function updateKanbanBadges(total, dueCount) {
 
 let _kanbanDetailCard = null;
 
-document.addEventListener('click', (e) => {
-  const card = e.target.closest('.kanban-card-clickable');
-  if (!card) return;
-  const id = card.dataset.kanbanId;
-  if (id) openKanbanDetail(id);
-});
+// Card click handled via inline onclick on each card
 
 async function openKanbanDetail(itemId) {
   if (!itemId) return;
