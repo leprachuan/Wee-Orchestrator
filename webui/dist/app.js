@@ -2763,6 +2763,9 @@ const KANBAN_COLUMNS = [
   ['done', 'Done'],
 ];
 
+let _kanbanBoard = null;
+const KANBAN_DISPLAY_LABELS_EXCLUDE = ['agent:', 'due:', 'priority:', 'status:', 'urgency:', 'urgent', 'hidden', 'wee-dev', 'wee-dev:approved', 'wee-dev:in-progress'];
+
 async function loadKanbanBoard(showToast = false) {
   const columnsEl = $('kanban-columns');
   const dueEl = $('kanban-due');
@@ -2850,15 +2853,96 @@ function parseKanbanDate(value) {
 }
 
 function renderKanbanBoard(board) {
-  const columnsEl = $('kanban-columns');
-  const dueCards = KANBAN_COLUMNS.flatMap(([key]) => board.columns?.[key] || [])
-    .filter(card => ['overdue', 'today', 'soon'].includes(card.due_bucket));
+  _kanbanBoard = board;
+  populateKanbanLabelFilter(board);
+  renderKanbanBoardFiltered();
+}
 
-  updateKanbanBadges(board.total || 0, dueCards.length);
+function getKanbanFilters() {
+  return {
+    urgency: ($('kanban-filter-urgency') || {}).value || 'all',
+    due: ($('kanban-filter-due') || {}).value || 'all',
+    label: ($('kanban-filter-label') || {}).value || '',
+    showDone: ($('kanban-filter-done') || {}).checked || false,
+  };
+}
+
+function kanbanCardMatchesFilters(card, filters) {
+  if (filters.urgency !== 'all') {
+    if (filters.urgency === 'urgent' && card.urgency !== 'urgent') return false;
+    if (filters.urgency === 'normal' && card.urgency === 'urgent') return false;
+  }
+  if (filters.due !== 'all') {
+    if (filters.due !== (card.due_bucket || 'none')) return false;
+  }
+  if (filters.label) {
+    const cardLabels = kanbanDisplayLabels(card);
+    if (!cardLabels.includes(filters.label)) return false;
+  }
+  return true;
+}
+
+function kanbanDisplayLabels(card) {
+  return (card.labels || []).filter(l => {
+    const lower = String(l).toLowerCase();
+    return !KANBAN_DISPLAY_LABELS_EXCLUDE.some(ex => lower === ex || lower.startsWith(ex));
+  });
+}
+
+function populateKanbanLabelFilter(board) {
+  const select = $('kanban-filter-label');
+  if (!select) return;
+  const allCards = KANBAN_COLUMNS.flatMap(([key]) => board.columns?.[key] || []);
+  const labels = [...new Set(allCards.flatMap(kanbanDisplayLabels))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const current = select.value;
+  select.innerHTML = '<option value="">All Labels</option>' + labels.map(l => `<option value="${escHtml(l)}"${l === current ? ' selected' : ''}>${escHtml(l)}</option>`).join('');
+}
+
+function updateKanbanFilterUI() {
+  const f = getKanbanFilters();
+  let count = 0;
+  if (f.urgency !== 'all') count++;
+  if (f.due !== 'all') count++;
+  if (f.label) count++;
+  const countEl = $('kanban-filter-count');
+  const clearBtn = $('kanban-filter-clear');
+  if (countEl) {
+    countEl.textContent = count + ' filter' + (count === 1 ? '' : 's');
+    countEl.classList.toggle('hidden', count === 0);
+  }
+  if (clearBtn) clearBtn.classList.toggle('hidden', count === 0);
+}
+
+function applyKanbanFilters() {
+  updateKanbanFilterUI();
+  renderKanbanBoardFiltered();
+}
+
+function clearKanbanFilters() {
+  const u = $('kanban-filter-urgency'); if (u) u.value = 'all';
+  const d = $('kanban-filter-due'); if (d) d.value = 'all';
+  const l = $('kanban-filter-label'); if (l) l.value = '';
+  const done = $('kanban-filter-done'); if (done) done.checked = false;
+  applyKanbanFilters();
+}
+
+function renderKanbanBoardFiltered() {
+  const board = _kanbanBoard;
+  if (!board) return;
+  const columnsEl = $('kanban-columns');
+  if (!columnsEl) return;
+
+  const filters = getKanbanFilters();
+  const visibleColumns = filters.showDone ? KANBAN_COLUMNS : KANBAN_COLUMNS.filter(([key]) => key !== 'done');
+
+  const allFilteredCards = KANBAN_COLUMNS.flatMap(([key]) => (board.columns?.[key] || []).filter(c => kanbanCardMatchesFilters(c, filters)));
+  const dueCards = allFilteredCards.filter(card => ['overdue', 'today', 'soon'].includes(card.due_bucket));
+
+  updateKanbanBadges(allFilteredCards.length, dueCards.length);
   renderKanbanDue(dueCards);
 
-  columnsEl.innerHTML = KANBAN_COLUMNS.map(([key, title]) => {
-    const cards = board.columns?.[key] || [];
+  columnsEl.innerHTML = visibleColumns.map(([key, title]) => {
+    const cards = (board.columns?.[key] || []).filter(c => kanbanCardMatchesFilters(c, filters));
     return `
       <section class="kanban-column">
         <div class="kanban-column-header">

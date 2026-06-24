@@ -342,6 +342,35 @@
           <button id="btn-kanban-refresh" class="btn btn-ghost btn-sm">↺ Refresh</button>
         </div>
       </header>
+      <div id="kanban-filters" class="kanban-filters glass-panel">
+        <div class="kanban-filters-left">
+          <span class="kanban-filters-icon">☰</span>
+          <span class="kanban-filters-label">Filters</span>
+          <select id="kanban-filter-urgency" class="kanban-filter-select" onchange="applyKanbanFilters()">
+            <option value="all">All Urgency</option>
+            <option value="urgent">Urgent</option>
+            <option value="normal">Normal</option>
+          </select>
+          <select id="kanban-filter-due" class="kanban-filter-select" onchange="applyKanbanFilters()">
+            <option value="all">All Due Dates</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Today</option>
+            <option value="soon">Soon</option>
+            <option value="future">Future</option>
+            <option value="none">No Due Date</option>
+          </select>
+          <select id="kanban-filter-label" class="kanban-filter-select" onchange="applyKanbanFilters()">
+            <option value="">All Labels</option>
+          </select>
+          <label class="kanban-filter-checkbox">
+            <input type="checkbox" id="kanban-filter-done" onchange="applyKanbanFilters()"> Show Done
+          </label>
+        </div>
+        <div class="kanban-filters-right">
+          <span id="kanban-filter-count" class="kanban-filter-count hidden">0 filters</span>
+          <button id="kanban-filter-clear" class="btn btn-ghost btn-xs hidden" onclick="clearKanbanFilters()">Clear</button>
+        </div>
+      </div>
       <div class="kanban-body">
         <div id="kanban-due" class="kanban-due glass-panel hidden"></div>
         <div id="kanban-columns" class="kanban-columns"></div>
