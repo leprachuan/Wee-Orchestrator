@@ -2968,7 +2968,7 @@ function renderKanbanDue(cards) {
   const collapsed = localStorage.getItem('kanban-due-collapsed') === '1';
   show(dueEl);
   dueEl.innerHTML = `
-    <div class="kanban-due-header kanban-due-toggle" onclick="toggleKanbanDue()">
+    <div class="kanban-due-header kanban-due-toggle" data-action="toggle-due">
       <div style="display:flex;align-items:center;gap:8px">
         <span class="kanban-due-chevron${collapsed ? ' collapsed' : ''}">&#9660;</span>
         <strong>Due Soon</strong>
@@ -2999,7 +2999,7 @@ function renderKanbanCard(card) {
   const link = card.url ? `<a class="kanban-link" href="${escHtml(card.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>` : '';
   const cardId = card.id || (card.github_issue_number ? String(card.github_issue_number) : '');
   return `
-    <article class="kanban-card kanban-card-clickable" data-kanban-id="${escHtml(cardId)}" onclick="openKanbanDetail(this.dataset.kanbanId)">
+    <article class="kanban-card kanban-card-clickable" data-kanban-id="${escHtml(cardId)}">
       <div class="kanban-card-top">
         <span class="kanban-source">${escHtml(card.source || 'card')}</span>
         ${issue}
@@ -3116,13 +3116,13 @@ function renderKanbanDetailContent(item) {
           <select id="kbd-urgency" class="kanban-detail-select">${urgencyOptions}</select>
         </div>
       </div>
-      <button class="kanban-detail-btn kanban-detail-btn-primary" onclick="saveKanbanDetail()">Save Changes</button>
+      <button class="kanban-detail-btn kanban-detail-btn-primary" data-action="save-detail">Save Changes</button>
     </div>
 
     <div class="kanban-detail-section glass-panel">
       <h4>Comment</h4>
       <textarea id="kbd-comment" class="kanban-detail-textarea" rows="3" placeholder="Add a comment…"></textarea>
-      <button class="kanban-detail-btn" onclick="addKanbanComment()">Add Comment</button>
+      <button class="kanban-detail-btn" data-action="add-comment">Add Comment</button>
     </div>
 
     <div class="kanban-detail-section glass-panel">
@@ -3134,12 +3134,12 @@ function renderKanbanDetailContent(item) {
         </div>
       </div>
       <textarea id="kbd-dispatch-prompt" class="kanban-detail-textarea" rows="2" placeholder="Task prompt (optional)"></textarea>
-      <button class="kanban-detail-btn kanban-detail-btn-primary" onclick="dispatchKanbanItem()">Dispatch to Agent</button>
+      <button class="kanban-detail-btn kanban-detail-btn-primary" data-action="dispatch-item">Dispatch to Agent</button>
     </div>
 
     <div class="kanban-detail-section kanban-detail-actions">
-      <button class="kanban-detail-btn kanban-detail-btn-success" onclick="completeKanbanItem()">✓ Complete</button>
-      <button class="kanban-detail-btn kanban-detail-btn-danger" onclick="closeKanbanItem()">✕ Close</button>
+      <button class="kanban-detail-btn kanban-detail-btn-success" data-action="complete-item">✓ Complete</button>
+      <button class="kanban-detail-btn kanban-detail-btn-danger" data-action="close-item">✕ Close</button>
     </div>
 
     ${renderKanbanComments(item.comments || [])}
@@ -3253,17 +3253,42 @@ function refreshKanbanBoard() {
   apiRequest('GET', '/kanban/board').then(renderKanbanBoard).catch(() => {});
 }
 
-// Expose kanban functions to window for inline onclick handlers (ES module scope)
-window.toggleKanbanDue = toggleKanbanDue;
-window.openKanbanDetail = openKanbanDetail;
-window.closeKanbanDetail = closeKanbanDetail;
-window.saveKanbanDetail = saveKanbanDetail;
-window.addKanbanComment = addKanbanComment;
-window.dispatchKanbanItem = dispatchKanbanItem;
-window.completeKanbanItem = completeKanbanItem;
-window.closeKanbanItem = closeKanbanItem;
-window.applyKanbanFilters = applyKanbanFilters;
-window.clearKanbanFilters = clearKanbanFilters;
+// Kanban click delegation — inline onclick doesn't work in ES module innerHTML
+document.addEventListener('click', (e) => {
+  // Card click → open detail
+  const card = e.target.closest('.kanban-card-clickable');
+  if (card && !e.target.closest('.kanban-link')) {
+    const id = card.dataset.kanbanId;
+    if (id) { openKanbanDetail(id); return; }
+  }
+  // Due Soon toggle
+  if (e.target.closest('[data-action="toggle-due"]')) { toggleKanbanDue(); return; }
+  // Modal detail actions
+  const action = e.target.closest('[data-action]');
+  if (action) {
+    const act = action.dataset.action;
+    if (act === 'save-detail') saveKanbanDetail();
+    else if (act === 'add-comment') addKanbanComment();
+    else if (act === 'dispatch-item') dispatchKanbanItem();
+    else if (act === 'complete-item') completeKanbanItem();
+    else if (act === 'close-item') closeKanbanItem();
+    else if (act === 'close-detail') closeKanbanDetail();
+    else if (act === 'clear-filters') clearKanbanFilters();
+  }
+});
+
+// Handle modal backdrop click (close on clicking outside)
+const detailModal = document.getElementById('kanban-detail-modal');
+if (detailModal) {
+  detailModal.addEventListener('click', (e) => {
+    if (e.target === detailModal) closeKanbanDetail();
+  });
+}
+
+// Handle filter changes via change event delegation
+document.addEventListener('change', (e) => {
+  if (e.target.closest('[data-action="apply-filters"]')) applyKanbanFilters();
+});
 
 
 // ═══════════════════════════════════════════════════════════════════════════════

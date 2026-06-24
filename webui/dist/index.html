@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=202606232200" />
+  <link rel="stylesheet" href="app.css?v=202606232300" />
   <link rel="stylesheet" href="themes.css?v=202605010046" />
 </head>
 <body>
@@ -346,12 +346,12 @@
         <div class="kanban-filters-left">
           <span class="kanban-filters-icon">☰</span>
           <span class="kanban-filters-label">Filters</span>
-          <select id="kanban-filter-urgency" class="kanban-filter-select" onchange="applyKanbanFilters()">
+          <select id="kanban-filter-urgency" class="kanban-filter-select" data-action="apply-filters">
             <option value="all">All Urgency</option>
             <option value="urgent">Urgent</option>
             <option value="normal">Normal</option>
           </select>
-          <select id="kanban-filter-due" class="kanban-filter-select" onchange="applyKanbanFilters()">
+          <select id="kanban-filter-due" class="kanban-filter-select" data-action="apply-filters">
             <option value="all">All Due Dates</option>
             <option value="overdue">Overdue</option>
             <option value="today">Today</option>
@@ -359,16 +359,16 @@
             <option value="future">Future</option>
             <option value="none">No Due Date</option>
           </select>
-          <select id="kanban-filter-label" class="kanban-filter-select" onchange="applyKanbanFilters()">
+          <select id="kanban-filter-label" class="kanban-filter-select" data-action="apply-filters">
             <option value="">All Labels</option>
           </select>
           <label class="kanban-filter-checkbox">
-            <input type="checkbox" id="kanban-filter-done" onchange="applyKanbanFilters()"> Show Done
+            <input type="checkbox" id="kanban-filter-done" data-action="apply-filters"> Show Done
           </label>
         </div>
         <div class="kanban-filters-right">
           <span id="kanban-filter-count" class="kanban-filter-count hidden">0 filters</span>
-          <button id="kanban-filter-clear" class="btn btn-ghost btn-xs hidden" onclick="clearKanbanFilters()">Clear</button>
+          <button id="kanban-filter-clear" class="btn btn-ghost btn-xs hidden" data-action="clear-filters">Clear</button>
         </div>
       </div>
       <div class="kanban-body">
@@ -902,7 +902,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=202606232200" type="module"></script>
+  <script src="app.js?v=202606232300" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">
@@ -1098,11 +1098,11 @@
   </script>
 
   <!-- Kanban Card Detail Modal -->
-  <div id="kanban-detail-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeKanbanDetail()">
+  <div id="kanban-detail-modal" class="modal-overlay hidden" data-action="modal-backdrop">
     <div class="modal-box kanban-detail-modal-box glass-panel">
       <div class="modal-header">
         <h3>TODO Detail</h3>
-        <button class="modal-close-btn" onclick="closeKanbanDetail()">✕</button>
+        <button class="modal-close-btn" data-action="close-detail">✕</button>
       </div>
       <div class="kanban-detail-body modal-body"></div>
     </div>
