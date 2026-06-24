@@ -3277,9 +3277,10 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Handle modal backdrop click (close on clicking outside)
+// Move kanban detail modal to body to avoid being trapped inside unclosed parent divs
 const detailModal = document.getElementById('kanban-detail-modal');
 if (detailModal) {
+  document.body.appendChild(detailModal);
   detailModal.addEventListener('click', (e) => {
     if (e.target === detailModal) closeKanbanDetail();
   });
