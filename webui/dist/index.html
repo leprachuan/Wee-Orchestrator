@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=202606232345" />
+  <link rel="stylesheet" href="app.css?v=202606240001" />
   <link rel="stylesheet" href="themes.css?v=202605010046" />
 </head>
 <body>
@@ -357,8 +357,15 @@
             <option value="today">Today</option>
             <option value="soon">Soon</option>
             <option value="future">Future</option>
+            <option value="custom">Custom</option>
             <option value="none">No Due Date</option>
           </select>
+          <div id="kanban-custom-date-range" class="kanban-custom-date-range hidden">
+            <label class="kanban-date-label">Start</label>
+            <input id="kanban-filter-date-start" type="date" class="kanban-filter-date" data-action="apply-filters">
+            <label class="kanban-date-label">End</label>
+            <input id="kanban-filter-date-end" type="date" class="kanban-filter-date" data-action="apply-filters">
+          </div>
           <select id="kanban-filter-label" class="kanban-filter-select" data-action="apply-filters">
             <option value="">All Labels</option>
           </select>
@@ -902,7 +909,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=202606232345" type="module"></script>
+  <script src="app.js?v=202606240001" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">

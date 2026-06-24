@@ -7761,3 +7761,33 @@ html, body {
     min-width: 100px;
   }
 }
+
+/* ── Kanban Custom Date Range Filter ──────────────────────────────────────── */
+
+.kanban-custom-date-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kanban-custom-date-range.hidden { display: none; }
+
+.kanban-date-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.kanban-filter-date {
+  padding: 4px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius, 8px);
+  background: rgba(0,0,0,0.25);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.kanban-filter-date:focus {
+  outline: none;
+  border-color: var(--accent);
+}

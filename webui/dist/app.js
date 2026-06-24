@@ -2864,6 +2864,8 @@ function getKanbanFilters() {
     due: ($('kanban-filter-due') || {}).value || 'all',
     label: ($('kanban-filter-label') || {}).value || '',
     showDone: ($('kanban-filter-done') || {}).checked || false,
+    customDateStart: ($('kanban-filter-date-start') || {}).value || '',
+    customDateEnd: ($('kanban-filter-date-end') || {}).value || '',
   };
 }
 
@@ -2873,7 +2875,27 @@ function kanbanCardMatchesFilters(card, filters) {
     if (filters.urgency === 'normal' && card.urgency === 'urgent') return false;
   }
   if (filters.due !== 'all') {
-    if (filters.due !== (card.due_bucket || 'none')) return false;
+    if (filters.due === 'custom') {
+      if (!card.due) return false;
+      const dueDate = parseKanbanDate(card.due);
+      if (!dueDate || isNaN(dueDate.getTime())) return false;
+      const startStr = filters.customDateStart;
+      const endStr = filters.customDateEnd;
+      if (startStr) {
+        const start = parseKanbanDate(startStr);
+        if (start && dueDate < start) return false;
+      }
+      if (endStr) {
+        const end = parseKanbanDate(endStr);
+        if (end) {
+          const endOfDay = new Date(end.getTime());
+          endOfDay.setHours(23, 59, 59, 999);
+          if (dueDate > endOfDay) return false;
+        }
+      }
+    } else {
+      if (filters.due !== (card.due_bucket || 'none')) return false;
+    }
   }
   if (filters.label) {
     const cardLabels = kanbanDisplayLabels(card);
@@ -2914,6 +2936,21 @@ function updateKanbanFilterUI() {
 }
 
 function applyKanbanFilters() {
+  const dueVal = ($('kanban-filter-due') || {}).value || 'all';
+  const customRange = $('kanban-custom-date-range');
+  if (customRange) {
+    if (dueVal === 'custom') {
+      customRange.classList.remove('hidden');
+      if (!$('kanban-filter-date-start').value) {
+        const today = new Date();
+        $('kanban-filter-date-start').value = today.toISOString().split('T')[0];
+        const nextWeek = new Date(today.getTime() + 7 * 86400000);
+        $('kanban-filter-date-end').value = nextWeek.toISOString().split('T')[0];
+      }
+    } else {
+      customRange.classList.add('hidden');
+    }
+  }
   updateKanbanFilterUI();
   renderKanbanBoardFiltered();
 }
@@ -2923,6 +2960,8 @@ function clearKanbanFilters() {
   const d = $('kanban-filter-due'); if (d) d.value = 'all';
   const l = $('kanban-filter-label'); if (l) l.value = '';
   const done = $('kanban-filter-done'); if (done) done.checked = false;
+  const ds = $('kanban-filter-date-start'); if (ds) ds.value = '';
+  const de = $('kanban-filter-date-end'); if (de) de.value = '';
   applyKanbanFilters();
 }
 
