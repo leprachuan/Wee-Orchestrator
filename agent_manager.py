@@ -11221,10 +11221,14 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             file=sys.stderr,
         )
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
-    PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
-    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    PAIRING_CODE_TTL = int(
+        os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300"))
+    )
+    SESSION_TOKEN_TTL = int(
+        os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    )
     SESSION_TOKEN_ABSOLUTE_TTL = int(
-        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")
+        os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400"))
     )
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get(
