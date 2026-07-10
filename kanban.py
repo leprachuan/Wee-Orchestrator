@@ -217,6 +217,39 @@ def _metadata_label_updates(
     return sorted(set(remove)), sorted(set(add))
 
 
+def _user_label_updates(
+    current_labels: list[str], labels: list[str] | None
+) -> tuple[list[str], list[str]]:
+    """Return label changes without allowing clients to replace Kanban metadata."""
+    if labels is None:
+        return [], []
+
+    managed_prefixes = ("status:", "agent:", "due:", "priority:", "urgency:")
+
+    def is_managed(label: str) -> bool:
+        lower = label.lower()
+        return lower == "urgent" or lower.startswith(managed_prefixes)
+
+    desired: dict[str, str] = {}
+    for raw_label in labels:
+        label = raw_label.strip()
+        if not label:
+            continue
+        if len(label) > 50:
+            raise KanbanError("Labels must be 50 characters or fewer.", status_code=400)
+        if is_managed(label):
+            raise KanbanError(
+                f"'{label}' is a managed Kanban label and cannot be edited directly.",
+                status_code=400,
+            )
+        desired.setdefault(label.lower(), label)
+
+    current_user = {label.lower(): label for label in current_labels if not is_managed(label)}
+    remove = [label for key, label in current_user.items() if key not in desired]
+    add = [label for key, label in desired.items() if key not in current_user]
+    return sorted(remove), sorted(add)
+
+
 def _edit_issue(
     repo: str,
     number: int,
@@ -262,18 +295,23 @@ def update_github_item(
     due: str | None = None,
     priority: str | None = None,
     urgency: str | None = None,
+    labels: list[str] | None = None,
 ) -> dict[str, Any]:
     resolved = _ensure_repo(repo)
     number = _github_issue_number(item_id)
     issue = _load_github_issue(resolved, number)
+    current_labels = _current_label_names(issue)
     remove, add = _metadata_label_updates(
-        _current_label_names(issue),
+        current_labels,
         status=status,
         agent=agent,
         due=due,
         priority=priority,
         urgency=urgency,
     )
+    user_remove, user_add = _user_label_updates(current_labels, labels)
+    remove = sorted(set(remove + user_remove))
+    add = sorted(set(add + user_add))
     _edit_issue(
         resolved,
         number,

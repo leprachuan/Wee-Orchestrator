@@ -15068,6 +15068,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         due: Optional[str] = None
         priority: Optional[str] = None
         urgency: Optional[str] = None
+        labels: Optional[list[str]] = None
 
     class KanbanCommentRequest(BaseModel):
         body: str
@@ -15162,6 +15163,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 due=body.due,
                 priority=body.priority,
                 urgency=body.urgency,
+                labels=body.labels,
             )
         except Exception as exc:
             _kanban_http_error(exc)

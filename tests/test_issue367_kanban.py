@@ -195,6 +195,69 @@ def test_issue367_update_github_item_rewrites_metadata_labels(monkeypatch):
     assert calls["remove_labels"] == ["agent:old", "status:todo", "urgent"]
 
 
+def test_issue381_update_github_item_replaces_only_user_labels(monkeypatch):
+    import kanban
+
+    issue = {
+        "number": 381,
+        "title": "Manage labels",
+        "body": "Details",
+        "state": "open",
+        "url": "https://github.com/owner/repo/issues/381",
+        "labels": [
+            {"name": "status:todo"},
+            {"name": "agent:wee-dev"},
+            {"name": "keep"},
+            {"name": "remove-me"},
+        ],
+    }
+    calls = {}
+
+    monkeypatch.setattr(kanban, "_load_github_issue", lambda repo, number: issue)
+    monkeypatch.setattr(kanban, "_ensure_label", lambda repo, label: None)
+    monkeypatch.setattr(kanban, "_edit_issue", lambda repo, number, **kwargs: calls.update(kwargs))
+    monkeypatch.setattr(kanban, "github_item", lambda repo, item_id: {})
+
+    kanban.update_github_item(
+        "owner/repo",
+        "github:381",
+        labels=["keep", "New Label", "new label", "  "],
+    )
+
+    assert calls["add_labels"] == ["New Label"]
+    assert calls["remove_labels"] == ["remove-me"]
+
+
+def test_issue381_empty_label_list_removes_all_user_labels(monkeypatch):
+    import kanban
+
+    issue = {
+        "number": 381,
+        "title": "Manage labels",
+        "body": "Details",
+        "state": "open",
+        "url": "https://github.com/owner/repo/issues/381",
+        "labels": [{"name": "status:todo"}, {"name": "one"}, {"name": "two"}],
+    }
+    calls = {}
+
+    monkeypatch.setattr(kanban, "_load_github_issue", lambda repo, number: issue)
+    monkeypatch.setattr(kanban, "_edit_issue", lambda repo, number, **kwargs: calls.update(kwargs))
+    monkeypatch.setattr(kanban, "github_item", lambda repo, item_id: {})
+
+    kanban.update_github_item("owner/repo", "github:381", labels=[])
+
+    assert calls["add_labels"] == []
+    assert calls["remove_labels"] == ["one", "two"]
+
+
+def test_issue381_rejects_managed_labels():
+    import kanban
+
+    with pytest.raises(kanban.KanbanError, match="managed Kanban label"):
+        kanban._user_label_updates(["status:todo"], ["status:done"])
+
+
 def test_issue367_dispatch_marks_github_item_ai_active(monkeypatch):
     import kanban
 
