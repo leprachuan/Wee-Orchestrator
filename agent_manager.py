@@ -5928,7 +5928,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def load_agent_skills(self, agent_path: str) -> str:
+    def load_agent_skills(self, agent_path: str, compact: bool = False) -> str:
         """Load all SKILL.md files from agent's .github/skills/ directory.
 
         Looks for skills in this order:
@@ -5936,6 +5936,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         2. {agent_path}/.claude/skills/
 
         Returns formatted skills context or empty string if no skills found.
+
+        Args:
+            compact: Issue #400 - when True, skip the "how to add a skill"
+                tutorial (repeated verbatim on every single request regardless
+                of whether the user asked about skills) and just list what's
+                loaded. _render_skills_section already covers the how-to in
+                one line for compact callers.
         """
         skills_context = ""
         agent_path_obj = Path(agent_path)
@@ -5996,7 +6003,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             skills_context = "\n[Agent Skills - Available]\n"
             for skill in available_skills:
                 skills_context += f"- {skill['name']}: {skill['description']}\n"
-            skills_context += """
+            if not compact:
+                skills_context += """
 To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.
 
 To add new skills to this agent:
@@ -6019,6 +6027,8 @@ To get skills from Anthropic's official repository:
 - Copy them to .github/skills/ or .claude/skills/
 - Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills
 """
+        elif compact:
+            skills_context = ""
         else:
             skills_context = """
 [Agent Skills - Setup Instructions]
@@ -6359,6 +6369,102 @@ Example skill structure:
 
         return output
 
+    def _render_skills_section(
+        self, agent_path: str, skills_context: str, compact: bool = False
+    ) -> str:
+        """Render the [Skills Discovery & Management] system-prompt section.
+
+        Issue #400: the full version is a step-by-step tutorial plus a
+        skill_repositories.json walkthrough with example JSON and a list of
+        community repos to add — useful reference material, but disproportionate
+        to a small local model's context budget. Compact mode keeps every
+        capability (discover, load, configure repos) referenced in a few lines
+        instead of ~75.
+        """
+        if compact:
+            loaded = skills_context.replace("\n[Agent Skills - Available]\n", "").strip() or "none"
+            return f"""[Skills] Loaded: {loaded}
+Repos: {self._format_repository_info()}
+Use /discover-skills [query] to find more, /load-skill <name> [repo] to install one (lands in {agent_path}/.github/skills/, available next session). Configure repos via skill_repositories.json in the project root (repositories: [{{name, url, description, enabled}}], default_repository)."""
+
+        return f"""[Skills Discovery & Management]
+You can help users discover and load additional skills for this agent from configured skill repositories.
+
+Configured Skill Repositories:
+{self._format_repository_info()}
+
+Current Skills Loaded:
+{skills_context}
+
+How to Discover Skills:
+1. When a user asks about available skills or requests a specific skill:
+   - Search available repositories for matching skills
+   - List relevant skills and their purposes
+   - Explain what each skill does and when it's useful
+   - Indicate which repository each skill comes from
+
+2. When a user wants to load a specific skill:
+   - Verify the skill exists in one of the available repositories
+   - Explain what the skill provides and how to use it
+   - Guide them on how to load it (system will auto-install when requested)
+   - Skills are installed to: {agent_path}/.github/skills/
+   - Skills become available immediately in the next session
+
+3. Skill Loading Process:
+   - User requests: "load the helm-deploy skill" or similar
+   - You verify it exists in available repositories and describe its capabilities
+   - System automatically clones and installs the skill
+   - Skill documentation becomes available immediately
+   - User can use the skill's features in subsequent interactions
+
+[Configuring Custom Skill Repositories]
+To add custom skill repositories or manage repository settings:
+
+1. Create or edit `skill_repositories.json` in the project root directory
+
+2. Repository configuration structure:
+{{
+  "repositories": [
+    {{
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    }},
+    {{
+      "name": "Community Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": false
+    }},
+    {{
+      "name": "Your Custom Skills",
+      "url": "https://github.com/your-org/custom-skills.git",
+      "description": "Organization-specific skills",
+      "enabled": false
+    }}
+  ],
+  "default_repository": "Anthropic Official"
+}}
+
+3. Field explanations:
+   - name: Human-readable repository name
+   - url: Git repository URL (must end with .git)
+   - description: Brief description of the repository
+   - enabled: Set to true to enable, false to disable (without deleting config)
+
+4. Popular community repositories to add:
+   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
+   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
+   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
+   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
+
+5. After updating skill_repositories.json:
+   - The new repositories become available immediately on next session start
+   - Agents will see all enabled repositories in their context
+   - Users can discover and load skills from all enabled repositories
+   - Existing skills continue to work without changes"""
+
     def build_agent_context_prompt(
         self,
         agent: str,
@@ -6370,11 +6476,18 @@ Example skill structure:
         model: str = "gpt-5-mini",
         channel: str = "webui",
         bg_identity: Optional[str] = None,
+        compact: bool = False,
     ) -> str:
         """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
 
         Args:
             channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
+            compact: Issue #400 - when True, drop tutorial-style exposition (skill
+                repository config walkthroughs, lettered image-retrieval options,
+                irrelevant workspace file listings) while keeping every capability
+                referenced. Small local models (wee runtime) get buried by the full
+                verbose prompt built for frontier models; compact mode keeps the same
+                information, just far more tersely stated.
         """
         if agent not in self.AGENTS:
             agent = "devops"
@@ -6385,22 +6498,32 @@ Example skill structure:
         agent_path = agent_info.get("path", "")
 
         # Load agent skills and workspace context
-        skills_context = self.load_agent_skills(agent_path)
+        skills_context = self.load_agent_skills(agent_path, compact=compact)
 
         files_context = ""
-        try:
-            agent_path_obj = Path(agent_path)
-            if agent_path_obj.exists():
-                files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
-                if files:
-                    files_list = "\n".join([f"  - {f.name}" for f in files])
-                    files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
-        except Exception:
-            pass
+        if not compact:
+            # Issue #400: this raw directory listing is unfiltered noise (random
+            # screenshots, status files, etc.) that eats tokens without helping
+            # small local models; drop it in compact mode.
+            try:
+                agent_path_obj = Path(agent_path)
+                if agent_path_obj.exists():
+                    files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
+                    if files:
+                        files_list = "\n".join([f"  - {f.name}" for f in files])
+                        files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
+            except Exception:
+                pass
 
         # Add render type instruction to the context
         render_instruction = ""
-        if render_type == "markdown":
+        if render_type == "markdown" and compact:
+            # Issue #400: same rule, without the lettered walkthrough — small
+            # models don't need three spelled-out options to embed an image.
+            render_instruction = f"""
+[Output Format: markdown]
+[Image Retrieval: If asked for an image/photo/logo, fetch a real image URL first (e.g. via WebFetch on Wikipedia/the official site) — never guess a URL from memory. Embed with ![caption](url). If you can't confirm a real URL, skip the image entirely rather than link a fake one. No ASCII art or SVG placeholders.]"""
+        elif render_type == "markdown":
             render_instruction = f"""
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
@@ -6561,83 +6684,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /verbose <on|off> - Toggle verbose mode (show tool calls in responses)
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
-[Skills Discovery & Management]
-You can help users discover and load additional skills for this agent from configured skill repositories.
-
-Configured Skill Repositories:
-{self._format_repository_info()}
-
-Current Skills Loaded:
-{skills_context}
-
-How to Discover Skills:
-1. When a user asks about available skills or requests a specific skill:
-   - Search available repositories for matching skills
-   - List relevant skills and their purposes
-   - Explain what each skill does and when it's useful
-   - Indicate which repository each skill comes from
-
-2. When a user wants to load a specific skill:
-   - Verify the skill exists in one of the available repositories
-   - Explain what the skill provides and how to use it
-   - Guide them on how to load it (system will auto-install when requested)
-   - Skills are installed to: {agent_path}/.github/skills/
-   - Skills become available immediately in the next session
-
-3. Skill Loading Process:
-   - User requests: "load the helm-deploy skill" or similar
-   - You verify it exists in available repositories and describe its capabilities
-   - System automatically clones and installs the skill
-   - Skill documentation becomes available immediately
-   - User can use the skill's features in subsequent interactions
-
-[Configuring Custom Skill Repositories]
-To add custom skill repositories or manage repository settings:
-
-1. Create or edit `skill_repositories.json` in the project root directory
-
-2. Repository configuration structure:
-{{
-  "repositories": [
-    {{
-      "name": "Anthropic Official",
-      "url": "https://github.com/anthropics/skills.git",
-      "description": "Official Anthropic skills repository with production-ready skills",
-      "enabled": true
-    }},
-    {{
-      "name": "Community Skills",
-      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
-      "description": "Community-contributed agent skills (300+ skills)",
-      "enabled": false
-    }},
-    {{
-      "name": "Your Custom Skills",
-      "url": "https://github.com/your-org/custom-skills.git",
-      "description": "Organization-specific skills",
-      "enabled": false
-    }}
-  ],
-  "default_repository": "Anthropic Official"
-}}
-
-3. Field explanations:
-   - name: Human-readable repository name
-   - url: Git repository URL (must end with .git)
-   - description: Brief description of the repository
-   - enabled: Set to true to enable, false to disable (without deleting config)
-
-4. Popular community repositories to add:
-   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
-   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
-   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
-   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
-
-5. After updating skill_repositories.json:
-   - The new repositories become available immediately on next session start
-   - Agents will see all enabled repositories in their context
-   - Users can discover and load skills from all enabled repositories
-   - Existing skills continue to work without changes"""
+{self._render_skills_section(agent_path, skills_context, compact=compact)}"""
 
         # Background tasks instruction — tell the agent how to create tasks
         # that appear in the WebUI Tasks panel via the orchestrator API.
@@ -6785,7 +6832,9 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             )
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}
+
+{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -9246,6 +9295,7 @@ User Request:
             runtime="wee",
             model=resolved_model,
             channel=channel,
+            compact=True,  # Issue #400: wee models get buried by the full verbose prompt
         )
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
@@ -9854,7 +9904,9 @@ User Request:
             "  Parameters: q (required, search query), count (optional, 1-20, default 5), format (optional, 'json' or 'text')\n"
             "  Env: WEE_SEARXNG_URL (default: http://localhost:8888)\n"
             "\n"
-            "CRITICAL RULES:\n"
+            # Issue #400: named distinctly from the separate anti-hallucination
+            # "[CRITICAL RULES]" block so the two aren't mistaken for one list.
+            "[Tool Usage Rules]\n"
             "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
             "2. For delegating work to other agents: use call_agent\n"
             "3. For running shell commands: use bash tool\n"
