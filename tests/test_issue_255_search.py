@@ -163,14 +163,16 @@ class TestExecuteSearch(unittest.TestCase):
         result = _execute_search({"q": "xyzzy_nonexistent_query_12345"})
         self.assertIn("No results", result)
 
+    @patch("wee_runtime._execute_brave_search")
     @patch("urllib.request.urlopen")
-    def test_unavailable_searxng_returns_error_not_exception(self, mock_urlopen):
+    def test_unavailable_searxng_uses_public_fallback(self, mock_urlopen, mock_fallback):
         import urllib.error
 
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        mock_fallback.return_value = "Search results for: test\n\n1. Fallback result"
         result = _execute_search({"q": "test"})
-        self.assertIn("Search unavailable", result)
-        # Should NOT raise — graceful degradation
+        self.assertIn("Fallback result", result)
+        mock_fallback.assert_called_once()
         self.assertIsInstance(result, str)
 
     def test_result_under_2000_chars(self):
@@ -190,11 +192,11 @@ class TestExecuteSearch(unittest.TestCase):
         import urllib.error
 
         with patch.dict(os.environ, {"WEE_SEARXNG_URL": "http://custom-host:9999"}):
-            with patch("urllib.request.urlopen") as mock_urlopen:
+            with patch("wee_runtime._execute_brave_search") as mock_fallback, patch("urllib.request.urlopen") as mock_urlopen:
                 mock_urlopen.side_effect = urllib.error.URLError("refused")
-                result = _execute_search({"q": "test"})
-                # Verify the custom URL was used (appears in the error message)
-                self.assertIn("custom-host:9999", result)
+                mock_fallback.return_value = "fallback"
+                self.assertEqual(_execute_search({"q": "test"}), "fallback")
+                self.assertEqual(mock_fallback.call_args.args[3], "http://custom-host:9999")
 
 
 class TestExecuteToolDispatching(unittest.TestCase):

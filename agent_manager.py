@@ -9439,13 +9439,16 @@ User Request:
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
-                # Build create kwargs — include tools unless on final safety round
+                # Build create kwargs — a number of smaller local models keep
+                # requesting `search` forever after receiving results. After a
+                # successful search, force the next pass to synthesize an
+                # answer instead of offering another search call.
                 create_kwargs = {
                     "model": resolved_model,
                     "messages": messages,
                     "stream": True,
                 }
-                if round_num < MAX_TOOL_ROUNDS:
+                if round_num < MAX_TOOL_ROUNDS and "search" not in _last_tool_names:
                     create_kwargs["tools"] = _WEE_TOOLS
 
                 try:

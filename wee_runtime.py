@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import base64
 import difflib
 import html
 import json
@@ -484,39 +483,67 @@ def _format_search_results(query: str, results: list, output_format: str) -> str
     return "\n".join(lines)[:SEARCH_MAX_CHARS]
 
 
-def _execute_bing_search(
+def _decode_search_value(value: str) -> str:
+    """Decode the JSON-style strings embedded in Brave's server-rendered data."""
+    try:
+        return json.loads(f'"{value}"')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return value
+
+
+def _execute_brave_search(
     query: str, count: int, output_format: str, searxng_url: str
 ) -> str:
     """Fallback for a Mac without a configured/reachable SearXNG service."""
-    url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": query})
-    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Wee-Runtime/1.0"})
+    url = "https://search.brave.com/search?" + urllib.parse.urlencode({"q": query})
     try:
-        with urllib.request.urlopen(request, timeout=SEARCH_TIMEOUT) as response:
-            page = response.read().decode("utf-8", errors="replace")
+        # Search providers frequently reject Python's HTTP TLS fingerprint.
+        # curl is available on supported macOS/Linux hosts and supplies a
+        # browser-compatible transport without executing user-provided shell.
+        response = subprocess.run(
+            [
+                "curl", "-fsSL", "--max-time", str(SEARCH_TIMEOUT),
+                "-A", "Mozilla/5.0",
+                "-H", "Accept-Language: en-US,en;q=0.9",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=SEARCH_TIMEOUT + 2,
+        )
+        if response.returncode != 0:
+            raise RuntimeError(response.stderr.strip() or f"curl exited {response.returncode}")
+        page = response.stdout
     except Exception as error:
         return (
             f"Search unavailable ({searxng_url}): SearXNG and fallback search "
             f"could not be reached ({error})"
         )
 
-    links = re.findall(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.S)
+    # Brave includes the result data in its server-rendered hydration payload.
+    # Parsing that payload avoids a JavaScript runtime while preserving direct
+    # source URLs and result descriptions.
+    raw_results = re.findall(
+        r'title:"((?:\\.|[^"\\])*)",url:"((?:\\.|[^"\\])*)".*?description:"((?:\\.|[^"\\])*)"',
+        page,
+        re.S,
+    )
     results = []
-    for href, title_html in links[:count]:
-        # Bing wraps destinations in a redirect whose `u` parameter is a
-        # base64-encoded URL prefixed with `a1`.
-        destination = html.unescape(href)
-        encoded = urllib.parse.parse_qs(urllib.parse.urlparse(destination).query).get("u", [""])[0]
-        if encoded.startswith("a1"):
-            try:
-                destination = base64.b64decode(encoded[2:] + "===").decode("utf-8")
-            except Exception:
-                pass
-        title = re.sub(r"<[^>]+>", "", title_html)
+    seen_urls = set()
+    for title_raw, url_raw, description_raw in raw_results:
+        destination = _decode_search_value(url_raw)
+        if not destination.startswith(("http://", "https://")) or destination in seen_urls:
+            continue
+        seen_urls.add(destination)
+        title = _decode_search_value(title_raw)
+        description = _decode_search_value(description_raw)
         results.append({
-            "title": html.unescape(title).strip(),
+            "title": html.unescape(re.sub(r"<[^>]+>", "", title)).strip(),
             "url": html.unescape(destination).strip(),
-            "snippet": "",
+            "snippet": html.unescape(re.sub(r"<[^>]+>", "", description)).strip()[:300],
         })
+        if len(results) >= count:
+            break
     return _format_search_results(query, results, output_format)
 
 
@@ -561,7 +588,7 @@ def _execute_search(func_args: dict) -> str:
         with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.URLError:
-        return _execute_bing_search(query, count, output_format, searxng_url)
+        return _execute_brave_search(query, count, output_format, searxng_url)
     except Exception as e:
         return f"Search error: {e}"
 
