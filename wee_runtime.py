@@ -16,7 +16,9 @@ Usage:
 """
 
 import argparse
+import base64
 import difflib
+import html
 import json
 import os
 import re
@@ -465,6 +467,59 @@ SEARCH_TIMEOUT = 10  # seconds for SearXNG queries
 SEARCH_MAX_CHARS = 2000  # max result chars to avoid context bloat
 
 
+def _format_search_results(query: str, results: list, output_format: str) -> str:
+    """Format normalized search result dictionaries for an LLM tool response."""
+    if not results:
+        return "No results found."
+    if output_format == "json":
+        return json.dumps(results, ensure_ascii=False)[:SEARCH_MAX_CHARS]
+
+    lines = [f"Search results for: {query}"]
+    for i, result in enumerate(results, 1):
+        lines.append(
+            f"\n{i}. {result.get('title', '(no title)')}\n"
+            f"   {result.get('url', '')}\n"
+            f"   {result.get('snippet', '')}"
+        )
+    return "\n".join(lines)[:SEARCH_MAX_CHARS]
+
+
+def _execute_bing_search(
+    query: str, count: int, output_format: str, searxng_url: str
+) -> str:
+    """Fallback for a Mac without a configured/reachable SearXNG service."""
+    url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": query})
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Wee-Runtime/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=SEARCH_TIMEOUT) as response:
+            page = response.read().decode("utf-8", errors="replace")
+    except Exception as error:
+        return (
+            f"Search unavailable ({searxng_url}): SearXNG and fallback search "
+            f"could not be reached ({error})"
+        )
+
+    links = re.findall(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.S)
+    results = []
+    for href, title_html in links[:count]:
+        # Bing wraps destinations in a redirect whose `u` parameter is a
+        # base64-encoded URL prefixed with `a1`.
+        destination = html.unescape(href)
+        encoded = urllib.parse.parse_qs(urllib.parse.urlparse(destination).query).get("u", [""])[0]
+        if encoded.startswith("a1"):
+            try:
+                destination = base64.b64decode(encoded[2:] + "===").decode("utf-8")
+            except Exception:
+                pass
+        title = re.sub(r"<[^>]+>", "", title_html)
+        results.append({
+            "title": html.unescape(title).strip(),
+            "url": html.unescape(destination).strip(),
+            "snippet": "",
+        })
+    return _format_search_results(query, results, output_format)
+
+
 def _execute_search(func_args: dict) -> str:
     """Handle search tool calls via SearXNG (Issue #255).
 
@@ -505,37 +560,20 @@ def _execute_search(func_args: dict) -> str:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except urllib.error.URLError as e:
-        return f"Search unavailable ({searxng_url}): {e.reason}"
+    except urllib.error.URLError:
+        return _execute_bing_search(query, count, output_format, searxng_url)
     except Exception as e:
         return f"Search error: {e}"
 
-    results = data.get("results", [])[:count]
-    if not results:
-        return "No results found."
-
-    if output_format == "json":
-        slim = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": (r.get("content", "") or "")[:300],
-            }
-            for r in results
-        ]
-        raw = json.dumps(slim, ensure_ascii=False)
-        return raw[:SEARCH_MAX_CHARS]
-
-    # Plain text summary
-    lines = [f"Search results for: {query}"]
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "(no title)")
-        url_r = r.get("url", "")
-        snippet = (r.get("content", "") or "").strip()[:200]
-        lines.append(f"\n{i}. {title}\n   {url_r}\n   {snippet}")
-
-    summary = "\n".join(lines)
-    return summary[:SEARCH_MAX_CHARS]
+    results = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": (item.get("content", "") or "")[:300],
+        }
+        for item in data.get("results", [])[:count]
+    ]
+    return _format_search_results(query, results, output_format)
 
 
 # Tool definitions (Issue #107)

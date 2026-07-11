@@ -9359,6 +9359,32 @@ User Request:
             {
                 "type": "function",
                 "function": {
+                    "name": "search",
+                    "description": "Search the web and return current, cited results.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "q": {
+                                "type": "string",
+                                "description": "The web search query",
+                            },
+                            "count": {
+                                "type": "integer",
+                                "description": "Results to return (1-20; default 5)",
+                            },
+                            "format": {
+                                "type": "string",
+                                "enum": ["text", "json"],
+                                "description": "Result format (default text)",
+                            },
+                        },
+                        "required": ["q"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "python",
                     "description": "Execute Python 3 code and return the output.",
                     "parameters": {
@@ -10220,7 +10246,7 @@ User Request:
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
-        Issue #107: Supports bash and python tools.  Uses the same
+        Issue #107: Supports bash, python, and web search tools. Uses the same
         _execute_bash_command infrastructure as other runtimes.
         """
         try:
@@ -10252,11 +10278,18 @@ User Request:
                     else:
                         return f"✗ Failed with exit code: {result.returncode}"
                 return output.strip()
+            elif func_name == "search":
+                # Keep search behavior shared with the standalone Wee runtime:
+                # it prefers a configured SearXNG instance and has a graceful
+                # public-search fallback when a local instance is unavailable.
+                from wee_runtime import _execute_search
+
+                return _execute_search(func_args)
             elif func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
                 return self._wee_call_agent(func_args)
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: bash, python, call_agent"
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python, search, call_agent"
         except subprocess.TimeoutExpired:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
