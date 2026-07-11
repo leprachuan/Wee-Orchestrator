@@ -6496,12 +6496,26 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             agent_timeout_min = agent_timeout / 60
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
+        # Multi-API awareness (F-remote-api-injection): when this process is a
+        # "local" instance spun up alongside a separate remote Wee Orchestrator
+        # (e.g. the macOS app's local dev API), tell agents the remote instance
+        # exists so they don't assume this is the only Wee Orchestrator API and
+        # don't conflate local-only state (sessions, tasks, schedules) with it.
+        _remote_api_url = os.environ.get("WEE_REMOTE_API_URL", "").strip()
+        _local_app_env = os.environ.get("APP_ENV", "PROD").upper()
+        multi_api_instruction = ""
+        if _remote_api_url:
+            _remote_api_label = os.environ.get("WEE_REMOTE_API_LABEL", "remote").strip() or "remote"
+            multi_api_instruction = f"""
+- Environment: {_local_app_env} (this is a LOCAL Wee Orchestrator instance)
+[Multi-API Awareness] A separate {_remote_api_label} Wee Orchestrator API is also running at {_remote_api_url}. It has its own sessions, background tasks, schedules, and memory — nothing here is shared with it automatically. Do not assume you are the only Wee Orchestrator instance. If the user asks about "the other Wee", production, or remote state, note that this local instance cannot see it directly and the user should check the {_remote_api_label} instance instead."""
+
         # Add runtime, model, and slash commands information
         runtime_instruction = f"""
 [System Configuration]
 - Runtime: {runtime}
 - Model: {model}
-- Agent: {agent_name}
+- Agent: {agent_name}{multi_api_instruction}
 
 [Available Slash Commands]
 These commands allow you to control the agent's behavior and are processed by the system (not the model):
@@ -11224,6 +11238,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # ---- configuration from environment ----
     APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
     IS_PRODUCTION = APP_ENV != "DEV"
+    REMOTE_API_URL = os.environ.get("WEE_REMOTE_API_URL", "").strip()
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
     if not SHARED_KEY:
         print(
@@ -11774,6 +11789,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
             "active_sessions": len(session_mgr.load_session_map()),
+            "remote_api_url": REMOTE_API_URL or None,
         }
 
     @app.get("/api/v1/service-status")
