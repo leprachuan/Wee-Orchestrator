@@ -9591,6 +9591,7 @@ User Request:
                 messages.append(assistant_msg)
 
                 # Execute each tool call and emit SSE events (Issue #109)
+                completed_search_results = []
                 for tc_entry in assistant_tool_calls:
                     tc_id = tc_entry["id"]
                     func_name = tc_entry["function"]["name"]
@@ -9643,6 +9644,19 @@ User Request:
                             "content": _raw,
                         }
                     )
+                    if func_name == "search" and tool_result:
+                        completed_search_results.append(tool_result)
+
+                # Some small local models repeatedly request search despite
+                # already having the results. Search output is already a
+                # user-readable, sourced response, so finish immediately.
+                # This guarantees a completed turn rather than leaving the
+                # user on an endless "Running search…" state.
+                if completed_search_results:
+                    collected_output.append(
+                        "Web search completed.\n\n" + completed_search_results[-1]
+                    )
+                    break
 
                 # Issue #343: record which tools were called in this round
                 _last_tool_names = {tc["function"]["name"] for tc in assistant_tool_calls}
