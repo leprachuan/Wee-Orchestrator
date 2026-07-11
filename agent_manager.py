@@ -11181,6 +11181,16 @@ def _compute_bg_task_defaults(session_map, identity, channel):
     return defaults
 
 
+def _resolved_agents_config_path(session_mgr) -> Path:
+    """Return the configuration file loaded by this API instance.
+
+    API clients must read and write the same file as ``SessionManager``. This
+    matters for isolated installations that set ``AGENT_CONFIG_FILE``.
+    """
+    config_path = getattr(session_mgr, "_agents_config_path", None)
+    return Path(config_path) if config_path else Path(SCRIPT_BASE_DIR) / "agents.json"
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
@@ -17383,7 +17393,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Settings & Logs API ──────────────────────────────────────────────────
 
-    _agents_json_path = Path(SCRIPT_BASE_DIR) / "agents.json"
+    _agents_json_path = _resolved_agents_config_path(session_mgr)
 
     @app.get("/api/v1/agents-config")
     async def get_agents_config(request: Request):
