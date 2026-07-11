@@ -11224,6 +11224,24 @@ def _resolved_agents_config_path(session_mgr) -> Path:
     return Path(config_path) if config_path else Path(SCRIPT_BASE_DIR) / "agents.json"
 
 
+def _api_config_file_from_argv(argv: Optional[List[str]] = None) -> Optional[str]:
+    """Extract a ``--config``/``-c`` value from raw argv for API mode.
+
+    ``--api`` (see ``start_api_server``) short-circuits before ``argparse`` runs,
+    so a caller cannot otherwise point a local API instance at an isolated
+    agents.json via the CLI — only the ``AGENT_CONFIG_FILE`` env var works. This
+    restores CLI parity for API mode without requiring full argparse.
+    """
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    for i, token in enumerate(tokens):
+        if token in ("--config", "-c"):
+            if i + 1 < len(tokens):
+                return tokens[i + 1]
+        elif token.startswith("--config="):
+            return token.split("=", 1)[1]
+    return None
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
@@ -11273,7 +11291,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     SESSION_TOKEN_ABSOLUTE_TTL = int(
         os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400"))
     )
-    CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    # CLI --config takes priority so `--api --config <path>` can select an
+    # isolated agents.json the same way non-API mode does (see
+    # _api_config_file_from_argv for why this can't just use argparse).
+    CONFIG_FILE = _api_config_file_from_argv() or os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get(
         "SCHEDULER_JOBS_FILE",
         os.path.join(
