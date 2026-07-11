@@ -77,9 +77,10 @@ class TestCompactWeePrompt(unittest.TestCase):
             "compact prompt should be at least 30% smaller than the full prompt",
         )
 
-    def test_issue_400_default_is_unaffected(self):
-        """Non-wee runtimes (compact defaults to False) keep the original verbose prompt."""
-        full = self.mgr.build_agent_context_prompt(
+    def test_issue_400_compact_is_now_the_default_for_every_runtime(self):
+        """compact now defaults to True regardless of runtime — non-wee runtimes
+        (e.g. claude) get the trimmed prompt too unless they opt out."""
+        default_call = self.mgr.build_agent_context_prompt(
             "orchestrator",
             "hello",
             "test-session-400b",
@@ -88,6 +89,23 @@ class TestCompactWeePrompt(unittest.TestCase):
             runtime="claude",
             model="haiku",
             channel="webui",
+        )
+        self.assertNotIn("[Configuring Custom Skill Repositories]", default_call)
+        self.assertNotIn("Option A — Direct external URL", default_call)
+
+    def test_issue_400_compact_false_still_available_for_rollback(self):
+        """The original full walkthrough form must still be reachable via an
+        explicit compact=False, for comparison or emergency rollback."""
+        full = self.mgr.build_agent_context_prompt(
+            "orchestrator",
+            "hello",
+            "test-session-400d",
+            render_type="markdown",
+            timeout=300,
+            runtime="claude",
+            model="haiku",
+            channel="webui",
+            compact=False,
         )
         self.assertIn("[Skills Discovery & Management]", full)
         self.assertIn("[Configuring Custom Skill Repositories]", full)
@@ -113,8 +131,9 @@ class TestCompactWeePrompt(unittest.TestCase):
         self.assertIn("[Wee Executor]", compact)
         self.assertIn("[Image Retrieval", compact)
 
-    def test_issue_400_run_wee_native_requests_compact_prompt(self):
-        """run_wee_native must build its context prompt with compact=True."""
+    def test_issue_400_run_wee_native_does_not_opt_out_of_compact(self):
+        """compact defaults to True now, so run_wee_native doesn't need to pass
+        it explicitly — but it must not regress by passing compact=False."""
         with patch.object(
             self.mgr,
             "build_agent_context_prompt",
@@ -148,9 +167,10 @@ class TestCompactWeePrompt(unittest.TestCase):
 
         self.assertTrue(mock_build.called)
         _, kwargs = mock_build.call_args
-        self.assertTrue(
+        self.assertIsNot(
             kwargs.get("compact"),
-            "run_wee_native must pass compact=True to build_agent_context_prompt",
+            False,
+            "run_wee_native must not override the compact=True default with False",
         )
 
 

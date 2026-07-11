@@ -6476,18 +6476,22 @@ To add custom skill repositories or manage repository settings:
         model: str = "gpt-5-mini",
         channel: str = "webui",
         bg_identity: Optional[str] = None,
-        compact: bool = False,
+        compact: bool = True,
     ) -> str:
         """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
 
         Args:
             channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
-            compact: Issue #400 - when True, drop tutorial-style exposition (skill
-                repository config walkthroughs, lettered image-retrieval options,
-                irrelevant workspace file listings) while keeping every capability
-                referenced. Small local models (wee runtime) get buried by the full
-                verbose prompt built for frontier models; compact mode keeps the same
-                information, just far more tersely stated.
+            compact: Issue #400 - when True (the default, for every runtime), drop
+                tutorial-style exposition (skill repository config walkthroughs,
+                lettered image-retrieval options, irrelevant workspace file listings)
+                while keeping every capability referenced, just stated tersely instead
+                of as a walkthrough. Originally added only for the wee runtime (small
+                local models were getting buried by the verbose form), then made the
+                default everywhere after confirming the trimmed content was tutorial
+                fluff no model benefits from having repeated on every single turn.
+                Pass compact=False to get the original full walkthrough form back
+                (e.g. for comparison/rollback).
         """
         if agent not in self.AGENTS:
             agent = "devops"
@@ -9295,7 +9299,7 @@ User Request:
             runtime="wee",
             model=resolved_model,
             channel=channel,
-            compact=True,  # Issue #400: wee models get buried by the full verbose prompt
+            # compact defaults to True — this was the original motivating case (#400)
         )
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
