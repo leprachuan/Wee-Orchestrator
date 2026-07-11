@@ -10122,6 +10122,23 @@ User Request:
             if role in ("user", "assistant") and content:
                 prefix = "User" if role == "user" else "Assistant"
                 transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Issue #399: preserve the fact that a tool was invoked even
+                # when the assistant message itself has no text content, so
+                # the summary doesn't silently drop tool-call turns.
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    name = fn.get("name", "unknown")
+                    args = fn.get("arguments", "")
+                    transcript_lines.append(
+                        f"Assistant: [called tool {name} with args {_summary_snippet(args, 200)}]"
+                    )
+            elif role == "tool" and content:
+                # Issue #399: tool results (e.g. web_search output) were being
+                # dropped entirely during compaction, causing the summary to
+                # lose all knowledge of prior tool output (search results,
+                # command output, etc.) referenced by later follow-up turns.
+                transcript_lines.append(f"Tool result: {_summary_snippet(content)}")
         if not transcript_lines:
             return messages
 
