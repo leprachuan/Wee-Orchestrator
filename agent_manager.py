@@ -5545,6 +5545,32 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
         return cleaned.strip()
 
+    @staticmethod
+    def _is_claude_auth_error(err_type: str, err_msg: str) -> bool:
+        """Detect a Claude runtime credential failure (Issue #389).
+
+        The Claude CLI surfaces a bare 401 from the Anthropic API (e.g.
+        "Failed to authenticate. API Error: 401 Invalid authentication
+        credentials") both as plain stderr text and as a structured
+        {"type":"error",...} event depending on invocation mode. Either form
+        must be recognized so the caller can be told to configure a
+        credential instead of seeing a raw API error.
+        """
+        combined = f"{err_type} {err_msg}".lower()
+        return (
+            "401" in combined
+            or "authentication_error" in combined
+            or "invalid authentication credentials" in combined
+            or "invalid api key" in combined
+            or "failed to authenticate" in combined
+        )
+
+    CLAUDE_AUTH_ERROR_MESSAGE = (
+        "Claude runtime authentication is not configured for this agent. "
+        "Run `claude login` on this host, or set the ANTHROPIC_API_KEY "
+        "environment variable, then try the chat again."
+    )
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
@@ -5651,7 +5677,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                         err_obj = obj.get("error") or {}
                         err_msg = err_obj.get("message", "") or obj.get("message", "")
                         err_type = err_obj.get("type", "")
-                        if err_msg:
+                        if self._is_claude_auth_error(err_type, err_msg):
+                            error_result = self.CLAUDE_AUTH_ERROR_MESSAGE
+                        elif err_msg:
                             error_result = (
                                 f"API Error: {err_type} - {err_msg}"
                                 if err_type
@@ -5693,7 +5721,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                         if obj.get("error"):
                             has_rate_limit_event = True
                 except (ValueError, KeyError, AttributeError):
-                    # Not JSON — treat as plain text (legacy fallback)
+                    # Not JSON — treat as plain text (legacy fallback).
+                    # The Claude CLI can print an unauthenticated-credential
+                    # failure as bare stderr text rather than a JSON event
+                    # (Issue #389); recognize it here too.
+                    if self._is_claude_auth_error("", line_stripped):
+                        error_result = self.CLAUDE_AUTH_ERROR_MESSAGE
                     result.append(line)
             if text_parts:
                 return "".join(text_parts)
