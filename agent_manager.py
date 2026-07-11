@@ -585,8 +585,16 @@ class AuthManager:
         shared_key: str,
         pairing_code_length: int = 6,
         pairing_code_ttl: int = 300,
-        session_token_ttl: int = 3600,
-        session_token_absolute_ttl: int = 86400,
+        # Sliding window, refreshed on every authenticated request — as long
+        # as a client (iOS app, WebUI, etc.) is used at least this often it
+        # never has to re-pair. Personal single-tenant deployment, and the
+        # iOS client now gates re-entry locally with Face ID, so a long
+        # sliding window doesn't weaken on-device security.
+        session_token_ttl: int = 2592000,  # 30 days
+        # Hard cap from creation regardless of activity — bounds how long a
+        # token stays valid if a device is lost, without forcing re-pairing
+        # during normal day-to-day use.
+        session_token_absolute_ttl: int = 15552000,  # 180 days
         sessions_file: Optional[str] = None,
     ):
         self.shared_key = shared_key
@@ -11247,9 +11255,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         )
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
     PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
-    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
+    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "2592000"))  # 30 days
     SESSION_TOKEN_ABSOLUTE_TTL = int(
-        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")
+        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000")  # 180 days
     )
     CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get(
