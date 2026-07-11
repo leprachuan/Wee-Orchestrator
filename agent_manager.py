@@ -9192,8 +9192,14 @@ User Request:
         api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
 
         # Provider presets
+        # WEE_OLLAMA_HOST lets the desktop app point the local API at the
+        # Ollama runner on the same Mac. Keep the existing network endpoint
+        # as the default for remote/server deployments.
+        _ollama_host = os.environ.get(
+            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        ).rstrip("/")
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (f"{_ollama_host}/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -10186,8 +10192,11 @@ User Request:
         self, model: str, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[str, str, str]:
         """Compatibility shim returning the resolved endpoint tuple."""
+        _ollama_host = os.environ.get(
+            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        ).rstrip("/")
         _presets = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (f"{_ollama_host}/v1", "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }

@@ -200,6 +200,25 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         self.assertEqual(init_kwargs["base_url"], "http://192.168.1.101:11434/v1")
         self.assertEqual(init_kwargs["api_key"], "ollama")
 
+    @patch.dict(os.environ, {"WEE_OLLAMA_HOST": "http://127.0.0.1:11434"})
+    @patch("openai.OpenAI")
+    def test_run_wee_native_uses_configured_local_ollama_host(self, mock_openai_cls):
+        """A locally managed API must use the Ollama runner on its own Mac."""
+        mgr = _make_mgr()
+        mock_openai_cls.return_value.chat.completions.create.return_value = []
+
+        test_session = "test_wee_local_ollama"
+        mgr.session_map[test_session] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
+
+        _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b")
+
+        init_kwargs = mock_openai_cls.call_args[1]
+        self.assertEqual(init_kwargs["base_url"], "http://127.0.0.1:11434/v1")
+
     @patch("openai.OpenAI")
     def test_run_wee_native_lmstudio_model(self, mock_openai_cls):
         """LM Studio model prefix should resolve correctly."""
