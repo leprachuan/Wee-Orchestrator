@@ -2646,6 +2646,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             # Generate the new session ID up front so the handoff can reference it
             new_session_id = str(uuid4())
 
+            handoff_prepared = False
+
             # Prepare session handoff if the runtime is actually changing and
             # there is prior history to hand off
             if prev_runtime != new_runtime and prev_session_id:
@@ -2669,6 +2671,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         prev_runtime,
                         new_runtime,
                     )
+                    handoff_prepared = True
                     print(
                         f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
                         f"(prev_session={prev_session_id}, new_session={new_session_id})",
@@ -2691,8 +2694,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
-            # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
-            # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
+            # Runtime CLIs use incompatible backend session identifiers (e.g.
+            # OpenCode uses "ses_*" while Claude/Codex use UUIDs), so create a
+            # new backend ID. This is not a conversation reset: when prepared
+            # above, SessionHandoff injects the prior transcript and summary on
+            # the first message in the new runtime.
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
             # When switching runtime, also reset the model to a default for that runtime
@@ -2719,7 +2725,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
-            return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
+            if prev_runtime != new_runtime and handoff_prepared:
+                return (
+                    f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. "
+                    "Conversation context will be handed off to the new runtime."
+                )
+            if prev_runtime != new_runtime:
+                return (
+                    f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. "
+                    "A new runtime session was created; no earlier context was available to hand off."
+                )
+            return f"✓ Runtime remains **{new_runtime}**. Model set to `{default_model}`."
 
     def _slash_agent(self, argument, session_data, n8n_session_id):
         """Handle /agent slash command."""
