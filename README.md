@@ -37,7 +37,22 @@ Download the current app from the
 [macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.1.0-20260712).
 The app ships without credentials; configure them in Keychain-backed settings.
 
+## Why Wee-Orchestrator
+
+| Selling point | What it means |
+|---|---|
+| **One control plane** | Chat, Kanban, background work, schedules, agents, models, and session history share one authenticated API. |
+| **Choose the right runtime** | Switch between CLI/SDK providers or run local and cloud models through Wee native without changing client surfaces. |
+| **Run locally or remotely** | The macOS app keeps Local and Remote agents/settings distinct, can bootstrap a local API, and can use on-device Ollama models. |
+| **Automation without losing context** | Background tasks and scheduled jobs retain agent/runtime configuration and expose execution history. |
+| **Built for real agent work** | Native tool calls, delegated agents, sourced web search, files, permissions, and long-context model support are part of the platform. |
+| **Secure by design** | Pairing/session auth and platform Keychain storage keep credentials out of source control and client preferences. |
+
 ## Architecture
+
+<p align="center">
+  <img src="docs/images/architecture.png" alt="Wee-Orchestrator architecture" width="900"/>
+</p>
 
 ```text
 Telegram ─┐
