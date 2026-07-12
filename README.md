@@ -69,6 +69,21 @@ agents or credentials with a remote deployment.
 
 ## Install the API
 
+### Linux one-line installer
+
+For a localhost-only Linux installation with a virtual environment, a private
+generated shared key, and a minimal local agent:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leprachuan/Wee-Orchestrator/main/scripts/install-linux.sh | bash
+```
+
+Optional environment variables: `WEE_INSTALL_DIR` chooses the checkout
+directory and `WEE_REF` chooses a Git tag or branch. Read the script before
+running it if your environment requires a custom package or source policy.
+
+### Manual installation
+
 ```bash
 git clone https://github.com/leprachuan/Wee-Orchestrator.git
 cd Wee-Orchestrator
