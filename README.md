@@ -115,14 +115,38 @@ Use **File → New Window** to open another workspace window.
 Never commit API keys, bearer/session tokens, shared keys, bot tokens, or
 `.env` files. Every API request requires an authenticated bearer token.
 
-## Detailed documentation
+## Documentation hub
 
-- [Operations and API reference](docs/OPERATIONS_GUIDE.md)
+The README is the landing page. Detailed material that was previously embedded
+here now lives in the following focused references.
+
+### API, operations, and architecture
+
+- [Operations and API reference](docs/OPERATIONS_GUIDE.md) — API endpoints,
+  slash commands, CLI usage, session behavior, Web UI, connectors, testing,
+  troubleshooting, and operations.
+- [Architecture](ARCHITECTURE.md) — components, deployment topology, and
+  orchestration flow.
+- [Documentation index](docs/README.md) — entry point for the remaining
+  feature-specific documentation.
+
+### Configuration and security
+
+- [Network access guidance](docs/dev-access.md) — trusted binding, Tailscale,
+  and SSH access patterns.
+- [HTTPS and TLS](docs/ssl-https.md) — secure transport configuration.
+- [Secret tool](docs/secret-tool.md) — secure secret-management workflow.
+- [Agents and sub-agents](AGENTS.md) and [skill sub-agents](SKILL_SUBAGENTS.md).
+
+### Features and clients
+
 - [Local runtime and client update](docs/LOCAL_RUNTIME_AND_CLIENTS_2026-07.md)
-- [Architecture](ARCHITECTURE.md)
-- [Context-window management](docs/context-window.md)
-- [Network access guidance](docs/dev-access.md)
-- [Release notes](RELEASE_NOTES.md) and [change history](CHANGELOG.md)
+  — local API isolation, Ollama, OpenRouter, Wee runtime search, and clients.
+- [Background tasks](docs/background-tasks.md) and
+  [context-window management](docs/context-window.md).
+- [Skills panel](docs/skills-panel.md), [mobile bots](docs/per-agent-mobile-bots.md),
+  and [agent settings integration](docs/AGENT_SETTINGS_INTEGRATION.md).
+- [Release notes](RELEASE_NOTES.md) and [change history](CHANGELOG.md).
 
 ## Contributing
 
