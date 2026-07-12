@@ -7203,6 +7203,68 @@ if (document.readyState !== 'loading') {
   if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
   if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
 
+
+  /* ── Model Catalog Editor ──────────────────────────────────────────────── */
+  const modelCatalogRuntimeSelect = document.getElementById('asf-model-catalog-runtime');
+  const modelCatalogEditor        = document.getElementById('asf-model-catalog-editor');
+  const btnModelCatalogLoad       = document.getElementById('btn-model-catalog-load');
+  const btnModelCatalogSave       = document.getElementById('btn-model-catalog-save');
+  const modelCatalogStatus        = document.getElementById('asf-model-catalog-status');
+
+  function showModelCatalogStatus(msg, isError) {
+    if (!modelCatalogStatus) return;
+    modelCatalogStatus.textContent = msg;
+    modelCatalogStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    modelCatalogStatus.classList.remove('hidden');
+    setTimeout(() => modelCatalogStatus.classList.add('hidden'), 5000);
+  }
+
+  function populateModelCatalogRuntimes(runtimes, selected) {
+    if (!modelCatalogRuntimeSelect || !runtimes || !runtimes.length) return;
+    const current = selected || modelCatalogRuntimeSelect.value || runtimes[0];
+    modelCatalogRuntimeSelect.innerHTML = '';
+    runtimes.forEach(rt => {
+      const opt = document.createElement('option');
+      opt.value = rt;
+      opt.textContent = rt;
+      modelCatalogRuntimeSelect.appendChild(opt);
+    });
+    if (runtimes.includes(current)) modelCatalogRuntimeSelect.value = current;
+  }
+
+  async function loadModelCatalog(runtime) {
+    if (!modelCatalogEditor) return;
+    const rt = runtime || (modelCatalogRuntimeSelect && modelCatalogRuntimeSelect.value) || 'claude';
+    modelCatalogEditor.value = 'Loading...';
+    try {
+      const data = await apiRequest('GET', '/settings/model-manifest?runtime=' + encodeURIComponent(rt));
+      populateModelCatalogRuntimes(data.available_runtimes, data.runtime);
+      modelCatalogEditor.value = (data.models || []).join('\n');
+    } catch (e) {
+      modelCatalogEditor.value = '';
+      showModelCatalogStatus('Failed to load models: ' + e.message, true);
+    }
+  }
+
+  async function saveModelCatalog() {
+    if (!modelCatalogEditor || !modelCatalogRuntimeSelect) return;
+    const runtime = modelCatalogRuntimeSelect.value;
+    const models = modelCatalogEditor.value.split('\n');
+    try {
+      const data = await apiRequest('PUT', '/settings/model-manifest', { runtime, models });
+      modelCatalogEditor.value = (data.models || []).join('\n');
+      showModelCatalogStatus('✓ Saved ' + (data.models || []).length + ' models for ' + data.runtime, false);
+    } catch (e) {
+      showModelCatalogStatus('Failed to save: ' + e.message, true);
+    }
+  }
+
+  if (btnModelCatalogLoad) btnModelCatalogLoad.addEventListener('click', () => loadModelCatalog());
+  if (btnModelCatalogSave) btnModelCatalogSave.addEventListener('click', saveModelCatalog);
+  if (modelCatalogRuntimeSelect) {
+    modelCatalogRuntimeSelect.addEventListener('change', () => loadModelCatalog(modelCatalogRuntimeSelect.value));
+  }
+
   function showKanbanSettingsStatus(msg, isError) {
     if (!kanbanStatus) return;
     kanbanStatus.textContent = msg;
@@ -7470,6 +7532,19 @@ if (document.readyState !== 'loading') {
     if (btnSettings) {
       btnSettings.removeEventListener('click', openSettings);
       btnSettings.addEventListener('click', _wrappedOpenInstr);
+    }
+  }
+
+  // Auto-load the model catalog when settings panel opens
+  const _origOpenSettingsModels = typeof openSettings === 'function' ? openSettings : null;
+  if (_origOpenSettingsModels) {
+    const _wrappedOpenModels = async function() {
+      await _origOpenSettingsModels();
+      loadModelCatalog();
+    };
+    if (btnSettings) {
+      btnSettings.removeEventListener('click', openSettings);
+      btnSettings.addEventListener('click', _wrappedOpenModels);
     }
   }
 

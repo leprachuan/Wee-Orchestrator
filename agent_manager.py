@@ -17506,6 +17506,119 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
 
+    @app.get("/api/v1/settings/model-manifest")
+    async def get_model_manifest_settings(request: Request, runtime: str = "claude"):
+        """Return the editable model list for a runtime.
+
+        `wee` is excluded — its catalog is assembled dynamically from local
+        Ollama and OpenRouter discovery, not the static manifest.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        runtime_key = _model_manifest_runtime_key(runtime)
+        if runtime_key == "wee":
+            raise HTTPException(
+                status_code=400,
+                detail="The wee runtime catalog is discovered dynamically and is not editable here.",
+            )
+        try:
+            manifest = load_model_manifest()
+            runtimes = manifest.get("runtimes", {})
+            available_runtimes = sorted(k for k in runtimes.keys() if k != "wee")
+            models = runtimes.get(runtime_key)
+            if models is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"{runtime_key} is not a configured runtime in model-manifest.json",
+                )
+            return {
+                "runtime": runtime_key,
+                "models": models,
+                "available_runtimes": available_runtimes,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read model-manifest.json: {e}"
+            )
+
+    @app.put("/api/v1/settings/model-manifest")
+    async def put_model_manifest_settings(request: Request):
+        """Save an updated model list for one runtime.
+
+        Preserves every other runtime's list and the rest of the manifest
+        document. `wee` is rejected for the same reason it's excluded from
+        the GET above.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        runtime = body.get("runtime", "")
+        models = body.get("models", [])
+        runtime_key = _model_manifest_runtime_key(runtime)
+        if runtime_key == "wee":
+            raise HTTPException(
+                status_code=400,
+                detail="The wee runtime catalog is discovered dynamically and is not editable here.",
+            )
+        if not isinstance(models, list) or not all(isinstance(m, str) for m in models):
+            raise HTTPException(status_code=400, detail="models must be a list of strings")
+
+        normalized: List[str] = []
+        for candidate in models:
+            model_id = candidate.strip()
+            if model_id and model_id not in normalized:
+                normalized.append(model_id)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="Add at least one model before saving.")
+
+        try:
+            if MODEL_MANIFEST_PATH.exists():
+                document = json.loads(MODEL_MANIFEST_PATH.read_text())
+            else:
+                document = {"runtimes": {}}
+            runtimes = document.get("runtimes", {})
+            if runtime_key not in runtimes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{runtime_key} is not a configured runtime in model-manifest.json",
+                )
+
+            # Backup before overwrite, mirroring the .env editor's safety net.
+            if MODEL_MANIFEST_PATH.exists():
+                backup_path = Path(str(MODEL_MANIFEST_PATH) + ".bak")
+                shutil.copy2(MODEL_MANIFEST_PATH, backup_path)
+
+            from datetime import datetime, timezone
+
+            runtimes[runtime_key] = normalized
+            document["runtimes"] = runtimes
+            document["last_updated"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
+            MODEL_MANIFEST_PATH.write_text(
+                json.dumps(document, indent=2, sort_keys=True) + "\n"
+            )
+            # Drop the mtime cache so the next /api/v1/models read picks this up
+            # immediately instead of waiting on the next file-change poll.
+            load_model_manifest._cache_key = None
+            return {"saved": True, "runtime": runtime_key, "models": normalized}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save model-manifest.json: {e}"
+            )
+
     @app.post("/api/v1/settings/restart-services")
     async def restart_services(request: Request):
         """Restart dev services (agent-manager-api-dev, etc.)."""
