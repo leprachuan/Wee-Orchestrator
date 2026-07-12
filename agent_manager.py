@@ -1890,6 +1890,16 @@ class SessionManager:
                 "Claude Opus (Latest)",
                 ["claude-opus", "claude-opus-4-6", "claude-opus-4.6", "opus-4.6"],
             ),
+            (
+                "claude-sonnet-5",
+                "Claude Sonnet 5",
+                ["sonnet-5", "claude-sonnet5"],
+            ),
+            (
+                "claude-fable-5",
+                "Claude Fable 5",
+                ["fable-5", "claude-fable5"],
+            ),
         ],
         "US Frontier Models (Comparison)": [
             (
@@ -1973,6 +1983,10 @@ class SessionManager:
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
+            ("gpt-5.6", "GPT-5.6", ["gpt-5.6"]),
+            ("gpt-5.6-luna", "GPT-5.6 Luna", ["luna"]),
+            ("gpt-5.6-terral", "GPT-5.6 Terral", ["terral"]),
+            ("gpt-5.6-sol", "GPT-5.6 Sol", ["sol"]),
             ("gpt-5.5", "GPT-5.5", ["gpt-5.5"]),
             ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
             ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),

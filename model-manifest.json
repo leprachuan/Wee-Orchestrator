@@ -1,9 +1,13 @@
 {
-  "source": "manually verified from Codex CLI model picker 2026-04-26; claude/devin/cursor/gemini/wee migrated from agent_manager.py static dicts for issue #359",
-  "last_updated": "2026-06-10T00:00:00.000000Z",
+  "source": "manually verified from Codex CLI model picker 2026-04-26; claude/devin/cursor/gemini/wee migrated from agent_manager.py static dicts for issue #359; gpt-5.6 (luna/terral/sol) and claude sonnet-5/fable-5 added 2026-07-11",
+  "last_updated": "2026-07-11T00:00:00.000000Z",
   "runtimes": {
     "copilot": [
       "auto",
+      "gpt-5.6",
+      "gpt-5.6-luna",
+      "gpt-5.6-terral",
+      "gpt-5.6-sol",
       "gpt-5.4",
       "gpt-5.5",
       "gpt-5.3-codex",
@@ -12,6 +16,8 @@
       "gpt-5.4-mini",
       "gpt-5-mini",
       "gpt-4.1",
+      "claude-sonnet-5",
+      "claude-fable-5",
       "claude-sonnet-4.6",
       "claude-sonnet-4.5",
       "claude-haiku-4.5",
@@ -20,6 +26,10 @@
     ],
     "copilot-sdk": [
       "auto",
+      "gpt-5.6",
+      "gpt-5.6-luna",
+      "gpt-5.6-terral",
+      "gpt-5.6-sol",
       "gpt-5.4",
       "gpt-5.5",
       "gpt-5.3-codex",
@@ -28,6 +38,8 @@
       "gpt-5.4-mini",
       "gpt-5-mini",
       "gpt-4.1",
+      "claude-sonnet-5",
+      "claude-fable-5",
       "claude-sonnet-4.6",
       "claude-sonnet-4.5",
       "claude-haiku-4.5",
@@ -35,6 +47,10 @@
       "claude-sonnet-4"
     ],
     "codex": [
+      "gpt-5.6",
+      "gpt-5.6-luna",
+      "gpt-5.6-terral",
+      "gpt-5.6-sol",
       "gpt-5.5",
       "gpt-5.4",
       "gpt-5.4-mini",
@@ -45,11 +61,15 @@
       "sonnet",
       "haiku",
       "opus",
+      "claude-sonnet-5",
+      "claude-fable-5",
       "claude-3-5-sonnet-latest",
       "claude-3-5-haiku-latest",
       "claude-3-opus-latest"
     ],
     "claude-sdk": [
+      "claude-sonnet-5",
+      "claude-fable-5",
       "claude-sonnet-4.6",
       "claude-sonnet-4.5",
       "claude-haiku-4.5",
