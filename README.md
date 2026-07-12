@@ -5,7 +5,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI CLI runtime** — GitHub Copilot, Claude Code, OpenCode, Google Gemini, or OpenAI Codex — from **Telegram**, **WebEx**, or a beautiful **browser-based Web UI**. Switch models, agents, and runtimes on the fly with slash commands. Schedule recurring AI tasks. Send files and images. All from one place.
+Wee-Orchestrator is a unified AI-agent platform for GitHub Copilot, Claude Code, OpenCode, Google Gemini, OpenAI Codex, and the built-in **Wee native runtime** (Ollama, OpenRouter, and other OpenAI-compatible providers). Use it from Telegram, WebEx, the browser Web UI, or the native **macOS desktop app**. Switch models, agents, and runtimes on the fly; schedule recurring work; run long-lived background tasks; and keep conversations, Kanban work, and agent settings together.
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="Wee-Orchestrator Architecture" width="700"/>
@@ -17,8 +17,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 
 | Problem | Wee-Orchestrator Solution |
 |---------|---------------------------|
-| Juggling multiple AI tools and CLIs | **One unified interface** across 5 runtimes and 17+ models |
-| AI is stuck in the terminal | **Chat from anywhere** — Telegram, WebEx, or the Web UI |
+| Juggling multiple AI tools and CLIs | **One unified interface** across CLI, SDK, and Wee-native runtimes with live model discovery |
+| AI is stuck in the terminal | **Chat from anywhere** — Telegram, WebEx, Web UI, or the native macOS app |
 | No memory between sessions | **Persistent sessions** with full conversation history |
 | Can't automate AI tasks | **Built-in task scheduler** with cron-like scheduling |
 | One-size-fits-all agents | **Multi-agent architecture** — switch agents per task |
@@ -51,8 +51,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 
 ## 🚀 Key Features
 
-- **🔀 5 AI Runtimes** — GitHub Copilot CLI, Claude Code, OpenCode, Google Gemini, OpenAI Codex
-- **💬 3 Channels** — Telegram bot, WebEx bot (via RabbitMQ), glassmorphism Web UI with SSE streaming
+- **🔀 AI runtimes** — GitHub Copilot CLI/SDK, Claude Code/SDK, OpenCode, Google Gemini, OpenAI Codex, Cursor, Devin, and Wee native (Ollama/OpenRouter/OpenAI-compatible)
+- **💬 Client surfaces** — Telegram bot, WebEx bot (via RabbitMQ), browser Web UI with SSE streaming, and the native macOS app
 - **🤖 Multi-Agent** — Define specialized agents in `agents.json`, switch with `/agent`; **hot-reload** on change (no restart needed)
 - **🔄 Live Model Switching** — Change models mid-conversation with `/model`
 - **📅 Task Scheduler** — Schedule recurring AI jobs with natural language (`every day at 9am`)
@@ -66,6 +66,8 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 - **🔧 Expandable Tool Calls** — View tool invocations with collapsible output panels in WebUI; markdown rendering, error highlighting, silent mode support
 - **💰 Token Usage Tracking** — Real-time tracking of prompt/completion tokens per turn; context window usage percentage with 75% threshold warnings; live stats via `/tokens` in the CLI REPL
 - **📐 Context Window Management** — Automatic per-model context window registry (20+ models); LLM-powered `/compact` command to summarize old history and free context space; see [Context Window Management](docs/context-window.md)
+- **🖥️ Native macOS Client** — Local/remote environments, Kanban, tasks, scheduled-task history, local API controls, Ollama model management, voice input/output, and multiple windows
+- **🔎 Wee Runtime Search** — Tool-backed web search with sourced results; local models do not stall after completing a search tool call
 - **🔌 Extensible Skills** — Plugin architecture for adding capabilities (Cisco Meraki, Home Assistant, etc.)
 - **⚙️ Slash Command Registry — Pure-server commands that bypass the LLM for reduced latency; auto-registers with Telegram BotFather for autocomplete; built-in `/secret` command for secure credential management
 
@@ -75,12 +77,12 @@ Wee-Orchestrator is a unified AI agent platform that lets you chat with **any AI
 
 ```
   Telegram ──► TelegramConnector ──┐
-                                   │
-  WebEx ─────► WebEXConnector ─────┼──► SessionManager ──► AI CLI Runtimes
-                                   │       │                (Copilot, Claude,
-  Browser ───► FastAPI /api/v1 ────┘       │                 OpenCode, Gemini,
-                                           │                 Codex)
-                                    TaskScheduler
+  WebEx ─────► WebEXConnector ─────┼──► FastAPI /api/v1 ──► SessionManager
+  Browser ───► Web UI (SSE) ───────┤             │                 │
+  macOS app ───────────────────────┘             │                 └──► Runtimes
+                                                   │                      (Copilot, Claude,
+                                            TaskScheduler                   OpenCode, Gemini,
+                                                                            Codex, Wee Native)
 ```
 
 Each inbound message flows through a **channel connector**, into the shared **SessionManager** (which handles slash commands, session state, and agent routing), and out to the selected **AI CLI runtime** as a subprocess. Responses stream back in real time.
@@ -92,8 +94,8 @@ For the full component diagram, sequence diagrams, and deployment topology, see 
 ## 📋 Overview
 
 Wee-Orchestrator provides a flexible framework to:
-- Chat with AI agents from **Telegram**, **WebEx**, or the **browser-based Web UI**
-- Call AI CLIs (Copilot, OpenCode, Claude Code, Gemini, Codex) from N8N workflows
+- Chat with AI agents from **Telegram**, **WebEx**, the **browser-based Web UI**, or the **macOS app**
+- Call AI CLIs and the Wee native runtime (Ollama/OpenRouter) from N8N workflows
 - Maintain session affinity across multiple conversation turns
 - Switch between different agent repositories dynamically
 - Configure agents via JSON config files instead of hardcoding
@@ -105,14 +107,40 @@ Wee-Orchestrator provides a flexible framework to:
 
 For release history and feature documentation see **[CHANGELOG.md](./CHANGELOG.md)** and **[RELEASE_NOTES.md](./RELEASE_NOTES.md)**.
 
-## ⚡ Quick Start
+## 🖥️ macOS Desktop App
+
+The native macOS app is the fastest way to use Wee-Orchestrator as a desktop
+workspace. It includes Chat, Kanban, Background Tasks, Scheduled Tasks, Agents,
+separate Local/Remote settings, local API source management, and local Ollama
+model management.
+
+1. Download the current [macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.1.0-20260712).
+2. Unzip it, move `WeeOrchestrator.app` to Applications, and open it.
+3. In **Remote Settings**, pair with your Wee API or enter an API endpoint and
+   a Keychain-backed bearer token. Use **Local Settings** to clone/start an API
+   on the Mac instead.
+
+The app does not ship credentials. API tokens, OpenRouter keys, local shared
+keys, and connector tokens are stored in macOS Keychain. The release is ad-hoc
+signed, so macOS may require an initial Open/allow action until it is
+Developer-ID notarized.
+
+Use **File → New Window** for another workspace window. The app shares the
+configured services while each window has its own navigation state.
+
+For current client and local-runtime details, see
+[Local Runtime and Clients](docs/LOCAL_RUNTIME_AND_CLIENTS_2026-07.md).
+
+## ⚡ Quick Start — API server
 
 ```bash
 # 1. Clone the repo
 git clone https://github.com/leprachuan/Wee-Orchestrator.git
 cd Wee-Orchestrator
 
-# 2. Install dependencies
+# 2. Create an isolated Python environment and install dependencies
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. Configure your environment
@@ -122,7 +150,7 @@ cp .env.example .env    # Edit with your API keys and bot tokens
 vi agents.json           # Add your agent definitions
 
 # 5. Start the API server
-python3 agent_manager.py --api
+python agent_manager.py --api
 
 # 6. (Optional) Start channel connectors
 python3 telegram_connector.py   # Telegram bot
@@ -130,6 +158,8 @@ python3 webex_connector.py      # WebEx bot
 ```
 
 Then open `http://localhost:8000/ui` in your browser and pair via Telegram or WebEx.
+For a local macOS-managed API, the desktop client can perform the clone,
+dependency bootstrap, and launch steps from **Local Settings**.
 
 > 🚀 **Want to create your own bot?** Use the **[Wee-Orchestrator Starter Kit](https://github.com/leprachuan/wee-orchestrator-starter-kit)** to scaffold one in minutes.
 
@@ -141,7 +171,7 @@ Then open `http://localhost:8000/ui` in your browser and pair via Telegram or We
 |---------|-------------|
 | `/agent <name>` | Switch to a different agent |
 | `/model <model>` | Change AI model mid-conversation |
-| `/runtime <runtime>` | Switch AI runtime (copilot, claude, claude-agent-sdk, gemini, opencode, copilot-sdk, codex, devin) |
+| `/runtime <runtime>` | Switch runtime (copilot, claude, claude-sdk, gemini, opencode, copilot-sdk, codex, devin, cursor, wee) |
 | `/timeout <seconds>` | Adjust execution timeout |
 | `/status` | Check running task status |
 | `/cancel` | Cancel the current running task |
@@ -754,6 +784,13 @@ COPILOT_DEFAULT_MODEL=gpt-5-mini          # Default: gpt-5-mini
 
 # Default runtime for new sessions
 COPILOT_DEFAULT_RUNTIME=copilot           # Default: copilot
+
+# Optional local Wee-native runner endpoint (for ollama/<model>)
+WEE_OLLAMA_HOST=http://127.0.0.1:11434
+
+# Optional OpenRouter credential for openrouter/<provider>/<model>.
+# Set this in the host's secret store or process environment; never commit it.
+OPENROUTER_API_KEY=<set-outside-source-control>
 ```
 
 **Usage Examples:**
@@ -1754,6 +1791,7 @@ Chat responses from the Web UI use `POST /api/v1/sessions/{id}/stream` instead o
 |-------|---------|-------------|
 | `start` | `{}` | Streaming bubble created in the UI |
 | `chunk` | `{"text": "…"}` | Raw stdout line from the AI CLI as it arrives |
+| `tool_call` | `{"name":"search","status":"running\|complete",…}` | Live tool status and, on completion, its result |
 | `done` | `{"response":"…","runtime":"…","model":"…"}` | Final stripped response; bubble replaced with rendered markdown |
 | `error` | `{"message":"…"}` | On failure |
 
@@ -2575,4 +2613,3 @@ All outstanding work is tracked in GitHub Issues. Check the repository issues bo
 - **Blocked** - Waiting on dependencies
 
 Start here: [GitHub Issues](../../issues)
-
