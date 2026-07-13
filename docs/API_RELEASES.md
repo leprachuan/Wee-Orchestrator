@@ -14,6 +14,14 @@ The archive is created with `git archive`, so it includes only files committed
 to the release revision. Local `.env`, `agents.json`, virtual environments,
 session data, and uncommitted changes are not packaged.
 
+## Development and release policy
+
+Development may happen on any branch, including `main`. Direct commits to
+`main` are permitted; feature branches and pull requests are optional tools for
+collaboration, not release gates. A branch is never itself a supported
+distribution channel. Users receive only the versioned API artifacts published
+on GitHub Releases.
+
 ## Install or upgrade
 
 On macOS or Linux, install the latest published API release with:
@@ -46,11 +54,11 @@ network.
 
 ## Maintainer release procedure
 
-1. Run the relevant tests and ensure the release commit is on `main`.
+1. Run the relevant tests and identify the exact committed revision to release.
 2. Choose the next semantic version and build an archive from that commit:
 
    ```bash
-   scripts/package-api-release.sh 1.0.0 main
+   scripts/package-api-release.sh 1.0.0 <committed-ref>
    ```
 
 3. Inspect the archive and checksum, then create a GitHub release tagged

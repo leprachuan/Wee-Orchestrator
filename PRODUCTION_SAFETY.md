@@ -8,31 +8,32 @@
 All code and configuration changes MUST follow this workflow:
 
 ### Required Deployment Workflow
-1. **Develop in `/opt/n8n-copilot-shim-dev`** (dev branch)
-2. **Test thoroughly** in dev environment
-3. **Create PR** (dev → main branch on GitHub)
-4. **Code review & approval**
-5. **Merge to main** (on GitHub)
-6. **Pull from main** in this folder only:
+1. **Develop and test in the dev environment**. The source may be on any Git
+   branch, including `main`; branch choice is not a deployment policy.
+2. **Test thoroughly** in dev environment.
+3. **Commit and push** the tested revision. A pull request is optional when it
+   is useful for collaboration or review; direct commits to `main` are allowed.
+4. **Create and validate a versioned release** for the artifact being
+   distributed. Releases, not branch names, are the supported deliverables.
+5. **Deploy only the approved release revision** in this folder:
    ```bash
    cd /opt/n8n-copilot-shim
-   git fetch origin
-   git checkout main
-   git pull origin main
+   git fetch origin --tags
+   git checkout api-vMAJOR.MINOR.PATCH
    ```
-7. **Restart services** (one by one, with verification)
+6. **Restart services** (one by one, with verification).
 
 ### What This Means
 ✅ **DO:**
 - Edit dev folder only (`/opt/n8n-copilot-shim-dev`)
 - Test changes in dev environment
-- Create PRs for code review
-- Pull main branch after merge approval
+- Use a branch or a direct `main` commit as appropriate
+- Create a tested, versioned release before giving software to users
+- Pull the approved release revision before deployment
 
 ❌ **DO NOT:**
 - Edit code files directly
 - Modify `.env` files manually (unless it's a temporary override, then document it)
-- Commit directly to main from this folder
 - Restart services for quick testing
 - Make config changes without dev testing first
 
