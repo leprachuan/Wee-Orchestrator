@@ -34,8 +34,10 @@ settings. It can clone and bootstrap a local API checkout, manage Ollama, and
 open multiple workspace windows.
 
 Download the current app from the
-[macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.2.2).
+[macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.2.3).
 The app ships without credentials; configure them in Keychain-backed settings.
+It checks the `macos-v*` release stream and can download, verify, install, and
+relaunch future app updates from inside the client.
 
 ## Why Wee-Orchestrator
 
@@ -109,7 +111,7 @@ do **not** use `API_HOST=0.0.0.0`. See [network access guidance](docs/dev-access
 
 ## Install and configure the macOS app
 
-1. Download and unzip the current [macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.2.2).
+1. Download and unzip the current [macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.2.3).
 2. Move `WeeOrchestrator.app` to Applications and open it. The ad-hoc-signed
    build may require an initial macOS Open/allow action.
 3. Use **Remote Settings** to enter your API URL and pair/sign in, or use
@@ -119,6 +121,9 @@ do **not** use `API_HOST=0.0.0.0`. See [network access guidance](docs/dev-access
    Local Settings and stored only in macOS Keychain.
 
 Use **File → New Window** to open another workspace window.
+Use **Check for Updates** or the in-app update notice to install later macOS
+releases with one click; each update is verified against its published SHA-256
+checksum before replacement.
 
 ## Essential configuration
 
