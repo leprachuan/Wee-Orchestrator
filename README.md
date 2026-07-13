@@ -34,7 +34,7 @@ settings. It can clone and bootstrap a local API checkout, manage Ollama, and
 open multiple workspace windows.
 
 Download the current app from the
-[macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.1.0-20260712).
+[macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.2.2).
 The app ships without credentials; configure them in Keychain-backed settings.
 
 ## Why Wee-Orchestrator
@@ -69,18 +69,21 @@ agents or credentials with a remote deployment.
 
 ## Install the API
 
-### Linux one-line installer
+### macOS and Linux one-line installer
 
-For a localhost-only Linux installation with a virtual environment, a private
+For a localhost-only API installation with a virtual environment, a private
 generated shared key, and a minimal local agent:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leprachuan/Wee-Orchestrator/main/scripts/install-linux.sh | bash
+curl -fsSL https://raw.githubusercontent.com/leprachuan/Wee-Orchestrator/main/scripts/install-api.sh | bash
 ```
 
-Optional environment variables: `WEE_INSTALL_DIR` chooses the checkout
-directory and `WEE_REF` chooses a Git tag or branch. Read the script before
-running it if your environment requires a custom package or source policy.
+It downloads the latest stable, versioned API release and verifies its SHA-256
+checksum before installing it. Set `WEE_VERSION=api-vMAJOR.MINOR.PATCH` and/or
+`WEE_INSTALL_DIR=/your/path` after the pipe to select a release or location.
+See [API releases](docs/API_RELEASES.md) for the exact command and upgrade
+behavior. Read the script before running it if your environment requires a
+custom package or source policy.
 
 ### Manual installation
 
@@ -106,7 +109,7 @@ do **not** use `API_HOST=0.0.0.0`. See [network access guidance](docs/dev-access
 
 ## Install and configure the macOS app
 
-1. Download and unzip the current [macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.1.0-20260712).
+1. Download and unzip the current [macOS release](https://github.com/leprachuan/Wee-Orchestrator/releases/tag/macos-v0.2.2).
 2. Move `WeeOrchestrator.app` to Applications and open it. The ad-hoc-signed
    build may require an initial macOS Open/allow action.
 3. Use **Remote Settings** to enter your API URL and pair/sign in, or use
@@ -142,6 +145,8 @@ here now lives in the following focused references.
   troubleshooting, and operations.
 - [Architecture](ARCHITECTURE.md) — components, deployment topology, and
   orchestration flow.
+- [API releases](docs/API_RELEASES.md) — supported installers, release assets,
+  checksum verification, and the API versioning process.
 - [Documentation index](docs/README.md) — entry point for the remaining
   feature-specific documentation.
 
