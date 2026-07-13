@@ -4614,6 +4614,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         truth), then the deprecated CODEX_MODELS_JSON env var override, then
         the static CODEX_MODELS fallback.
         """
+        # A ChatGPT-authenticated Codex CLI currently selects its supported
+        # model server-side. Passing arbitrary catalog IDs (including model
+        # variants valid in other runtimes) causes a structured 400 response.
+        # Offer only the account default in that configuration.
+        if self._codex_uses_chatgpt_account():
+            return {"Codex CLI": ["default"]}
+
         manifest_models = self._manifest_models_to_dict("codex")
         if manifest_models:
             return manifest_models
@@ -4634,6 +4641,31 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
+
+    def _codex_uses_chatgpt_account(self) -> bool:
+        """Return whether the local Codex CLI is logged in with ChatGPT OAuth.
+
+        The result is cached for the API process: this method is used by both
+        catalog discovery and execution, and `codex login status` is a local,
+        credential-free status command.
+        """
+        cached = getattr(self, "_codex_chatgpt_account", None)
+        if cached is not None:
+            return cached
+
+        try:
+            status = subprocess.run(
+                ["codex", "login", "status"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            output = f"{status.stdout}\n{status.stderr}".lower()
+            self._codex_chatgpt_account = "logged in using chatgpt" in output
+        except (OSError, subprocess.SubprocessError):
+            self._codex_chatgpt_account = False
+        return self._codex_chatgpt_account
 
     def fetch_devin_models(self) -> Dict:
         """Return available Devin models by querying the CLI directly.
@@ -7798,6 +7830,18 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        if model and self._codex_uses_chatgpt_account():
+            # ChatGPT OAuth does not accept client-selected model IDs. Let the
+            # Codex service select the account's supported default instead of
+            # issuing `-m <unsupported-model>` and returning an empty turn.
+            requested_model = model
+            model = ""
+            self.update_session_field(n8n_session_id, "model", "default")
+            print(
+                f"[Codex] Ignoring requested model '{requested_model}' for ChatGPT-authenticated Codex; using account default.",
+                file=sys.stderr,
+            )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
