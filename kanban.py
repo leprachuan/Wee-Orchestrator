@@ -370,11 +370,13 @@ def due_bucket(due: str | None, now: datetime | None = None) -> str:
     if now_dt.tzinfo is None:
         now_dt = now_dt.replace(tzinfo=timezone.utc)
 
-    if due_dt < now_dt:
+    due_date = due_dt.date()
+    now_date = now_dt.date()
+    if due_date < now_date:
         return "overdue"
-    if due_dt.date() == now_dt.date():
+    if due_date == now_date:
         return "today"
-    if due_dt <= now_dt + timedelta(days=3):
+    if due_date <= now_date + timedelta(days=3):
         return "soon"
     return "future"
 
