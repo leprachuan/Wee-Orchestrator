@@ -1,6 +1,6 @@
 {
-  "source": "manually verified from Codex CLI model picker 2026-04-26; claude/devin/cursor/gemini/wee migrated from agent_manager.py static dicts for issue #359",
-  "last_updated": "2026-06-10T00:00:00.000000Z",
+  "source": "manually verified from Codex CLI model picker 2026-04-26; claude/devin/cursor/gemini/wee migrated from agent_manager.py static dicts for issue #359; devin list refreshed for issue #418 (Devin dropped all haiku variants)",
+  "last_updated": "2026-07-15T00:00:00.000000Z",
   "runtimes": {
     "copilot": [
       "auto",
@@ -68,21 +68,25 @@
       "gemini-pro"
     ],
     "devin": [
+      "claude-sonnet-5",
       "claude-sonnet-4.6",
+      "claude-opus-4.8",
       "claude-opus-4.7",
       "claude-opus-4.6",
       "claude-sonnet-4.5",
       "claude-sonnet-4.5-thinking",
-      "claude-haiku-4.5",
       "claude-opus-4.5",
       "claude-sonnet-4",
       "gemini-3.1-pro",
       "gemini-3-pro",
       "gemini-3-flash",
+      "gpt-5.6",
+      "gpt-5.5",
       "gpt-5.4",
       "gpt-5.3-codex",
       "gpt-5.2",
       "phoenix-alpha",
+      "swe-1.6",
       "swe-1.5",
       "swe-1.5-fast"
     ],

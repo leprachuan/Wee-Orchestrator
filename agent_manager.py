@@ -1988,6 +1988,10 @@ class SessionManager:
     }
 
     # DEVIN models configuration
+    # NOTE (issue #418): Devin dropped every haiku variant from its valid model
+    # set. Do not re-add any "claude-haiku-*" entry here -- Devin's CLI will
+    # reject it and, on some builds, exit 0 while printing an error, which
+    # silently corrupts scheduled job results.
     DEVIN_MODELS = {
         "Anthropic Models": [
             ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
@@ -1998,10 +2002,11 @@ class SessionManager:
                 ["sonnet-thinking"],
             ),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
-            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
+            ("claude-sonnet-5", "Claude Sonnet 5", ["sonnet-5"]),
             ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
-            ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
+            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
+            ("claude-opus-4.8", "Claude Opus 4.8", ["opus-4.8"]),
         ],
         "Google Models": [
             ("gemini-3-flash", "Gemini 3 Flash", ["gemini-flash"]),
@@ -2012,11 +2017,14 @@ class SessionManager:
             ("gpt-5.2", "GPT-5.2", []),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["codex"]),
             ("gpt-5.4", "GPT-5.4", []),
+            ("gpt-5.5", "GPT-5.5", []),
+            ("gpt-5.6", "GPT-5.6", []),
         ],
         "Other Models": [
             ("phoenix-alpha", "Phoenix Alpha", ["phoenix"]),
             ("swe-1.5", "SWE-1.5", ["swe"]),
             ("swe-1.5-fast", "SWE-1.5 Fast", ["swe-fast"]),
+            ("swe-1.6", "SWE-1.6", ["swe-1.6"]),
         ],
     }
 
