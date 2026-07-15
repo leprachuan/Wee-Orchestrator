@@ -3851,10 +3851,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
-    def _copilot_static_fallback(self) -> dict:
-        # model-manifest.json (runtimes.copilot) is the source of truth; this
-        # static list is only used if the manifest is missing/empty.
-        manifest_models = self._manifest_models_to_dict("copilot")
+    def _copilot_static_fallback(self, runtime: str = "copilot") -> dict:
+        # model-manifest.json (runtimes.copilot / runtimes.copilot-sdk) is the
+        # source of truth; this static list is only used if the manifest is
+        # missing/empty for both the runtime and its alias.
+        manifest_models = self._manifest_models_to_dict(runtime)
         if manifest_models:
             return manifest_models
         return {
@@ -3889,15 +3890,21 @@ You can mention an agent in your prompt and it will auto-delegate:
             ],
         }
 
-    def fetch_copilot_models(self) -> Dict:
-        """Fetch available models from model-manifest.json, falling back to copilot CLI help text."""
-        manifest_models = self._manifest_models_to_dict("copilot")
+    def fetch_copilot_models(self, runtime: str = "copilot") -> Dict:
+        """Fetch available models from model-manifest.json, falling back to copilot CLI help text.
+
+        `runtime` is "copilot" or "copilot-sdk" — each may define its own
+        dedicated entry in model-manifest.json (issue #417); when neither CLI
+        discovery nor manifest lookup name a dedicated model list is present
+        for "copilot-sdk", `_model_manifest_models` falls back to "copilot".
+        """
+        manifest_models = self._manifest_models_to_dict(runtime)
         if manifest_models:
             return manifest_models
 
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
-            return self._copilot_static_fallback()
+            return self._copilot_static_fallback(runtime)
 
         try:
             # Use --no-color to ensure clean text
@@ -4018,7 +4025,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return categorized
         except Exception as e:
             print(f"Error fetching copilot models: {e}", file=sys.stderr)
-            return self._copilot_static_fallback()
+            return self._copilot_static_fallback(runtime)
 
     def fetch_opencode_models(self) -> Dict:
         """Fetch available models from opencode CLI, falling back to manifest/static list on failure."""
@@ -4362,10 +4369,21 @@ You can mention an agent in your prompt and it will auto-delegate:
     # enough to add/remove/reorder models with no code changes.
 
     def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
-        """Return the raw manifest model id list for `runtime`, or None if absent."""
+        """Return the raw manifest model id list for `runtime`, or None if absent.
+
+        Looks up a dedicated entry for `runtime` first (e.g. `copilot-sdk`
+        can define its own model list independent of `copilot`). Only falls
+        back to the alias's list (see `_model_manifest_runtime_key`) when no
+        dedicated entry exists — issue #417.
+        """
         manifest = load_model_manifest()
-        runtime_key = _model_manifest_runtime_key(runtime)
-        models = manifest.get("runtimes", {}).get(runtime_key)
+        runtimes = manifest.get("runtimes", {})
+        runtime_key = (runtime or "").lower().strip()
+        models = runtimes.get(runtime_key)
+        if not models:
+            alias_key = _model_manifest_runtime_key(runtime)
+            if alias_key != runtime_key:
+                models = runtimes.get(alias_key)
         if not models:
             return None
         return [m for m in models if isinstance(m, str) and m.strip()]
@@ -4829,8 +4847,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         or does not support model listing.
         """
         dispatch = {
-            "copilot": self.fetch_copilot_models,
-            "copilot-sdk": self.fetch_copilot_models,
+            "copilot": lambda: self.fetch_copilot_models("copilot"),
+            "copilot-sdk": lambda: self.fetch_copilot_models("copilot-sdk"),
             "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
             "claude": lambda: self.fetch_claude_models("claude"),
