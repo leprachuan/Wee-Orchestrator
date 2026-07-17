@@ -2131,6 +2131,7 @@ class SessionManager:
         # Executable paths (resolved dynamically)
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
+        self.codex_bin = find_executable("codex")
         self.devin_bin = find_executable("devin")
         self.cursor_bin = find_executable("agent")
 
@@ -4654,8 +4655,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             return cached
 
         try:
+            codex_bin = (
+                getattr(self, "codex_bin", None) or find_executable("codex") or "codex"
+            )
             status = subprocess.run(
-                ["codex", "login", "status"],
+                [codex_bin, "login", "status"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -7078,6 +7082,19 @@ User Request:
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
             _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
+            # GUI-launched macOS processes receive a minimal system PATH.  CLI
+            # wrappers installed by Homebrew (including Codex, whose launcher
+            # invokes `env node`) need the Homebrew Node directory available to
+            # their child process as well as to the initial executable lookup.
+            _cli_paths = [
+                str(Path.home() / ".local" / "bin"),
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+            ]
+            _existing_paths = _sub_env.get("PATH", "").split(os.pathsep)
+            _sub_env["PATH"] = os.pathsep.join(
+                _cli_paths + [path for path in _existing_paths if path not in _cli_paths]
+            )
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -7830,18 +7847,6 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-
-        if model and self._codex_uses_chatgpt_account():
-            # ChatGPT OAuth does not accept client-selected model IDs. Let the
-            # Codex service select the account's supported default instead of
-            # issuing `-m <unsupported-model>` and returning an empty turn.
-            requested_model = model
-            model = ""
-            self.update_session_field(n8n_session_id, "model", "default")
-            print(
-                f"[Codex] Ignoring requested model '{requested_model}' for ChatGPT-authenticated Codex; using account default.",
-                file=sys.stderr,
-            )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
@@ -8932,8 +8937,24 @@ User Request:
         # Resolve permission mode from session data (backward compat with yolo_mode)
         mode = self._resolve_permission_mode(session_data, mode)
 
+        codex_bin = getattr(self, "codex_bin", None) or find_executable("codex")
+        if not codex_bin:
+            return "Error: Codex executable not found. Install Codex or add it to PATH."
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        if model and self._codex_uses_chatgpt_account():
+            # ChatGPT OAuth does not accept client-selected model IDs. Let the
+            # Codex service select the account's supported default instead of
+            # issuing `-m <unsupported-model>` and returning an empty turn.
+            requested_model = model
+            model = ""
+            self.update_session_field(n8n_session_id, "model", "default")
+            print(
+                f"[Codex] Ignoring requested model '{requested_model}' for ChatGPT-authenticated Codex; using account default.",
+                file=sys.stderr,
+            )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
@@ -8979,7 +9000,7 @@ User Request:
 
         if resume and session_id:
             # Resume existing session — v0.125.0+ uses `codex exec resume` subcommand
-            cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "resume"]
+            cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -8994,7 +9015,7 @@ User Request:
         else:
             # Start new session — v0.125.0+: --full-auto for normal mode,
             # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
-            cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
+            cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -11089,6 +11110,12 @@ User Request:
                     "", current_runtime, n8n_session_id=n8n_session_id
                 )
             )
+        elif current_runtime == "codex":
+            # Codex Desktop and the local API share ~/.codex/sessions. A
+            # filesystem scan can therefore select an unrelated Desktop task
+            # and make `codex exec resume` hang or return its context. Until
+            # the API owns isolated Codex session state, start a clean turn.
+            can_resume = False
         elif current_runtime == "wee":
             # Issue #108 fix: Wee has no external session_id — history is keyed
             # by n8n_session_id in session_map.  Must pass n8n_session_id so
@@ -11124,7 +11151,6 @@ User Request:
             "copilot",
             "opencode",
             "gemini",
-            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
@@ -13995,7 +14021,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
             elif rt == "codex":
-                _codex_bin = _which_bin("codex") or "codex"
+                _codex_bin = find_executable("codex") or "codex"
                 _cmd = [_codex_bin, "exec", "--json", "--skip-git-repo-check"]
                 if perm_mode == "elevated":
                     _cmd.extend([
@@ -14148,7 +14174,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
                     _cmd = [_oc_bin, "run", "--model", model, context_prompt]
                 elif runtime == "codex":
-                    _codex_bin = _which_bin("codex") or "codex"
+                    _codex_bin = find_executable("codex") or "codex"
                     _cmd = [
                         _codex_bin,
                         "exec",

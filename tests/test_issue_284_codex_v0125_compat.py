@@ -25,8 +25,16 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
             "orchestrator": {"path": self.tmpdir},
         }
         self.mgr.command_timeout = 60
+        self.mgr.codex_bin = "codex"
         self.mgr.codex_session_dir = Path(self.tmpdir) / ".codex" / "sessions"
         self.mgr.codex_session_dir.mkdir(parents=True)
+        self.mgr._codex_uses_chatgpt_account = lambda: False
+        self.model_updates = []
+        self.mgr.update_session_field = (
+            lambda session_id, field, value: self.model_updates.append(
+                (session_id, field, value)
+            )
+        )
 
     # ------------------------------------------------------------------
     # Flag tests
@@ -165,6 +173,32 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         exec_idx = cmd.index("exec")
         resume_idx = cmd.index("resume")
         self.assertGreater(resume_idx, exec_idx)
+
+    def test_chatgpt_auth_uses_account_default_for_new_codex_session(self):
+        """ChatGPT-authenticated Codex must not receive a catalog model ID."""
+        self.mgr._codex_uses_chatgpt_account = lambda: True
+
+        cmd = self._capture_cmd_new_session()
+
+        self.assertNotIn("-m", cmd)
+        self.assertIn(("test-session", "model", "default"), self.model_updates)
+
+    def test_chatgpt_auth_uses_account_default_for_resumed_codex_session(self):
+        """The same normalization applies before a Codex resume command."""
+        self.mgr._codex_uses_chatgpt_account = lambda: True
+
+        cmd = self._capture_cmd_resume_session()
+
+        self.assertNotIn("-m", cmd)
+        self.assertIn(("test-session", "model", "default"), self.model_updates)
+
+    def test_new_session_uses_resolved_codex_executable(self):
+        """The macOS app has a minimal PATH, so use the resolved binary path."""
+        self.mgr.codex_bin = "/opt/homebrew/bin/codex"
+
+        cmd = self._capture_cmd_new_session()
+
+        self.assertEqual(cmd[0], "/opt/homebrew/bin/codex")
 
     # ------------------------------------------------------------------
     # strip_metadata: JSONL parsing
@@ -321,14 +355,15 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         source = inspect.getsource(agent_manager)
         start = source.find("def _build_bg_cmd(")
         self.assertGreater(start, 0, "_build_bg_cmd function not found")
-        codex_branch_start = source.find('elif eff_runtime == "codex":', start)
+        codex_branch_start = source.find('elif rt == "codex":', start)
         self.assertGreater(
             codex_branch_start, 0, "codex runtime branch not found in _build_bg_cmd"
         )
-        next_branch = source.find("elif eff_runtime ==", codex_branch_start + 1)
-        if next_branch == -1:
-            next_branch = source.find("else:", codex_branch_start + 1)
-        codex_block = source[codex_branch_start:next_branch]
+        command_return = source.find('elif rt == "claude":', codex_branch_start)
+        self.assertGreater(
+            command_return, codex_branch_start, "next background runtime branch not found"
+        )
+        codex_block = source[codex_branch_start:command_return]
 
         self.assertIn('"--json"', codex_block)
         self.assertIn('"--skip-git-repo-check"', codex_block)
