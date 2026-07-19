@@ -65,6 +65,10 @@ def test_normal_model_is_unchanged():
     ) == "openrouter/openai/gpt-5.6-luna"
 
 
+def test_legacy_persisted_current_alias_is_ignored():
+    assert _normalize_model_identifier("current") == ""
+
+
 def test_model_current_does_not_switch_models():
     with patch("wee_cli.resolve_model_and_endpoint") as resolve:
         with patch("sys.stderr", new_callable=StringIO) as stderr:

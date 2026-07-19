@@ -66,6 +66,7 @@ DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
 HISTORY_FILE = os.path.join(DEFAULT_CONFIG_DIR, "history")
 SESSION_DIR = os.path.join(DEFAULT_CONFIG_DIR, "sessions")
 _SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_MODEL_STATUS_ALIASES = {"current", "show", "get"}
 
 
 def _normalize_model_identifier(value: str) -> str:
@@ -73,6 +74,8 @@ def _normalize_model_identifier(value: str) -> str:
     model = str(value or "").strip()
     if model.lower().startswith("set "):
         model = model[4:].strip()
+    if model.lower() in _MODEL_STATUS_ALIASES:
+        return ""
     return model
 
 
@@ -1656,21 +1659,28 @@ def main(argv=None):
         session_data = load_session_data(session_name)
 
     # Resolve model: CLI arg > env var > config file > default
-    raw_model_str = (
-        args.model
-        or os.environ.get("WEE_MODEL")
-        or cfg.get("model")
-        or session_data.get("model")
-        or "ollama/qwen3.5:4b"
+    model_candidates = (
+        args.model,
+        os.environ.get("WEE_MODEL"),
+        cfg.get("model"),
+        session_data.get("model"),
+        "ollama/qwen3.5:4b",
     )
-    model_str = _normalize_model_identifier(raw_model_str)
-    if not model_str:
-        parser.error("model identifier cannot be empty")
+    model_str = next(
+        (
+            normalized
+            for candidate in model_candidates
+            if (normalized := _normalize_model_identifier(candidate))
+        ),
+        "ollama/qwen3.5:4b",
+    )
 
     # Issue #426: persist the repaired default config immediately so a model
     # value written by the old `/model set` parser cannot break future starts.
-    if cfg.get("model") == raw_model_str and model_str != raw_model_str:
-        cfg["model"] = model_str
+    configured_model = cfg.get("model")
+    normalized_configured_model = _normalize_model_identifier(configured_model)
+    if configured_model and normalized_configured_model != configured_model:
+        cfg["model"] = normalized_configured_model or model_str
         os.makedirs(os.path.dirname(os.path.abspath(config_path)), exist_ok=True)
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
