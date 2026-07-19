@@ -165,7 +165,7 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
 
         truncated_chunk = MagicMock()
         truncated_chunk.choices = [MagicMock()]
-        truncated_chunk.choices[0].delta.content = "W"
+        truncated_chunk.choices[0].delta.content = "To"
         truncated_chunk.choices[0].delta.tool_calls = None
         retry_chunk = MagicMock()
         retry_chunk.choices = [MagicMock()]
