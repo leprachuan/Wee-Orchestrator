@@ -68,6 +68,14 @@ SESSION_DIR = os.path.join(DEFAULT_CONFIG_DIR, "sessions")
 _SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
+def _normalize_model_identifier(value: str) -> str:
+    """Repair model IDs persisted by the pre-Issue #426 `/model set` parser."""
+    model = str(value or "").strip()
+    if model.lower().startswith("set "):
+        model = model[4:].strip()
+    return model
+
+
 def _chat_via_copilot_sdk(
     *,
     messages: list,
@@ -1645,13 +1653,24 @@ def main(argv=None):
         session_data = load_session_data(session_name)
 
     # Resolve model: CLI arg > env var > config file > default
-    model_str = (
+    raw_model_str = (
         args.model
         or os.environ.get("WEE_MODEL")
         or cfg.get("model")
         or session_data.get("model")
         or "ollama/qwen3.5:4b"
     )
+    model_str = _normalize_model_identifier(raw_model_str)
+    if not model_str:
+        parser.error("model identifier cannot be empty")
+
+    # Issue #426: persist the repaired default config immediately so a model
+    # value written by the old `/model set` parser cannot break future starts.
+    if cfg.get("model") == raw_model_str and model_str != raw_model_str:
+        cfg["model"] = model_str
+        os.makedirs(os.path.dirname(os.path.abspath(config_path)), exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
 
     # Resolve other settings from config
     system_prompt = args.system or cfg.get("system_prompt", "")
