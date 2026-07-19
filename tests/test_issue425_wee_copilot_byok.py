@@ -191,7 +191,7 @@ def test_legacy_api_endpoint_uses_configured_ollama(monkeypatch):
 
     monkeypatch.setenv("WEE_OLLAMA_HOST", "ollama-dev.example:11434")
     mgr = SessionManager.__new__(SessionManager)
-    model, base_url, api_key = mgr._wee_resolve_endpoint(
+    base_url, api_key, model = mgr._wee_resolve_endpoint(
         "ollama/qwen3:8b", None, None
     )
 
