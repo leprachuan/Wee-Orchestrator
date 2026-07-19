@@ -163,11 +163,18 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta.content = "plain retry response"
-        chunk.choices[0].delta.tool_calls = None
-        mock_client.chat.completions.create.side_effect = [[], [chunk]]
+        truncated_chunk = MagicMock()
+        truncated_chunk.choices = [MagicMock()]
+        truncated_chunk.choices[0].delta.content = "W"
+        truncated_chunk.choices[0].delta.tool_calls = None
+        retry_chunk = MagicMock()
+        retry_chunk.choices = [MagicMock()]
+        retry_chunk.choices[0].delta.content = "plain retry response"
+        retry_chunk.choices[0].delta.tool_calls = None
+        mock_client.chat.completions.create.side_effect = [
+            [truncated_chunk],
+            [retry_chunk],
+        ]
 
         test_session = "test_wee_empty_tool_stream"
         mgr.session_map[test_session] = {

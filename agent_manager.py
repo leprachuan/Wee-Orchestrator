@@ -9894,7 +9894,7 @@ User Request:
                 # rejects the tools parameter outright (#434).
                 if (
                     round_num == 0
-                    and not content_text.strip()
+                    and len(content_text.strip()) <= 1
                     and not tool_calls_acc
                     and "tools" in create_kwargs
                 ):
