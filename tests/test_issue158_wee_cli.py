@@ -873,7 +873,7 @@ class TestPipingSupport(unittest.TestCase):
         mock_chat.assert_called_once()
         # The prompt should contain the piped input
         call_kwargs = mock_chat.call_args[1]
-        user_msg = [m for m in call_kwargs["messages"] if m["role"] == "user"][0]
+        user_msg = [m for m in call_kwargs["messages"] if m["role"] == "user"][-1]
         self.assertIn("piped input", user_msg["content"])
 
 
