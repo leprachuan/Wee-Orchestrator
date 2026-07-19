@@ -22,6 +22,21 @@ import subprocess
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
+_PREVIOUS_SDK_ENABLED = os.environ.get("WEE_COPILOT_SDK_ENABLED")
+
+
+def setUpModule():
+    """Keep issue #158's legacy OpenAI mocks off the newer SDK path."""
+    os.environ["WEE_COPILOT_SDK_ENABLED"] = "0"
+
+
+def tearDownModule():
+    if _PREVIOUS_SDK_ENABLED is None:
+        os.environ.pop("WEE_COPILOT_SDK_ENABLED", None)
+    else:
+        os.environ["WEE_COPILOT_SDK_ENABLED"] = _PREVIOUS_SDK_ENABLED
+
+
 # Ensure project root is in path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
