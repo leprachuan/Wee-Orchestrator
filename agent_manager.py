@@ -9402,6 +9402,49 @@ User Request:
                 handler=call_agent_handler,
             )
 
+            async def browser_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "browser",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            browser_tool = Tool(
+                name="browser",
+                description=(
+                    "Control the browser attached to this chat session. Use it to "
+                    "navigate, inspect page text and links, click, type, go back or "
+                    "forward, reload, or evaluate JavaScript."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "navigate",
+                                "snapshot",
+                                "click",
+                                "type",
+                                "evaluate",
+                                "back",
+                                "forward",
+                                "reload",
+                            ],
+                        },
+                        "url": {"type": "string"},
+                        "selector": {"type": "string"},
+                        "text": {"type": "string"},
+                        "script": {"type": "string"},
+                        "submit": {"type": "boolean"},
+                    },
+                    "required": ["action"],
+                },
+                handler=browser_handler,
+            )
+
             def on_sdk_event(kind, payload):
                 if not stream_buffer:
                     return
@@ -9439,7 +9482,7 @@ User Request:
                 timeout=float(effective_timeout),
                 session_id=saved_sdk_session,
                 resume=bool(resume and saved_sdk_session),
-                tools=[call_agent_tool],
+                tools=[call_agent_tool, browser_tool],
                 enable_tools=True,
                 event_callback=on_sdk_event,
             )
@@ -9775,6 +9818,41 @@ User Request:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "browser",
+                    "description": (
+                        "Control the browser attached to this chat session, or a "
+                        "session-scoped Playwright browser when no native browser "
+                        "is connected."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": [
+                                    "navigate",
+                                    "snapshot",
+                                    "click",
+                                    "type",
+                                    "evaluate",
+                                    "back",
+                                    "forward",
+                                    "reload",
+                                ],
+                            },
+                            "url": {"type": "string"},
+                            "selector": {"type": "string"},
+                            "text": {"type": "string"},
+                            "script": {"type": "string"},
+                            "submit": {"type": "boolean"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+            },
         ]
 
         collected_output = []
@@ -9995,7 +10073,9 @@ User Request:
                     )
 
                     # Execute the tool
-                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
+                    tool_result = self._wee_execute_tool(
+                        func_name, func_args, agent, n8n_session_id
+                    )
 
                     # Issue #109: Emit tool complete event to SSE stream
                     tc_done_event = {
@@ -10662,7 +10742,13 @@ User Request:
             resolved_key = "ollama"
         return resolved_base, resolved_key, resolved_model
 
-    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
+    def _wee_execute_tool(
+        self,
+        func_name: str,
+        func_args: dict,
+        agent: str,
+        n8n_session_id: Optional[str] = None,
+    ) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
         Issue #107: Supports bash, python, and web search tools. Uses the same
@@ -10707,8 +10793,18 @@ User Request:
             elif func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
                 return self._wee_call_agent(func_args)
+            elif func_name == "browser":
+                if not n8n_session_id:
+                    return "Error: Browser tool requires a chat session"
+                from browser_bridge import execute_browser_command
+
+                return execute_browser_command(
+                    n8n_session_id,
+                    func_args,
+                    timeout=min(float(self.command_timeout), 90.0),
+                )
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: bash, python, search, call_agent"
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python, search, call_agent, browser"
         except subprocess.TimeoutExpired:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
@@ -12316,6 +12412,107 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "active_sessions": len(session_mgr.load_session_map()),
             "remote_api_url": REMOTE_API_URL or None,
         }
+
+    def _assert_browser_session_owner(session_id: str, user: dict) -> None:
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        owner = data.get("identity")
+        channel = data.get("channel")
+        if owner and owner != user["identity"]:
+            raise HTTPException(
+                status_code=403, detail="Browser session belongs to another user"
+            )
+        if channel and channel != user["channel"]:
+            raise HTTPException(
+                status_code=403, detail="Browser session belongs to another channel"
+            )
+
+    @app.post("/api/v1/browser/sessions/{session_id}/register")
+    async def register_native_browser(session_id: str, request: Request):
+        """Attach a native browser controller to one authenticated chat session."""
+        from browser_bridge import native_browser_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id is required")
+        try:
+            native_browser_broker.register(
+                session_id, user["identity"], user["channel"], client_id
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"registered": True, "session_id": session_id}
+
+    @app.get("/api/v1/browser/sessions/{session_id}/commands")
+    async def poll_native_browser_commands(
+        session_id: str, request: Request, client_id: str, timeout: float = 25.0
+    ):
+        """Long-poll the next command for a native session browser."""
+        from browser_bridge import native_browser_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+        try:
+            command = await asyncio.to_thread(
+                native_browser_broker.poll,
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                timeout,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"command": command}
+
+    @app.post("/api/v1/browser/sessions/{session_id}/results")
+    async def submit_native_browser_result(session_id: str, request: Request):
+        """Return a native WKWebView command result to the waiting Wee tool."""
+        from browser_bridge import native_browser_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        command_id = str(body.get("command_id") or "").strip()
+        if not client_id or not command_id:
+            raise HTTPException(
+                status_code=400, detail="client_id and command_id are required"
+            )
+        try:
+            native_browser_broker.submit_result(
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                command_id,
+                result=body.get("result"),
+                error=body.get("error"),
+                url=body.get("url"),
+                title=body.get("title"),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"accepted": True}
 
     @app.get("/api/v1/service-status")
     async def get_service_status():
