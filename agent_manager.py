@@ -4194,8 +4194,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         cache_ttl = 300
         if (
-            self._openrouter_models_cache is not None
-            and time.time() - self._openrouter_models_cache_ts < cache_ttl
+            getattr(self, "_openrouter_models_cache", None) is not None
+            and time.time() - getattr(self, "_openrouter_models_cache_ts", 0)
+            < cache_ttl
         ):
             return self._openrouter_models_cache
 
