@@ -3,7 +3,7 @@
 from io import StringIO
 from unittest.mock import patch
 
-from wee_cli import run_interactive
+from wee_cli import _normalize_model_identifier, run_interactive
 
 
 def _run_with_inputs(inputs):
@@ -51,3 +51,15 @@ def test_model_set_without_model_reports_usage():
 
     resolve.assert_not_called()
     assert "Usage: /model set PROVIDER/MODEL" in stderr.getvalue()
+
+
+def test_legacy_persisted_model_is_repaired():
+    assert _normalize_model_identifier(
+        "set openrouter/openai/gpt-5.6-luna"
+    ) == "openrouter/openai/gpt-5.6-luna"
+
+
+def test_normal_model_is_unchanged():
+    assert _normalize_model_identifier(
+        "openrouter/openai/gpt-5.6-luna"
+    ) == "openrouter/openai/gpt-5.6-luna"
