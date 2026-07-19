@@ -818,8 +818,9 @@ REPL_HELP = """\
 Wee CLI Interactive Mode — Commands:
   /clear              Clear conversation history
   /history            Show conversation history
-  /model MODEL        Switch model
-  /model list         List all available models
+  /model MODEL         Switch model
+  /model set MODEL     Switch model (explicit form)
+  /model list          List all available models
   /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
   /tokens             Show token usage
   /context            Show context window usage and compaction trigger point
@@ -941,20 +942,29 @@ def run_interactive(
                 continue
 
             elif cmd == "/model":
-                if not arg:
+                model_arg = arg.strip()
+                if model_arg.lower() == "set":
+                    _print_error("Usage: /model set PROVIDER/MODEL")
+                    continue
+                if model_arg.lower().startswith("set "):
+                    model_arg = model_arg[4:].strip()
+
+                if not model_arg:
                     _print_info(f"Current model: {model}")
-                elif arg.lower() == "list":
+                elif model_arg.lower() == "list":
                     list_available_models()
-                elif arg.lower().startswith("list "):
+                elif model_arg.lower().startswith("list "):
                     # /model list <provider>
-                    provider = arg[5:].strip()
+                    provider = model_arg[5:].strip()
                     list_available_models(provider)
                 else:
                     old_model = model
                     model_for_persistence = (
-                        arg  # Keep original user input for persistence
+                        model_arg  # Keep provider-qualified ID for persistence
                     )
-                    resolved_model, api_base, api_key = resolve_model_and_endpoint(arg)
+                    resolved_model, api_base, api_key = resolve_model_and_endpoint(
+                        model_arg
+                    )
                     client = _make_client(api_base, api_key, timeout)
                     model = resolved_model  # Use resolved model for API calls
                     token_tracker.context_window = get_context_window(model)
