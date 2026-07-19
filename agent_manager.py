@@ -11224,17 +11224,47 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
 _api_auth_manager: Optional["AuthManager"] = None
 
 
+def _telegram_config_path() -> str:
+    """Return the shared Telegram config path used by API pairing and listener."""
+    return os.environ.get("TELEGRAM_CONFIG_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "telegram_config.json"
+    )
+
+
+def _load_telegram_config() -> dict:
+    """Load Telegram pairing metadata without requiring a token in the file."""
+    try:
+        with open(_telegram_config_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     """Deliver a pairing code. Returns True on success, False on failure."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         if channel == "telegram":
-            from telegram_connector import TelegramConnector
+            from telegram_connector import (
+                TelegramConnector,
+                _resolve_orchestrator_bot_token,
+            )
 
-            config_path = os.path.join(script_dir, "telegram_config.json")
-            with open(config_path) as f:
-                cfg = json.load(f)
-            token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            config_path = _telegram_config_path()
+            cfg = _load_telegram_config()
+            file_token = cfg.get("token")
+            if not isinstance(file_token, str):
+                file_token = ""
+            token = (
+                file_token
+                or os.getenv("TELEGRAM_BOT_TOKEN", "")
+                or _resolve_orchestrator_bot_token(
+                    "telegram", os.path.join(script_dir, "agents.json")
+                )
+            )
+            if not token:
+                raise RuntimeError("Telegram bot token is not configured")
             connector = TelegramConnector(token, config_file=config_path)
             last_exc = None
             for attempt in range(1, 4):
@@ -11299,11 +11329,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
 def _get_telegram_username(user_id: str):
     """Look up @username for a numeric Telegram user_id in telegram_config.json.
     Returns the username string (without @), or None if not found."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "telegram_config.json")
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = _load_telegram_config()
         pairing = cfg.get("user_pairings", {}).get(str(user_id), {})
         username = pairing.get("username", "")
         return username.lstrip("@") if username else None
@@ -11372,13 +11399,11 @@ def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first).
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "telegram_config.json")
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = _load_telegram_config()
         for uid, pairing in cfg.get("user_pairings", {}).items():
-            if pairing.get("username", "").lower() == username.lower():
+            stored_username = pairing.get("username", "").lstrip("@").lower()
+            if stored_username == username.lstrip("@").lower():
                 return uid
         return None
     except Exception:
