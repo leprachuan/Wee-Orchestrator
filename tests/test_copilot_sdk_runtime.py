@@ -264,7 +264,7 @@ class TestCopilotSdkRunMethod(unittest.TestCase):
         async def send_and_wait_with_events(prompt, timeout=60.0):
             if captured_on_event:
                 event = MagicMock()
-                from copilot.session import SessionEventType
+                from copilot import SessionEventType
 
                 event.type = SessionEventType.ASSISTANT_MESSAGE
                 event.data = MagicMock()
