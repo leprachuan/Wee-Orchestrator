@@ -244,12 +244,13 @@ class TestIssue145Fallback:
         assert isinstance(result, dict)
         assert len(result) > 0, "No models returned even as fallback"
 
-    def test_fallback_to_static_on_no_api_key(self, mgr):
-        """When no API key is available, static models should be returned."""
+    def test_fallback_to_static_when_public_catalog_fails_without_key(self, mgr):
+        """A public-catalog network failure still returns static models."""
         _reset_cache(mgr)
 
         with (
             patch("keyring.get_password", return_value=None),
+            patch("urllib.request.urlopen", side_effect=Exception("API down")),
             patch.dict(os.environ, {}, clear=False),
         ):
             # Remove OPENROUTER_API_KEY if set

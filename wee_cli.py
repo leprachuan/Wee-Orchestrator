@@ -27,7 +27,7 @@ import tempfile
 # ---------------------------------------------------------------------------
 # Version
 # ---------------------------------------------------------------------------
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # ---------------------------------------------------------------------------
 # Re-use core runtime functions from wee_runtime.py
@@ -47,6 +47,10 @@ from wee_runtime import (  # noqa: E402
     list_available_models,
     resolve_model_and_endpoint,
 )
+from wee_copilot_sdk import (  # noqa: E402
+    execute_wee_copilot,
+    resolve_wee_provider,
+)
 
 _TOOL_PREAMBLE_PROMPT = (
     "\n\n[Tool Use Style]\n"
@@ -62,6 +66,60 @@ DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
 HISTORY_FILE = os.path.join(DEFAULT_CONFIG_DIR, "history")
 SESSION_DIR = os.path.join(DEFAULT_CONFIG_DIR, "sessions")
 _SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_MODEL_STATUS_ALIASES = {"current", "show", "get"}
+
+
+def _normalize_model_identifier(value: str) -> str:
+    """Repair model IDs persisted by the pre-Issue #426 `/model set` parser."""
+    model = str(value or "").strip()
+    if model.lower().startswith("set "):
+        model = model[4:].strip()
+    if model.lower() in _MODEL_STATUS_ALIASES:
+        return ""
+    return model
+
+
+def _chat_via_copilot_sdk(
+    *,
+    messages: list,
+    qualified_model: str,
+    api_base: str,
+    api_key: str,
+    timeout: float,
+    tools_enabled: bool,
+    stream_output: bool = True,
+    activity_callback=None,
+) -> str:
+    """Run a Wee CLI turn through the shared Copilot SDK BYOK path."""
+    route = resolve_wee_provider(qualified_model, api_base=api_base, api_key=api_key)
+    transcript = []
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        content = message.get("content")
+        if content:
+            transcript.append(f"[{role}]\n{content}")
+    prompt = "\n\n".join(transcript)
+    streamed = [False]
+
+    def on_event(kind, payload):
+        if kind == "chunk" and stream_output:
+            streamed[0] = True
+            sys.stdout.write(str(payload))
+            sys.stdout.flush()
+        if activity_callback and kind in {"tool_call", "done"}:
+            activity_callback(kind, payload)
+
+    response, _ = execute_wee_copilot(
+        prompt=prompt,
+        route=route,
+        working_directory=os.getcwd(),
+        timeout=float(timeout),
+        enable_tools=tools_enabled,
+        event_callback=on_event,
+    )
+    if streamed[0]:
+        print()
+    return response
 
 
 def load_config() -> dict:
@@ -361,11 +419,18 @@ _rich_available = False
 _console = None
 
 try:
+    from rich import box
     from rich.console import Console
+    from rich.console import Group
     from rich.markdown import Markdown
+    from rich.markup import escape
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
 
     _rich_available = True
-    _console = Console(stderr=True)
+    _console = Console(stderr=True, highlight=False)
 except ImportError:
     pass
 
@@ -397,6 +462,187 @@ def _print_info(msg: str):
         _console.print(f"[dim]{msg}[/dim]")
     else:
         print(msg, file=sys.stderr)
+
+
+def _interactive_ui_enabled() -> bool:
+    """Return whether the full Rich interactive experience can be rendered."""
+    if not _rich_available:
+        return False
+    if os.environ.get("WEE_PLAIN_UI", "").lower() in {"1", "true", "yes", "on"}:
+        return False
+    if os.environ.get("TERM", "").lower() == "dumb":
+        return False
+    return bool(sys.stdin.isatty() and sys.stderr.isatty())
+
+
+def _provider_label(qualified_model: str) -> str:
+    """Return a friendly provider name for a provider-qualified model ID."""
+    provider = (qualified_model or "").partition("/")[0].lower()
+    return {
+        "ollama": "Ollama",
+        "openrouter": "OpenRouter",
+        "lmstudio": "LM Studio",
+    }.get(provider, provider.title() or "Custom")
+
+
+def _render_interactive_banner(
+    model: str, permission: str, tools_enabled: bool, session_name: str = None
+) -> None:
+    """Render the compact Wee startup card used for interactive terminals."""
+    if not _interactive_ui_enabled():
+        _print_info(f"Wee CLI v{__version__} — model: {model}")
+        _print_info("Type /help for commands, /exit to quit.\n")
+        return
+
+    provider = _provider_label(model)
+    details = Text()
+    details.append(provider, style="bold bright_cyan")
+    details.append("  •  ", style="grey50")
+    details.append(model, style="bright_white")
+    details.append("\n")
+    details.append("tools ", style="grey70")
+    details.append(
+        "on" if tools_enabled else "off",
+        style="green" if tools_enabled else "yellow",
+    )
+    details.append("  •  mode ", style="grey70")
+    details.append(permission, style="bright_magenta")
+    if session_name:
+        details.append("  •  session ", style="grey70")
+        details.append(session_name, style="bright_blue")
+
+    hint = Text.from_markup(
+        "[grey58]/help[/] commands   [grey58]/model list[/] models   "
+        "[grey58]Ctrl+D[/] exit"
+    )
+    _console.print(
+        Panel(
+            Group(details, hint),
+            title=f"[bold bright_green]🍀 Wee[/] [grey58]v{__version__}[/]",
+            title_align="left",
+            border_style="bright_green",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        )
+    )
+
+
+def _read_interactive_prompt(
+    model: str, permission: str, tools_enabled: bool, token_tracker
+) -> str:
+    """Read one user turn from a high-contrast, status-aware prompt area."""
+    if not _interactive_ui_enabled():
+        return input("wee> ")
+
+    context = ""
+    if token_tracker.context_window:
+        context = f"  {token_tracker.percent_used():.0f}% context"
+    status = (
+        f"{escape(model)}  •  {'tools on' if tools_enabled else 'tools off'}"
+        f"  •  {escape(permission)}{context}"
+    )
+    _console.print()
+    _console.print(
+        Rule(
+            f"[bold bright_cyan] You [/][grey58]{status}[/]",
+            align="left",
+            style="cyan",
+        )
+    )
+    return _console.input("[bold bright_cyan]❯[/] ")
+
+
+def _render_assistant_response(response: str, output_format: str = "text") -> None:
+    """Render a completed assistant turn as readable Markdown."""
+    if not _interactive_ui_enabled():
+        return
+    response = response or "[No response]"
+    if output_format == "json":
+        body = Text(json.dumps({"response": response}, indent=2), style="white")
+    else:
+        body = Markdown(response)
+    _console.print(
+        Panel(
+            body,
+            title="[bold bright_green]🍀 Wee[/]",
+            title_align="left",
+            border_style="green",
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+    )
+
+
+def _sdk_tool_name(event) -> str:
+    """Extract a concise tool name from a Copilot SDK event."""
+    data = getattr(event, "data", None)
+    return str(
+        getattr(data, "tool_name", None)
+        or getattr(data, "name", None)
+        or getattr(data, "command", None)
+        or "tool"
+    )
+
+
+def _render_repl_help() -> None:
+    """Render slash commands as a compact, scannable command palette."""
+    if not _interactive_ui_enabled():
+        _print_info(REPL_HELP)
+        return
+    commands = [
+        ("/model list", "Browse models"),
+        ("/model set ID", "Switch provider/model"),
+        ("/model current", "Show active model"),
+        ("/clear", "Clear conversation"),
+        ("/history", "Show conversation history"),
+        ("/tools on|off", "Toggle agent tools"),
+        ("/tools-output", "Inspect recent tool results"),
+        ("/permission MODE", "restricted, auto, or elevated"),
+        ("/thinking on|off", "Show or hide reasoning"),
+        ("/tokens", "Show token and context usage"),
+        ("/compact [PCT]", "Compact conversation context"),
+        ("/config", "Show runtime configuration"),
+        ("/agents", "List configured agents"),
+        ("/skills", "Discover available skills"),
+        ("/exit", "End the session"),
+    ]
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold bright_cyan", no_wrap=True)
+    table.add_column(style="grey74")
+    for command, description in commands:
+        table.add_row(command, description)
+    _console.print(
+        Panel(
+            table,
+            title="[bold bright_green]Command palette[/]",
+            title_align="left",
+            border_style="green",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        )
+    )
+
+
+def _render_config_panel(items) -> None:
+    """Render runtime configuration as a two-column status card."""
+    if not _interactive_ui_enabled():
+        for label, value in items:
+            _print_info(f"{label + ':':12} {value}")
+        return
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="grey58", no_wrap=True)
+    table.add_column(style="bright_white")
+    for label, value in items:
+        table.add_row(label, str(value))
+    _console.print(
+        Panel(
+            table,
+            title="[bold bright_green]Session configuration[/]",
+            title_align="left",
+            border_style="green",
+            box=box.ROUNDED,
+        )
+    )
 
 
 def _strip_thinking(text: str) -> str:
@@ -774,8 +1020,10 @@ REPL_HELP = """\
 Wee CLI Interactive Mode — Commands:
   /clear              Clear conversation history
   /history            Show conversation history
-  /model MODEL        Switch model
-  /model list         List all available models
+  /model MODEL         Switch model
+  /model set MODEL     Switch model (explicit form)
+  /model current       Show the current provider-qualified model
+  /model list          List all available models
   /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
   /tokens             Show token usage
   /context            Show context window usage and compaction trigger point
@@ -832,9 +1080,6 @@ def run_interactive(
         system_prompt, existing_messages
     )
 
-    _print_info(f"Wee CLI v{__version__} — model: {model}")
-    _print_info("Type /help for commands, /exit to quit.\n")
-
     # Track if this is the first message (for CWD context injection)
     first_message = not any(m.get("role") == "user" for m in messages)
     # Buffer to store tool results from the last interaction
@@ -842,10 +1087,16 @@ def run_interactive(
     # Track original user input for model persistence (with provider prefix if used)
     # If model_str wasn't passed, default to the resolved model name
     model_for_persistence = model_str if model_str else model
+    rich_ui = _interactive_ui_enabled()
+    _render_interactive_banner(
+        model_for_persistence, permission, tools_enabled, session_name
+    )
 
     while True:
         try:
-            user_input = input("wee> ").strip()
+            user_input = _read_interactive_prompt(
+                model_for_persistence, permission, tools_enabled, token_tracker
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -897,28 +1148,50 @@ def run_interactive(
                 continue
 
             elif cmd == "/model":
-                if not arg:
-                    _print_info(f"Current model: {model}")
-                elif arg.lower() == "list":
+                model_arg = arg.strip()
+                if model_arg.lower() == "set":
+                    _print_error("Usage: /model set PROVIDER/MODEL")
+                    continue
+                if model_arg.lower().startswith("set "):
+                    model_arg = model_arg[4:].strip()
+
+                if not model_arg or model_arg.lower() in {"current", "show", "get"}:
+                    _print_info(f"Current model: {model_for_persistence}")
+                elif model_arg.lower() == "list":
                     list_available_models()
-                elif arg.lower().startswith("list "):
+                elif model_arg.lower().startswith("list "):
                     # /model list <provider>
-                    provider = arg[5:].strip()
+                    provider = model_arg[5:].strip()
                     list_available_models(provider)
                 else:
-                    old_model = model
+                    old_model = model_for_persistence
                     model_for_persistence = (
-                        arg  # Keep original user input for persistence
+                        model_arg  # Keep provider-qualified ID for persistence
                     )
-                    resolved_model, api_base, api_key = resolve_model_and_endpoint(arg)
+                    resolved_model, api_base, api_key = resolve_model_and_endpoint(
+                        model_arg
+                    )
                     client = _make_client(api_base, api_key, timeout)
                     model = resolved_model  # Use resolved model for API calls
                     token_tracker.context_window = get_context_window(model)
-                    _print_info(f"Model switched: {old_model} → {model}")
+                    _print_info(
+                        f"Model switched: {old_model} → {model_for_persistence}"
+                    )
                 continue
 
             elif cmd == "/tokens":
-                _print_info(token_tracker.summary())
+                if rich_ui:
+                    _console.print(
+                        Panel(
+                            Text(token_tracker.summary(), style="bright_white"),
+                            title="[bold bright_green]Usage[/]",
+                            title_align="left",
+                            border_style="green",
+                            box=box.ROUNDED,
+                        )
+                    )
+                else:
+                    _print_info(token_tracker.summary())
                 continue
 
             
@@ -1033,14 +1306,19 @@ def run_interactive(
                 continue
 
             elif cmd == "/config":
-                _print_info(f"Model:       {model}")
-                _print_info(f"API Base:    {api_base}")
                 status = "enabled" if tools_enabled else "disabled"
-                _print_info(f"Tools:       {status}")
-                _print_info(f"Temperature: {temperature or 'default'}")
-                _print_info(f"Timeout:     {timeout}s")
-                _print_info(f"Permission:  {permission}")
-                _print_info(f"Output:      {output_format}")
+                _render_config_panel(
+                    [
+                        ("Model", model_for_persistence),
+                        ("Provider", _provider_label(model_for_persistence)),
+                        ("API base", api_base),
+                        ("Tools", status),
+                        ("Temperature", temperature or "default"),
+                        ("Timeout", f"{timeout}s"),
+                        ("Permission", permission),
+                        ("Output", output_format),
+                    ]
+                )
                 continue
 
             elif cmd == "/tools":
@@ -1090,6 +1368,8 @@ def run_interactive(
                                     f"    ... ({len(result_lines) - 20} more lines)"
                                 )
                 continue
+
+            elif cmd == "/permission":
                 if not arg:
                     _print_info(f"Permission level: {permission}")
                 elif arg.lower() in ("restricted", "auto", "elevated"):
@@ -1130,7 +1410,7 @@ def run_interactive(
                 continue
 
             elif cmd == "/help":
-                _print_info(REPL_HELP)
+                _render_repl_help()
                 continue
 
             else:
@@ -1228,17 +1508,76 @@ def run_interactive(
 
         try:
             tool_results_buffer = {}  # Clear buffer for new interaction
-            response = chat_stream(
-                client=client,
-                model=model,
-                messages=messages,
-                tools_enabled=tools_enabled,
-                temperature=temperature,
-                token_tracker=token_tracker,
-                permission=permission,
-                tool_results_buffer=tool_results_buffer,
-                show_thinking=show_thinking,
+            tool_names = []
+            activity = None
+
+            def on_activity(kind, payload):
+                if kind != "tool_call":
+                    return
+                tool_name = _sdk_tool_name(payload)
+                if tool_name not in tool_names:
+                    tool_names.append(tool_name)
+                if activity is not None:
+                    activity.update(
+                        f"[bold bright_yellow]⚙ Running {escape(tool_name)}…[/]"
+                    )
+
+            status_context = (
+                _console.status(
+                    "[bold bright_green]🍀 Wee is thinking…[/]", spinner="dots"
+                )
+                if rich_ui
+                else None
             )
+            if status_context:
+                activity = status_context.__enter__()
+            try:
+                try:
+                    response = _chat_via_copilot_sdk(
+                        messages=messages,
+                        qualified_model=model_for_persistence,
+                        api_base=api_base,
+                        api_key=api_key,
+                        timeout=timeout,
+                        tools_enabled=tools_enabled and permission != "restricted",
+                        stream_output=not rich_ui,
+                        activity_callback=on_activity,
+                    )
+                except Exception as sdk_error:
+                    fallback_enabled = os.environ.get(
+                        "WEE_OPENAI_FALLBACK_ENABLED", "1"
+                    ).lower() not in {"0", "false", "no", "off"}
+                    if not fallback_enabled:
+                        raise
+                    _print_info(
+                        f"Copilot SDK unavailable ({sdk_error}); "
+                        "using direct provider fallback."
+                    )
+                    response = chat_stream(
+                        client=client,
+                        model=model,
+                        messages=messages,
+                        tools_enabled=tools_enabled,
+                        temperature=temperature,
+                        token_tracker=token_tracker,
+                        permission=permission,
+                        stream_output=not rich_ui,
+                        tool_results_buffer=tool_results_buffer,
+                        show_thinking=show_thinking,
+                    )
+            finally:
+                if status_context:
+                    status_context.__exit__(None, None, None)
+
+            if rich_ui:
+                for tool_name in tool_names:
+                    _console.print(
+                        f"[bright_yellow]  ✓[/] [grey70]{escape(tool_name)}[/]"
+                    )
+                display_response = (
+                    response if show_thinking else _strip_thinking(response)
+                )
+                _render_assistant_response(display_response, output_format)
             messages.append({"role": "assistant", "content": response})
             if session_name:
                 save_session_data(
@@ -1298,8 +1637,16 @@ def run_interactive(
                 )
 
     _save_readline()
-    _print_info(f"\n{token_tracker.summary()}")
-    _print_info("Goodbye!")
+    if rich_ui:
+        _console.print(Rule(style="grey23"))
+        _console.print(
+            Text(token_tracker.summary(), style="grey58"),
+            justify="right",
+        )
+        _console.print("[bold bright_green]🍀 Goodbye![/]")
+    else:
+        _print_info(f"\n{token_tracker.summary()}")
+        _print_info("Goodbye!")
     return model_for_persistence
 
 
@@ -1319,6 +1666,7 @@ def run_single_shot(
     permission: str = "auto",
     existing_messages: list = None,
     show_thinking: bool = False,
+    qualified_model: str = None,
 ):
     """Run a single prompt and exit."""
     client = _make_client(api_base, api_key, timeout)
@@ -1331,17 +1679,36 @@ def run_single_shot(
     stream_output = output_format == "text"
 
     try:
-        response = chat_stream(
-            client=client,
-            model=model,
-            messages=messages,
-            tools_enabled=tools_enabled,
-            temperature=temperature,
-            token_tracker=token_tracker,
-            permission=permission,
-            stream_output=stream_output,
-            show_thinking=show_thinking,
-        )
+        try:
+            response = _chat_via_copilot_sdk(
+                messages=messages,
+                qualified_model=qualified_model or model,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                tools_enabled=tools_enabled and permission != "restricted",
+                stream_output=stream_output,
+            )
+        except Exception as sdk_error:
+            fallback_enabled = os.environ.get(
+                "WEE_OPENAI_FALLBACK_ENABLED", "1"
+            ).lower() not in {"0", "false", "no", "off"}
+            if not fallback_enabled:
+                raise
+            _print_info(
+                f"Copilot SDK unavailable ({sdk_error}); using direct provider fallback."
+            )
+            response = chat_stream(
+                client=client,
+                model=model,
+                messages=messages,
+                tools_enabled=tools_enabled,
+                temperature=temperature,
+                token_tracker=token_tracker,
+                permission=permission,
+                stream_output=stream_output,
+                show_thinking=show_thinking,
+            )
         messages.append({"role": "assistant", "content": response})
         # For non-streaming formats (json/markdown), strip thinking here since
         # ThinkingBuffer only applies during streaming (text format).
@@ -1553,13 +1920,31 @@ def main(argv=None):
         session_data = load_session_data(session_name)
 
     # Resolve model: CLI arg > env var > config file > default
-    model_str = (
-        args.model
-        or os.environ.get("WEE_MODEL")
-        or cfg.get("model")
-        or session_data.get("model")
-        or "ollama/qwen3.5:4b"
+    model_candidates = (
+        args.model,
+        os.environ.get("WEE_MODEL"),
+        cfg.get("model"),
+        session_data.get("model"),
+        "ollama/qwen3.5:4b",
     )
+    model_str = next(
+        (
+            normalized
+            for candidate in model_candidates
+            if (normalized := _normalize_model_identifier(candidate))
+        ),
+        "ollama/qwen3.5:4b",
+    )
+
+    # Issue #426: persist the repaired default config immediately so a model
+    # value written by the old `/model set` parser cannot break future starts.
+    configured_model = cfg.get("model")
+    normalized_configured_model = _normalize_model_identifier(configured_model)
+    if configured_model and normalized_configured_model != configured_model:
+        cfg["model"] = normalized_configured_model or model_str
+        os.makedirs(os.path.dirname(os.path.abspath(config_path)), exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
 
     # Resolve other settings from config
     system_prompt = args.system or cfg.get("system_prompt", "")
@@ -1659,6 +2044,7 @@ def main(argv=None):
             permission=permission,
             existing_messages=existing_messages,
             show_thinking=args.show_thinking,
+            qualified_model=model_str,
         )
         if session_name:
             save_session_data(

@@ -61,6 +61,17 @@ def test_issue367_assigns_due_buckets(due, expected):
     assert due_bucket(due, now=now) == expected
 
 
+def test_issue367_due_bucket_bare_date_same_day():
+    """Issue #416: a bare YYYY-MM-DD due label must bucket as today, not
+    overdue, for any time later the same UTC day (parse_due() midnight-
+    anchors bare dates, so the comparison must be date-only)."""
+    from kanban import due_bucket
+
+    now = datetime(2026, 7, 14, 23, 59, tzinfo=timezone.utc)
+
+    assert due_bucket("2026-07-14", now=now) == "today"
+
+
 def test_issue367_loads_folder_style_todos(tmp_path):
     from kanban import load_flatfile_cards
 

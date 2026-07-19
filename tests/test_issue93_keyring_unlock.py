@@ -4,9 +4,15 @@
 import json
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SECRET_TOOL_PATH = PROJECT_ROOT / "secret_tool" / "secret_tool.py"
+AGENT_MANAGER_PATH = PROJECT_ROOT / "agent_manager.py"
+WEBUI_DIST_PATH = PROJECT_ROOT / "webui" / "dist"
+
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import secret_tool by file path to avoid conflict with existing
 # test_secret_tool.py which imports it as a bare module
@@ -14,7 +20,7 @@ import importlib.util as _ilu  # noqa: E402
 
 _spec = _ilu.spec_from_file_location(
     "secret_tool_mod",
-    "/opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py",
+    SECRET_TOOL_PATH,
 )
 _st = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_st)
@@ -70,25 +76,25 @@ class TestKeyringAPIEndpoints(unittest.TestCase):
     """Test agent_manager.py keyring API endpoints."""
 
     def test_keyring_status_endpoint_exists(self):
-        with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
+        with AGENT_MANAGER_PATH.open() as f:
             content = f.read()
         self.assertIn("/api/v1/secrets/keyring-status", content)
         self.assertIn("async def keyring_status", content)
 
     def test_keyring_unlock_endpoint_exists(self):
-        with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
+        with AGENT_MANAGER_PATH.open() as f:
             content = f.read()
         self.assertIn("/api/v1/secrets/keyring-unlock", content)
         self.assertIn("async def keyring_unlock", content)
 
     def test_unlock_requires_password(self):
-        with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
+        with AGENT_MANAGER_PATH.open() as f:
             content = f.read()
         self.assertIn('body.get("password"', content)
         self.assertIn("password is required", content)
 
     def test_status_calls_secret_tool(self):
-        with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
+        with AGENT_MANAGER_PATH.open() as f:
             content = f.read()
         import re
 
@@ -98,7 +104,7 @@ class TestKeyringAPIEndpoints(unittest.TestCase):
         )
 
     def test_unlock_calls_secret_tool(self):
-        with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
+        with AGENT_MANAGER_PATH.open() as f:
             content = f.read()
         import re
 
@@ -109,7 +115,7 @@ class TestKeyringAPIEndpoints(unittest.TestCase):
 
     def test_password_sent_via_stdin(self):
         """Password must be sent via stdin, not as CLI arg."""
-        with open("/opt/n8n-copilot-shim-dev/agent_manager.py", "r") as f:
+        with AGENT_MANAGER_PATH.open() as f:
             content = f.read()
         # Find the unlock endpoint section
         idx = content.find("async def keyring_unlock")
@@ -122,13 +128,13 @@ class TestSecretToolSubcommands(unittest.TestCase):
     """Test secret_tool.py has status/unlock in code."""
 
     def test_secret_tool_has_status(self):
-        with open("/opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py", "r") as f:
+        with SECRET_TOOL_PATH.open() as f:
             content = f.read()
         self.assertIn('"status"', content)
         self.assertIn("_check_keyring_status", content)
 
     def test_secret_tool_has_unlock(self):
-        with open("/opt/n8n-copilot-shim-dev/secret_tool/secret_tool.py", "r") as f:
+        with SECRET_TOOL_PATH.open() as f:
             content = f.read()
         self.assertIn('"unlock"', content)
         self.assertIn("_unlock_keyring", content)
@@ -138,7 +144,7 @@ class TestWebUIComponents(unittest.TestCase):
     """Test WebUI HTML/JS/CSS changes."""
 
     def test_html_has_keyring_banner(self):
-        with open("/opt/n8n-copilot-shim-dev/webui/dist/index.html", "r") as f:
+        with (WEBUI_DIST_PATH / "index.html").open() as f:
             content = f.read()
         self.assertIn("keyring-status-banner", content)
         self.assertIn("keyring-banner-title", content)
@@ -146,7 +152,7 @@ class TestWebUIComponents(unittest.TestCase):
         self.assertIn("btn-keyring-unlock", content)
 
     def test_html_has_unlock_dialog(self):
-        with open("/opt/n8n-copilot-shim-dev/webui/dist/index.html", "r") as f:
+        with (WEBUI_DIST_PATH / "index.html").open() as f:
             content = f.read()
         self.assertIn("keyring-unlock-dialog", content)
         self.assertIn("keyring-password-input", content)
@@ -154,7 +160,7 @@ class TestWebUIComponents(unittest.TestCase):
         self.assertIn("btn-keyring-cancel", content)
 
     def test_js_has_keyring_functions(self):
-        with open("/opt/n8n-copilot-shim-dev/webui/dist/app.js", "r") as f:
+        with (WEBUI_DIST_PATH / "app.js").open() as f:
             content = f.read()
         for fn in [
             "checkKeyringStatus",
@@ -166,7 +172,7 @@ class TestWebUIComponents(unittest.TestCase):
             self.assertIn(fn, content, f"Missing function: {fn}")
 
     def test_js_calls_check_on_panel_show(self):
-        with open("/opt/n8n-copilot-shim-dev/webui/dist/app.js", "r") as f:
+        with (WEBUI_DIST_PATH / "app.js").open() as f:
             content = f.read()
         idx = content.find("function showSecretsPanel")
         end_idx = content.find("\n}", idx) + 2
@@ -174,12 +180,12 @@ class TestWebUIComponents(unittest.TestCase):
         self.assertIn("checkKeyringStatus", snippet)
 
     def test_js_inits_keyring_listeners(self):
-        with open("/opt/n8n-copilot-shim-dev/webui/dist/app.js", "r") as f:
+        with (WEBUI_DIST_PATH / "app.js").open() as f:
             content = f.read()
         self.assertIn("_initKeyringListeners();", content)
 
     def test_css_has_keyring_styles(self):
-        with open("/opt/n8n-copilot-shim-dev/webui/dist/app.css", "r") as f:
+        with (WEBUI_DIST_PATH / "app.css").open() as f:
             content = f.read()
         for cls in [
             ".keyring-banner",

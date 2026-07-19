@@ -7,6 +7,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 
 import argparse
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -1241,7 +1242,7 @@ def check_runtime_available(runtime: str) -> bool:
         "devin": "devin",
         "cursor": "agent",  # Cursor uses 'agent' binary
         "opencode": "opencode",
-        "wee": "openai",  # OpenAI-compatible API (no binary needed),
+        "wee": "copilot",  # Copilot SDK BYOK (OpenAI fallback during migration),
     }
 
     executable_name = runtime_map.get(runtime)
@@ -1254,6 +1255,11 @@ def check_runtime_available(runtime: str) -> bool:
             if runtime == "claude-sdk":
                 # Package is installed as claude_agent_sdk
                 __import__("claude_agent_sdk")
+            elif runtime == "wee":
+                try:
+                    __import__("copilot")
+                except ImportError:
+                    __import__("openai")
             else:
                 module_name = executable_name.replace("-", "_")
                 __import__(module_name)
@@ -2010,6 +2016,10 @@ class SessionManager:
     }
 
     # DEVIN models configuration
+    # NOTE (issue #418): Devin dropped every haiku variant from its valid model
+    # set. Do not re-add any "claude-haiku-*" entry here -- Devin's CLI will
+    # reject it and, on some builds, exit 0 while printing an error, which
+    # silently corrupts scheduled job results.
     DEVIN_MODELS = {
         "Anthropic Models": [
             ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
@@ -2020,10 +2030,11 @@ class SessionManager:
                 ["sonnet-thinking"],
             ),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
-            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
+            ("claude-sonnet-5", "Claude Sonnet 5", ["sonnet-5"]),
             ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
-            ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
+            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
+            ("claude-opus-4.8", "Claude Opus 4.8", ["opus-4.8"]),
         ],
         "Google Models": [
             ("gemini-3-flash", "Gemini 3 Flash", ["gemini-flash"]),
@@ -2034,11 +2045,14 @@ class SessionManager:
             ("gpt-5.2", "GPT-5.2", []),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["codex"]),
             ("gpt-5.4", "GPT-5.4", []),
+            ("gpt-5.5", "GPT-5.5", []),
+            ("gpt-5.6", "GPT-5.6", []),
         ],
         "Other Models": [
             ("phoenix-alpha", "Phoenix Alpha", ["phoenix"]),
             ("swe-1.5", "SWE-1.5", ["swe"]),
             ("swe-1.5-fast", "SWE-1.5 Fast", ["swe-fast"]),
+            ("swe-1.6", "SWE-1.6", ["swe-1.6"]),
         ],
     }
 
@@ -3889,10 +3903,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
-    def _copilot_static_fallback(self) -> dict:
-        # model-manifest.json (runtimes.copilot) is the source of truth; this
-        # static list is only used if the manifest is missing/empty.
-        manifest_models = self._manifest_models_to_dict("copilot")
+    def _copilot_static_fallback(self, runtime: str = "copilot") -> dict:
+        # model-manifest.json (runtimes.copilot / runtimes.copilot-sdk) is the
+        # source of truth; this static list is only used if the manifest is
+        # missing/empty for both the runtime and its alias.
+        manifest_models = self._manifest_models_to_dict(runtime)
         if manifest_models:
             return manifest_models
         return {
@@ -3927,15 +3942,21 @@ You can mention an agent in your prompt and it will auto-delegate:
             ],
         }
 
-    def fetch_copilot_models(self) -> Dict:
-        """Fetch available models from model-manifest.json, falling back to copilot CLI help text."""
-        manifest_models = self._manifest_models_to_dict("copilot")
+    def fetch_copilot_models(self, runtime: str = "copilot") -> Dict:
+        """Fetch available models from model-manifest.json, falling back to copilot CLI help text.
+
+        `runtime` is "copilot" or "copilot-sdk" — each may define its own
+        dedicated entry in model-manifest.json (issue #417); when neither CLI
+        discovery nor manifest lookup name a dedicated model list is present
+        for "copilot-sdk", `_model_manifest_models` falls back to "copilot".
+        """
+        manifest_models = self._manifest_models_to_dict(runtime)
         if manifest_models:
             return manifest_models
 
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
-            return self._copilot_static_fallback()
+            return self._copilot_static_fallback(runtime)
 
         try:
             # Use --no-color to ensure clean text
@@ -4056,7 +4077,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return categorized
         except Exception as e:
             print(f"Error fetching copilot models: {e}", file=sys.stderr)
-            return self._copilot_static_fallback()
+            return self._copilot_static_fallback(runtime)
 
     def fetch_opencode_models(self) -> Dict:
         """Fetch available models from opencode CLI, falling back to manifest/static list on failure."""
@@ -4187,7 +4208,8 @@ You can mention an agent in your prompt and it will auto-delegate:
           2. Live API call to https://openrouter.ai/api/v1/models
           3. Static WEE_MODELS fallback (Wee Native (OpenRouter)/(OpenRouter Free))
 
-        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        Authentication is optional for the public model catalog. When present,
+        the keyring/OpenRouter environment key is attached to the request.
         """
         # Build static fallback + alias lookup from the curated WEE_MODELS lists,
         # normalizing variant-suffixed IDs (Issue #172).
@@ -4210,8 +4232,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         cache_ttl = 300
         if (
-            self._openrouter_models_cache is not None
-            and time.time() - self._openrouter_models_cache_ts < cache_ttl
+            getattr(self, "_openrouter_models_cache", None) is not None
+            and time.time() - getattr(self, "_openrouter_models_cache_ts", 0)
+            < cache_ttl
         ):
             return self._openrouter_models_cache
 
@@ -4225,19 +4248,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         if not api_key:
             api_key = os.getenv("OPENROUTER_API_KEY")
 
-        if not api_key:
-            print(
-                "[wee] OpenRouter: no API key available, using static fallback",
-                file=sys.stderr,
-            )
-            return static_fallback
-
         try:
             import urllib.request as _urlreq
 
+            headers = {"Accept": "application/json"}
+            if api_key:
+                headers["Authorization"] = "Bearer " + api_key
             req = _urlreq.Request(
                 "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
+                headers=headers,
             )
             resp = _urlreq.urlopen(req, timeout=15)
             data = json.loads(resp.read())
@@ -4400,10 +4419,21 @@ You can mention an agent in your prompt and it will auto-delegate:
     # enough to add/remove/reorder models with no code changes.
 
     def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
-        """Return the raw manifest model id list for `runtime`, or None if absent."""
+        """Return the raw manifest model id list for `runtime`, or None if absent.
+
+        Looks up a dedicated entry for `runtime` first (e.g. `copilot-sdk`
+        can define its own model list independent of `copilot`). Only falls
+        back to the alias's list (see `_model_manifest_runtime_key`) when no
+        dedicated entry exists — issue #417.
+        """
         manifest = load_model_manifest()
-        runtime_key = _model_manifest_runtime_key(runtime)
-        models = manifest.get("runtimes", {}).get(runtime_key)
+        runtimes = manifest.get("runtimes", {})
+        runtime_key = (runtime or "").lower().strip()
+        models = runtimes.get(runtime_key)
+        if not models:
+            alias_key = _model_manifest_runtime_key(runtime)
+            if alias_key != runtime_key:
+                models = runtimes.get(alias_key)
         if not models:
             return None
         return [m for m in models if isinstance(m, str) and m.strip()]
@@ -4786,7 +4816,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         if cached and _time.time() - cached_ts < ollama_ttl:
             return cached
 
-        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
+        ).rstrip("/")
+        if ollama_base.endswith("/v1"):
+            ollama_base = ollama_base[:-3]
+        if not ollama_base.startswith(("http://", "https://")):
+            ollama_base = f"http://{ollama_base}"
+        ollama_url = ollama_base + "/api/tags"
         try:
             req = _urllib_req.Request(ollama_url)
             resp = _urllib_req.urlopen(req, timeout=5)
@@ -4899,8 +4939,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         or does not support model listing.
         """
         dispatch = {
-            "copilot": self.fetch_copilot_models,
-            "copilot-sdk": self.fetch_copilot_models,
+            "copilot": lambda: self.fetch_copilot_models("copilot"),
+            "copilot-sdk": lambda: self.fetch_copilot_models("copilot-sdk"),
             "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
             "claude": lambda: self.fetch_claude_models("claude"),
@@ -5615,6 +5655,32 @@ You can mention an agent in your prompt and it will auto-delegate:
         )
         return cleaned.strip()
 
+    @staticmethod
+    def _is_claude_auth_error(err_type: str, err_msg: str) -> bool:
+        """Detect a Claude runtime credential failure (Issue #389).
+
+        The Claude CLI surfaces a bare 401 from the Anthropic API (e.g.
+        "Failed to authenticate. API Error: 401 Invalid authentication
+        credentials") both as plain stderr text and as a structured
+        {"type":"error",...} event depending on invocation mode. Either form
+        must be recognized so the caller can be told to configure a
+        credential instead of seeing a raw API error.
+        """
+        combined = f"{err_type} {err_msg}".lower()
+        return (
+            "401" in combined
+            or "authentication_error" in combined
+            or "invalid authentication credentials" in combined
+            or "invalid api key" in combined
+            or "failed to authenticate" in combined
+        )
+
+    CLAUDE_AUTH_ERROR_MESSAGE = (
+        "Claude runtime authentication is not configured for this agent. "
+        "Run `claude login` on this host, or set the ANTHROPIC_API_KEY "
+        "environment variable, then try the chat again."
+    )
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
@@ -5721,7 +5787,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                         err_obj = obj.get("error") or {}
                         err_msg = err_obj.get("message", "") or obj.get("message", "")
                         err_type = err_obj.get("type", "")
-                        if err_msg:
+                        if self._is_claude_auth_error(err_type, err_msg):
+                            error_result = self.CLAUDE_AUTH_ERROR_MESSAGE
+                        elif err_msg:
                             error_result = (
                                 f"API Error: {err_type} - {err_msg}"
                                 if err_type
@@ -5763,7 +5831,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                         if obj.get("error"):
                             has_rate_limit_event = True
                 except (ValueError, KeyError, AttributeError):
-                    # Not JSON — treat as plain text (legacy fallback)
+                    # Not JSON — treat as plain text (legacy fallback).
+                    # The Claude CLI can print an unauthenticated-credential
+                    # failure as bare stderr text rather than a JSON event
+                    # (Issue #389); recognize it here too.
+                    if self._is_claude_auth_error("", line_stripped):
+                        error_result = self.CLAUDE_AUTH_ERROR_MESSAGE
                     result.append(line)
             if text_parts:
                 return "".join(text_parts)
@@ -8053,8 +8126,8 @@ User Request:
         tracking for background task progress (Issue #87).
         """
         try:
-            from copilot import CopilotClient, SubprocessConfig
-            from copilot.session import (
+            from copilot import (
+                CopilotClient,
                 CopilotSession,
                 ElicitationContext,
                 ElicitationResult,
@@ -8123,11 +8196,6 @@ User Request:
         # Store session_id for resumption tracking
         sdk_session_id = session_id if resume and session_id else None
 
-        # For elevated mode, pass --allow-all-paths and --yolo via SubprocessConfig
-        # so the underlying Copilot CLI grants full filesystem access and
-        # auto-approves command execution (equivalent to the standard runtime flags).
-        sdk_cli_args = ["--allow-all-paths", "--yolo"] if mode == "elevated" else []
-
         def _auto_approve_user_input(
             request: UserInputRequest, invocation: dict
         ) -> UserInputResponse:
@@ -8145,10 +8213,7 @@ User Request:
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            _sdk_config = (
-                SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
-            )
-            _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
+            _client = CopilotClient(working_directory=agent_dir)
             async with _client as client:
                 # Event handler — streams chunks and detects tool calls
                 def on_event(event):
@@ -8284,7 +8349,7 @@ User Request:
 
                 mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
                 if os.path.exists(mcp_config_path):
-                    session_kwargs["config_dir"] = os.path.expanduser("~/.copilot")
+                    session_kwargs["config_directory"] = os.path.expanduser("~/.copilot")
 
                 try:
                     if sdk_session_id:
@@ -8334,27 +8399,14 @@ User Request:
                             stream_buffer.push("done", result_text)
                         return result_text
 
-                    # Fall back to full message history
-                    messages = session.get_messages()
-                    assistant_msgs = [
-                        m
-                        for m in messages
-                        if m.type == SessionEventType.ASSISTANT_MESSAGE
-                    ]
-                    if assistant_msgs:
-                        last = assistant_msgs[-1]
-                        if hasattr(last, "data") and hasattr(last.data, "content"):
-                            result_text = str(last.data.content)
-                            if stream_buffer:
-                                stream_buffer.push("done", result_text)
-                            return result_text
-
                     if stream_buffer:
                         stream_buffer.push("done", "")
                     return ""
                 finally:
                     try:
-                        await session.disconnect()
+                        disconnect_result = session.disconnect()
+                        if inspect.isawaitable(disconnect_result):
+                            await disconnect_result
                     except Exception:
                         pass
 
@@ -9284,7 +9336,161 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+        """Execute Wee through Copilot SDK BYOK, with the legacy loop as fallback.
+
+        Provider-qualified model IDs are resolved by the shared Wee SDK module,
+        so API sessions and the standalone CLI use identical Ollama/OpenRouter
+        routing behavior.
+        """
+        try:
+            from copilot import Tool
+            from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
+
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            agent_info = (
+                self.AGENTS.get(agent)
+                or self.AGENTS.get("orchestrator")
+                or {"path": os.getcwd()}
+            )
+            agent_dir = agent_info["path"]
+            effective_timeout = timeout if timeout is not None else self.command_timeout
+            channel = session_data.get("channel", "webui")
+            route = resolve_wee_provider(
+                model,
+                api_base=session_data.get("api_base") or os.environ.get("WEE_API_BASE"),
+                api_key=session_data.get("api_key") or os.environ.get("WEE_API_KEY"),
+            )
+
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type=render_type,
+                timeout=effective_timeout,
+                runtime="wee",
+                model=route.qualified_model,
+                channel=channel,
+            )
+            context_prompt = self._wee_augment_system_prompt_with_tools(context_prompt)
+            context_prompt += _wee_anti_hallucination_prompt()
+            stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+
+            async def call_agent_handler(invocation):
+                return self._wee_execute_tool(
+                    "call_agent", dict(invocation.arguments or {}), agent
+                )
+
+            call_agent_tool = Tool(
+                name="call_agent",
+                description=(
+                    "Delegate a task to another configured Wee agent. Use background "
+                    "mode for long-running work and quick mode for short questions."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "agent": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["quick", "background"],
+                            "default": "background",
+                        },
+                    },
+                    "required": ["agent", "prompt"],
+                },
+                handler=call_agent_handler,
+            )
+
+            def on_sdk_event(kind, payload):
+                if not stream_buffer:
+                    return
+                if kind == "chunk":
+                    stream_buffer.push("chunk", {"text": str(payload)})
+                elif kind == "tool_call":
+                    event_data = getattr(payload, "data", None)
+                    event_type = str(getattr(payload, "type", "tool"))
+                    stream_buffer.push(
+                        "tool_call",
+                        {
+                            "id": str(
+                                getattr(event_data, "tool_call_id", None)
+                                or getattr(event_data, "id", None)
+                                or f"tc_wee_sdk_{int(time.time() * 1000)}"
+                            ),
+                            "name": str(
+                                getattr(event_data, "tool_name", None)
+                                or getattr(event_data, "name", None)
+                                or "tool"
+                            ),
+                            "status": (
+                                "complete" if "complete" in event_type else "running"
+                            ),
+                        },
+                    )
+                elif kind == "done":
+                    stream_buffer.push("done", str(payload or ""))
+
+            saved_sdk_session = session_data.get("wee_copilot_session_id")
+            output, actual_session_id = execute_wee_copilot(
+                prompt=context_prompt,
+                route=route,
+                working_directory=agent_dir,
+                timeout=float(effective_timeout),
+                session_id=saved_sdk_session,
+                resume=bool(resume and saved_sdk_session),
+                tools=[call_agent_tool],
+                enable_tools=True,
+                event_callback=on_sdk_event,
+            )
+            if actual_session_id:
+                self.update_session_field(
+                    n8n_session_id, "wee_copilot_session_id", actual_session_id
+                )
+            print(
+                f"[Wee Copilot SDK] provider={route.provider} "
+                f"model={route.model} session={n8n_session_id[:8]}...",
+                file=sys.stderr,
+            )
+            return output
+        except Exception as sdk_error:
+            fallback_enabled = os.environ.get(
+                "WEE_OPENAI_FALLBACK_ENABLED", "1"
+            ).lower() not in {"0", "false", "no", "off"}
+            print(
+                f"[Wee Copilot SDK] failed: {type(sdk_error).__name__}: {sdk_error}",
+                file=sys.stderr,
+            )
+            if not fallback_enabled:
+                error_msg = f"Error: Wee Copilot SDK failed: {sdk_error}"
+                stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+                if stream_buffer:
+                    stream_buffer.push("done", error_msg)
+                return error_msg
+            print("[Wee Copilot SDK] using OpenAI-compatible fallback", file=sys.stderr)
+            return self._run_wee_openai_fallback(
+                prompt,
+                model,
+                agent,
+                session_id,
+                resume,
+                n8n_session_id,
+                timeout,
+                render_type,
+            )
+
+    def _run_wee_openai_fallback(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via the legacy OpenAI-compatible Wee agent loop.
 
         Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
         LM Studio, etc.) using the openai Python package. No external CLI
@@ -9310,7 +9516,12 @@ User Request:
             return "Error: openai package not installed. " "Run: pip install openai"
 
         session_data = self.get_or_create_session_data(n8n_session_id)
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        agent_info = (
+            self.AGENTS.get(agent)
+            or self.AGENTS.get("orchestrator")
+            or {"path": os.getcwd()}
+        )
+        agent_dir = agent_info["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
@@ -9319,14 +9530,21 @@ User Request:
         api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
 
         # Provider presets
-        # WEE_OLLAMA_HOST lets the desktop app point the local API at the
-        # Ollama runner on the same Mac. Keep the existing network endpoint
-        # as the default for remote/server deployments.
-        _ollama_host = os.environ.get(
-            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        # The desktop app uses WEE_OLLAMA_HOST for its same-Mac runner.
+        # Accept both Wee and Ollama conventions and normalize the OpenAI
+        # compatibility suffix without producing a duplicate /v1.
+        _ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
         ).rstrip("/")
+        if not _ollama_base.startswith(("http://", "https://")):
+            _ollama_base = f"http://{_ollama_base}"
+        if not _ollama_base.endswith("/v1"):
+            _ollama_base += "/v1"
         _PRESETS = {
-            "ollama": (f"{_ollama_host}/v1", "ollama"),
+            "ollama": (_ollama_base, "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -9342,7 +9560,7 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11434/v1"
+            api_base = _ollama_base
         if not api_key:
             # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
@@ -9836,7 +10054,7 @@ User Request:
                     if stream_buffer:
                         stream_buffer.push("chunk", {"text": _fb_msg})
                     # Recurse with next model (single fallback step)
-                    return self.run_wee_native(
+                    return self._run_wee_openai_fallback(
                         prompt=prompt, model=_next_model, agent=agent,
                         session_id=session_id, resume=resume,
                         n8n_session_id=n8n_session_id, timeout=timeout,
@@ -10290,6 +10508,23 @@ User Request:
             if role in ("user", "assistant") and content:
                 prefix = "User" if role == "user" else "Assistant"
                 transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Issue #399: preserve the fact that a tool was invoked even
+                # when the assistant message itself has no text content, so
+                # the summary doesn't silently drop tool-call turns.
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    name = fn.get("name", "unknown")
+                    args = fn.get("arguments", "")
+                    transcript_lines.append(
+                        f"Assistant: [called tool {name} with args {_summary_snippet(args, 200)}]"
+                    )
+            elif role == "tool" and content:
+                # Issue #399: tool results (e.g. web_search output) were being
+                # dropped entirely during compaction, causing the summary to
+                # lose all knowledge of prior tool output (search results,
+                # command output, etc.) referenced by later follow-up turns.
+                transcript_lines.append(f"Tool result: {_summary_snippet(content)}")
         if not transcript_lines:
             return messages
 
@@ -10365,11 +10600,18 @@ User Request:
         self, model: str, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[str, str, str]:
         """Compatibility shim returning the resolved endpoint tuple."""
-        _ollama_host = os.environ.get(
-            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        _ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
         ).rstrip("/")
+        if not _ollama_base.startswith(("http://", "https://")):
+            _ollama_base = f"http://{_ollama_base}"
+        if not _ollama_base.endswith("/v1"):
+            _ollama_base += "/v1"
         _presets = {
-            "ollama": (f"{_ollama_host}/v1", "ollama"),
+            "ollama": (_ollama_base, "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -11187,17 +11429,47 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
 _api_auth_manager: Optional["AuthManager"] = None
 
 
+def _telegram_config_path() -> str:
+    """Return the shared Telegram config path used by API pairing and listener."""
+    return os.environ.get("TELEGRAM_CONFIG_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "telegram_config.json"
+    )
+
+
+def _load_telegram_config() -> dict:
+    """Load Telegram pairing metadata without requiring a token in the file."""
+    try:
+        with open(_telegram_config_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     """Deliver a pairing code. Returns True on success, False on failure."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         if channel == "telegram":
-            from telegram_connector import TelegramConnector
+            from telegram_connector import (
+                TelegramConnector,
+                _resolve_orchestrator_bot_token,
+            )
 
-            config_path = os.path.join(script_dir, "telegram_config.json")
-            with open(config_path) as f:
-                cfg = json.load(f)
-            token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            config_path = _telegram_config_path()
+            cfg = _load_telegram_config()
+            file_token = cfg.get("token")
+            if not isinstance(file_token, str):
+                file_token = ""
+            token = (
+                file_token
+                or os.getenv("TELEGRAM_BOT_TOKEN", "")
+                or _resolve_orchestrator_bot_token(
+                    "telegram", os.path.join(script_dir, "agents.json")
+                )
+            )
+            if not token:
+                raise RuntimeError("Telegram bot token is not configured")
             connector = TelegramConnector(token, config_file=config_path)
             last_exc = None
             for attempt in range(1, 4):
@@ -11262,11 +11534,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
 def _get_telegram_username(user_id: str):
     """Look up @username for a numeric Telegram user_id in telegram_config.json.
     Returns the username string (without @), or None if not found."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "telegram_config.json")
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = _load_telegram_config()
         pairing = cfg.get("user_pairings", {}).get(str(user_id), {})
         username = pairing.get("username", "")
         return username.lstrip("@") if username else None
@@ -11335,13 +11604,11 @@ def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first).
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "telegram_config.json")
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = _load_telegram_config()
         for uid, pairing in cfg.get("user_pairings", {}).items():
-            if pairing.get("username", "").lower() == username.lower():
+            stored_username = pairing.get("username", "").lstrip("@").lower()
+            if stored_username == username.lstrip("@").lower():
                 return uid
         return None
     except Exception:
@@ -11402,6 +11669,24 @@ def _resolved_agents_config_path(session_mgr) -> Path:
     return Path(config_path) if config_path else Path(SCRIPT_BASE_DIR) / "agents.json"
 
 
+def _api_config_file_from_argv(argv: Optional[List[str]] = None) -> Optional[str]:
+    """Extract a ``--config``/``-c`` value from raw argv for API mode.
+
+    ``--api`` (see ``start_api_server``) short-circuits before ``argparse`` runs,
+    so a caller cannot otherwise point a local API instance at an isolated
+    agents.json via the CLI — only the ``AGENT_CONFIG_FILE`` env var works. This
+    restores CLI parity for API mode without requiring full argparse.
+    """
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    for i, token in enumerate(tokens):
+        if token in ("--config", "-c"):
+            if i + 1 < len(tokens):
+                return tokens[i + 1]
+        elif token.startswith("--config="):
+            return token.split("=", 1)[1]
+    return None
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
@@ -11443,12 +11728,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             file=sys.stderr,
         )
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
-    PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
-    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "2592000"))  # 30 days
-    SESSION_TOKEN_ABSOLUTE_TTL = int(
-        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000")  # 180 days
+    PAIRING_CODE_TTL = int(
+        os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300"))
     )
-    CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    SESSION_TOKEN_TTL = int(
+        os.environ.get(
+            "WEE_SESSION_TOKEN_TTL",
+            os.environ.get("SESSION_TOKEN_TTL", "2592000"),
+        )
+    )
+    SESSION_TOKEN_ABSOLUTE_TTL = int(
+        os.environ.get(
+            "WEE_SESSION_TOKEN_ABSOLUTE_TTL",
+            os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000"),
+        )
+    )
+    # CLI --config takes priority so `--api --config <path>` can select an
+    # isolated agents.json the same way non-API mode does (see
+    # _api_config_file_from_argv for why this can't just use argparse).
+    CONFIG_FILE = _api_config_file_from_argv() or os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get(
         "SCHEDULER_JOBS_FILE",
         os.path.join(

@@ -30,13 +30,21 @@ import urllib.request
 
 # Provider presets: prefix → (api_base, default_api_key)
 # Use env vars for Ollama and LM Studio to allow customization
-_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-_OLLAMA_PORT = os.environ.get("OLLAMA_PORT", "11434")
+_OLLAMA_HOST = (
+    os.environ.get("WEE_OLLAMA_BASE_URL")
+    or os.environ.get("WEE_OLLAMA_HOST")
+    or os.environ.get("OLLAMA_HOST")
+    or "http://192.168.1.101:11434"
+).rstrip("/")
+if not _OLLAMA_HOST.startswith(("http://", "https://")):
+    _OLLAMA_HOST = f"http://{_OLLAMA_HOST}"
+if _OLLAMA_HOST.endswith("/v1"):
+    _OLLAMA_HOST = _OLLAMA_HOST[:-3]
 _LMSTUDIO_HOST = os.environ.get("LMSTUDIO_HOST", "localhost")
 _LMSTUDIO_PORT = os.environ.get("LMSTUDIO_PORT", "1234")
 
 PROVIDER_PRESETS = {
-    "ollama": (f"http://{_OLLAMA_HOST}:{_OLLAMA_PORT}/v1", "ollama"),
+    "ollama": (f"{_OLLAMA_HOST}/v1", "ollama"),
     "openrouter": ("https://openrouter.ai/api/v1", None),
     "lmstudio": (f"http://{_LMSTUDIO_HOST}:{_LMSTUDIO_PORT}/v1", "lm-studio"),
 }
@@ -1068,10 +1076,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
         resolved_base = os.environ.get(
-            "WEE_API_BASE", f"http://{_ollama_host}:{_ollama_port}/v1"
+            "WEE_API_BASE", PROVIDER_PRESETS["ollama"][0]
         )
     if not resolved_key:
         # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
@@ -1629,8 +1635,16 @@ def list_available_models(provider: str = None):
     """
     import httpx
 
-    _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-    _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+    _ollama_base = (
+        os.environ.get("WEE_OLLAMA_BASE_URL")
+        or os.environ.get("WEE_OLLAMA_HOST")
+        or os.environ.get("OLLAMA_HOST")
+        or "http://192.168.1.101:11434"
+    ).rstrip("/")
+    if not _ollama_base.startswith(("http://", "https://")):
+        _ollama_base = f"http://{_ollama_base}"
+    if _ollama_base.endswith("/v1"):
+        _ollama_base = _ollama_base[:-3]
 
     if provider:
         provider = provider.lower()
@@ -1640,10 +1654,10 @@ def list_available_models(provider: str = None):
 
     # Ollama models
     if not provider or provider == "ollama":
-        print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
+        print(f"\nOllama ({_ollama_base}):")
         try:
             resp = httpx.get(
-                f"http://{_ollama_host}:{_ollama_port}/api/tags",
+                f"{_ollama_base}/api/tags",
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
             if resp.status_code == 200:
@@ -1759,6 +1773,53 @@ def main():
     model, api_base, api_key = resolve_model_and_endpoint(
         args.model, args.api_base, args.api_key
     )
+
+    # Primary path: use the same Copilot SDK BYOK executor as the API and wee-cli.
+    # The direct OpenAI-compatible loop below remains as a migration fallback.
+    try:
+        from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
+
+        route = resolve_wee_provider(
+            args.model, api_base=args.api_base, api_key=args.api_key
+        )
+        sdk_prompt = (args.system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
+        if args.tools:
+            sdk_prompt += _WEE_TOOL_CAPABILITY_PROMPT
+        sdk_prompt += f"\n\n[USER]\n{args.prompt}"
+        sdk_streamed = [False]
+
+        def _sdk_event(kind, payload):
+            if kind == "chunk":
+                sdk_streamed[0] = True
+                sys.stdout.write(str(payload))
+                sys.stdout.flush()
+
+        sdk_output, _ = execute_wee_copilot(
+            prompt=sdk_prompt,
+            route=route,
+            working_directory=os.getcwd(),
+            timeout=float(args.timeout),
+            enable_tools=args.tools,
+            event_callback=_sdk_event,
+        )
+        if sdk_streamed[0]:
+            sys.stdout.write("\n")
+        elif sdk_output:
+            sys.stdout.write(sdk_output + "\n")
+        sys.stdout.flush()
+        return
+    except Exception as sdk_error:
+        fallback_enabled = os.environ.get(
+            "WEE_OPENAI_FALLBACK_ENABLED", "1"
+        ).lower() not in {"0", "false", "no", "off"}
+        if not fallback_enabled:
+            print(f"Error: Wee Copilot SDK failed: {sdk_error}", file=sys.stderr)
+            sys.exit(1)
+        print(
+            f"[Wee] Copilot SDK unavailable ({sdk_error}); "
+            "using direct provider fallback.",
+            file=sys.stderr,
+        )
 
     try:
         from openai import OpenAI

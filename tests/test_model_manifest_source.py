@@ -81,6 +81,33 @@ class TestModelManifestSource(unittest.TestCase):
 
         self.assertEqual(result, {"GPT Models": ["gpt-5.5"]})
 
+    def test_issue_417_copilot_sdk_dedicated_manifest_entry_is_used(self):
+        """copilot-sdk must read its OWN manifest entry when one is defined,
+        not silently fall back to the "copilot" entry.
+
+        Before the fix, fetch_copilot_models() ignored the runtime it was
+        dispatched for and always looked up manifest["runtimes"]["copilot"],
+        so locally-configured copilot-sdk-only models never appeared.
+        """
+        manifest_path = self._write_manifest(
+            {
+                "copilot": ["gpt-5.5"],
+                "copilot-sdk": ["sdk-only-model"],
+            }
+        )
+
+        with patch.object(agent_manager, "MODEL_MANIFEST_PATH", manifest_path):
+            copilot_result = self.manager.get_models_for_runtime("copilot")
+            copilot_sdk_result = self.manager.get_models_for_runtime("copilot-sdk")
+
+        copilot_models = [m for group in copilot_result.values() for m in group]
+        copilot_sdk_models = [
+            m for group in copilot_sdk_result.values() for m in group
+        ]
+
+        self.assertEqual(copilot_models, ["gpt-5.5"])
+        self.assertEqual(copilot_sdk_models, ["sdk-only-model"])
+
 
 if __name__ == "__main__":
     unittest.main()

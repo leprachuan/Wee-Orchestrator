@@ -52,6 +52,7 @@ def _make_mgr():
     return mgr
 
 
+@patch.dict(os.environ, {"WEE_COPILOT_SDK_ENABLED": "0"})
 def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs):
     """Helper to call run_wee_native with patched session data lookup."""
     defaults = dict(

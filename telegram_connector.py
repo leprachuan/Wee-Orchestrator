@@ -25,6 +25,13 @@ from base_connector import BaseConfig, BaseConnector
 
 logger = logging.getLogger(__name__)
 
+
+def default_telegram_config_path() -> str:
+    """Return the shared Telegram config path used by the API and listener."""
+    return os.environ.get("TELEGRAM_CONFIG_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "telegram_config.json"
+    )
+
 # If production listener should be disabled to avoid duplicate responders, create the
 # sentinel file /opt/n8n-copilot-shim/PROD_DISABLED. When present, any process
 # started from the production path will exit immediately.
@@ -43,8 +50,8 @@ if (
 class TelegramConfig(BaseConfig):
     """Manages Telegram connector configuration."""
 
-    def __init__(self, config_file: str = "telegram_config.json"):
-        super().__init__(config_file)
+    def __init__(self, config_file: str = None):
+        super().__init__(config_file or default_telegram_config_path())
 
     def _default_config(self) -> Dict:
         """Return default Telegram configuration."""
@@ -66,7 +73,7 @@ class TelegramConnector(BaseConnector):
     connector_name = "Telegram connector"
     channel_name = "telegram"
 
-    def __init__(self, token: str, config_file: str = "telegram_config.json"):
+    def __init__(self, token: str, config_file: str = None):
         """
         Initialize Telegram connector
 
@@ -74,6 +81,7 @@ class TelegramConnector(BaseConnector):
             token: Telegram bot token
             config_file: Path to configuration file
         """
+        config_file = config_file or default_telegram_config_path()
         self.config = TelegramConfig(config_file)
 
         # Prefer config file token over env var (env var may be stale in systemd)
@@ -1274,7 +1282,7 @@ def main():
     )
     parser.add_argument(
         "--config",
-        default="telegram_config.json",
+        default=default_telegram_config_path(),
         help="Configuration file path",
     )
     parser.add_argument(
