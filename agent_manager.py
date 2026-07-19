@@ -7,6 +7,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 
 import argparse
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -7978,8 +7979,8 @@ User Request:
         tracking for background task progress (Issue #87).
         """
         try:
-            from copilot import CopilotClient, SubprocessConfig
-            from copilot.session import (
+            from copilot import (
+                CopilotClient,
                 CopilotSession,
                 ElicitationContext,
                 ElicitationResult,
@@ -8048,11 +8049,6 @@ User Request:
         # Store session_id for resumption tracking
         sdk_session_id = session_id if resume and session_id else None
 
-        # For elevated mode, pass --allow-all-paths and --yolo via SubprocessConfig
-        # so the underlying Copilot CLI grants full filesystem access and
-        # auto-approves command execution (equivalent to the standard runtime flags).
-        sdk_cli_args = ["--allow-all-paths", "--yolo"] if mode == "elevated" else []
-
         def _auto_approve_user_input(
             request: UserInputRequest, invocation: dict
         ) -> UserInputResponse:
@@ -8070,10 +8066,7 @@ User Request:
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            _sdk_config = (
-                SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
-            )
-            _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
+            _client = CopilotClient(working_directory=agent_dir)
             async with _client as client:
                 # Event handler — streams chunks and detects tool calls
                 def on_event(event):
@@ -8209,7 +8202,7 @@ User Request:
 
                 mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
                 if os.path.exists(mcp_config_path):
-                    session_kwargs["config_dir"] = os.path.expanduser("~/.copilot")
+                    session_kwargs["config_directory"] = os.path.expanduser("~/.copilot")
 
                 try:
                     if sdk_session_id:
@@ -8259,27 +8252,14 @@ User Request:
                             stream_buffer.push("done", result_text)
                         return result_text
 
-                    # Fall back to full message history
-                    messages = session.get_messages()
-                    assistant_msgs = [
-                        m
-                        for m in messages
-                        if m.type == SessionEventType.ASSISTANT_MESSAGE
-                    ]
-                    if assistant_msgs:
-                        last = assistant_msgs[-1]
-                        if hasattr(last, "data") and hasattr(last.data, "content"):
-                            result_text = str(last.data.content)
-                            if stream_buffer:
-                                stream_buffer.push("done", result_text)
-                            return result_text
-
                     if stream_buffer:
                         stream_buffer.push("done", "")
                     return ""
                 finally:
                     try:
-                        await session.disconnect()
+                        disconnect_result = session.disconnect()
+                        if inspect.isawaitable(disconnect_result):
+                            await disconnect_result
                     except Exception:
                         pass
 
@@ -9220,7 +9200,12 @@ User Request:
             from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
 
             session_data = self.get_or_create_session_data(n8n_session_id)
-            agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+            agent_info = (
+                self.AGENTS.get(agent)
+                or self.AGENTS.get("orchestrator")
+                or {"path": os.getcwd()}
+            )
+            agent_dir = agent_info["path"]
             effective_timeout = timeout if timeout is not None else self.command_timeout
             channel = session_data.get("channel", "webui")
             route = resolve_wee_provider(
@@ -9384,7 +9369,12 @@ User Request:
             return "Error: openai package not installed. " "Run: pip install openai"
 
         session_data = self.get_or_create_session_data(n8n_session_id)
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+        agent_info = (
+            self.AGENTS.get(agent)
+            or self.AGENTS.get("orchestrator")
+            or {"path": os.getcwd()}
+        )
+        agent_dir = agent_info["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
         channel = session_data.get("channel", "webui")
 
@@ -9393,8 +9383,18 @@ User Request:
         api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
 
         # Provider presets
+        _ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
+        ).rstrip("/")
+        if not _ollama_base.startswith(("http://", "https://")):
+            _ollama_base = f"http://{_ollama_base}"
+        if not _ollama_base.endswith("/v1"):
+            _ollama_base += "/v1"
         _PRESETS = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (_ollama_base, "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -9410,7 +9410,7 @@ User Request:
                 break
 
         if not api_base:
-            api_base = "http://192.168.1.101:11434/v1"
+            api_base = _ollama_base
         if not api_key:
             # Try keyring for OpenRouter
             if "openrouter" in api_base.lower():
@@ -10404,8 +10404,18 @@ User Request:
         self, model: str, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[str, str, str]:
         """Compatibility shim returning the resolved endpoint tuple."""
+        _ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
+        ).rstrip("/")
+        if not _ollama_base.startswith(("http://", "https://")):
+            _ollama_base = f"http://{_ollama_base}"
+        if not _ollama_base.endswith("/v1"):
+            _ollama_base += "/v1"
         _presets = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (_ollama_base, "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }

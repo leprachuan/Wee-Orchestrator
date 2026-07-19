@@ -29,13 +29,21 @@ import urllib.request
 
 # Provider presets: prefix → (api_base, default_api_key)
 # Use env vars for Ollama and LM Studio to allow customization
-_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-_OLLAMA_PORT = os.environ.get("OLLAMA_PORT", "11434")
+_OLLAMA_HOST = (
+    os.environ.get("WEE_OLLAMA_BASE_URL")
+    or os.environ.get("WEE_OLLAMA_HOST")
+    or os.environ.get("OLLAMA_HOST")
+    or "http://192.168.1.101:11434"
+).rstrip("/")
+if not _OLLAMA_HOST.startswith(("http://", "https://")):
+    _OLLAMA_HOST = f"http://{_OLLAMA_HOST}"
+if _OLLAMA_HOST.endswith("/v1"):
+    _OLLAMA_HOST = _OLLAMA_HOST[:-3]
 _LMSTUDIO_HOST = os.environ.get("LMSTUDIO_HOST", "localhost")
 _LMSTUDIO_PORT = os.environ.get("LMSTUDIO_PORT", "1234")
 
 PROVIDER_PRESETS = {
-    "ollama": (f"http://{_OLLAMA_HOST}:{_OLLAMA_PORT}/v1", "ollama"),
+    "ollama": (f"{_OLLAMA_HOST}/v1", "ollama"),
     "openrouter": ("https://openrouter.ai/api/v1", None),
     "lmstudio": (f"http://{_LMSTUDIO_HOST}:{_LMSTUDIO_PORT}/v1", "lm-studio"),
 }
@@ -1003,10 +1011,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
 
     # Defaults
     if not resolved_base:
-        _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-        _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
         resolved_base = os.environ.get(
-            "WEE_API_BASE", f"http://{_ollama_host}:{_ollama_port}/v1"
+            "WEE_API_BASE", PROVIDER_PRESETS["ollama"][0]
         )
     if not resolved_key:
         # Issue #153: Check OPENROUTER_API_KEY env var for OpenRouter first
@@ -1564,8 +1570,16 @@ def list_available_models(provider: str = None):
     """
     import httpx
 
-    _ollama_host = os.environ.get("OLLAMA_HOST", "192.168.1.101")
-    _ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+    _ollama_base = (
+        os.environ.get("WEE_OLLAMA_BASE_URL")
+        or os.environ.get("WEE_OLLAMA_HOST")
+        or os.environ.get("OLLAMA_HOST")
+        or "http://192.168.1.101:11434"
+    ).rstrip("/")
+    if not _ollama_base.startswith(("http://", "https://")):
+        _ollama_base = f"http://{_ollama_base}"
+    if _ollama_base.endswith("/v1"):
+        _ollama_base = _ollama_base[:-3]
 
     if provider:
         provider = provider.lower()
@@ -1575,10 +1589,10 @@ def list_available_models(provider: str = None):
 
     # Ollama models
     if not provider or provider == "ollama":
-        print("\nOllama (http://%s:%s):" % (_ollama_host, _ollama_port))
+        print(f"\nOllama ({_ollama_base}):")
         try:
             resp = httpx.get(
-                f"http://{_ollama_host}:{_ollama_port}/api/tags",
+                f"{_ollama_base}/api/tags",
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=10.0),
             )
             if resp.status_code == 200:

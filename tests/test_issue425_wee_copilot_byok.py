@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import types
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -141,3 +142,59 @@ def test_sdk_session_receives_byok_provider_and_resolved_model(monkeypatch):
     }
     assert recorded["session"]["available_tools"] == []
     assert recorded["disconnected"] is True
+
+
+def test_api_wee_runtime_uses_shared_sdk_executor(monkeypatch):
+    from agent_manager import SessionManager
+
+    class Tool:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setitem(sys.modules, "copilot", types.SimpleNamespace(Tool=Tool))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    mgr = SessionManager.__new__(SessionManager)
+    mgr.AGENTS = {"orchestrator": {"path": "/tmp"}}
+    mgr.command_timeout = 60
+    mgr._stream_buffers = {}
+    mgr.get_or_create_session_data = MagicMock(return_value={"channel": "webui"})
+    mgr.build_agent_context_prompt = MagicMock(return_value="context")
+    mgr._wee_augment_system_prompt_with_tools = MagicMock(
+        side_effect=lambda prompt: prompt
+    )
+    mgr._wee_execute_tool = MagicMock(return_value="ok")
+    mgr.update_session_field = MagicMock()
+
+    with patch(
+        "wee_copilot_sdk.execute_wee_copilot",
+        return_value=("sdk api response", "wee-sdk-session"),
+    ) as execute:
+        result = mgr.run_wee_native(
+            "hello",
+            "openrouter/anthropic/claude-sonnet-4",
+            "orchestrator",
+            None,
+            False,
+            "api-session-425",
+        )
+
+    assert result == "sdk api response"
+    assert execute.call_args.kwargs["route"].provider == "openrouter"
+    assert execute.call_args.kwargs["route"].model == "anthropic/claude-sonnet-4"
+    mgr.update_session_field.assert_called_once_with(
+        "api-session-425", "wee_copilot_session_id", "wee-sdk-session"
+    )
+
+
+def test_legacy_api_endpoint_uses_configured_ollama(monkeypatch):
+    from agent_manager import SessionManager
+
+    monkeypatch.setenv("WEE_OLLAMA_HOST", "ollama-dev.example:11434")
+    mgr = SessionManager.__new__(SessionManager)
+    model, base_url, api_key = mgr._wee_resolve_endpoint(
+        "ollama/qwen3:8b", None, None
+    )
+
+    assert model == "qwen3:8b"
+    assert base_url == "http://ollama-dev.example:11434/v1"
+    assert api_key == "ollama"
