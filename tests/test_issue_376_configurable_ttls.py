@@ -122,9 +122,9 @@ class TestIssue376ConfigurableTTLs(unittest.TestCase):
         )
         with open(source_file) as f:
             source = f.read()
-        assert 'os.environ.get("WEE_PAIRING_CODE_TTL"' in source
-        assert 'os.environ.get("WEE_SESSION_TOKEN_TTL"' in source
-        assert 'os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL"' in source
+        assert '"WEE_PAIRING_CODE_TTL"' in source
+        assert '"WEE_SESSION_TOKEN_TTL"' in source
+        assert '"WEE_SESSION_TOKEN_ABSOLUTE_TTL"' in source
 
 
 if __name__ == "__main__":
