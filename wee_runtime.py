@@ -89,10 +89,27 @@ _WEE_TOOLS = [
 ]
 
 
+def _webui_secret(name: str) -> "str | None":
+    """Read a credential stored by the WebUI Secret Manager."""
+    try:
+        from secret_tool.secret_tool import FileBackend
+
+        result = FileBackend().get(name)
+        if result.get("status") == "success":
+            credential = result.get("credential")
+            if isinstance(credential, str) and credential.strip():
+                return credential.strip()
+    except Exception:
+        pass
+    return None
+
+
 def fetch_openrouter_pricing():
     """Fetch OpenRouter model pricing from API and cache it."""
     try:
         api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            api_key = _webui_secret("OPENROUTER_API_KEY")
         if not api_key:
             try:
                 import keyring
@@ -1085,6 +1102,8 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
             resolved_key = os.environ.get("OPENROUTER_API_KEY")
         if not resolved_key:
             resolved_key = os.environ.get("WEE_API_KEY")
+        if not resolved_key and "openrouter" in (resolved_base or "").lower():
+            resolved_key = _webui_secret("OPENROUTER_API_KEY")
         # Try keyring for OpenRouter
         if not resolved_key and "openrouter" in (resolved_base or "").lower():
             try:
@@ -1097,8 +1116,9 @@ def resolve_model_and_endpoint(model: str, api_base: str = None, api_key: str = 
         if not resolved_key:
             if "openrouter" in (resolved_base or "").lower():
                 print(
-                    "Error: OpenRouter API key not found. Set "
-                    "OPENROUTER_API_KEY env var or store via keyring.",
+                    "Error: OpenRouter API key not found. Save OPENROUTER_API_KEY "
+                    "in Wee Secrets, set it in the service environment, or store "
+                    "it in the system keyring.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
