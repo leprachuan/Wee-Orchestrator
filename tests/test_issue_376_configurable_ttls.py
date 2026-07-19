@@ -32,11 +32,11 @@ class TestIssue376ConfigurableTTLs(unittest.TestCase):
         self.assertEqual(mgr.session_token_absolute_ttl, 172800)
 
     def test_auth_manager_default_ttls(self):
-        """AuthManager defaults match the original hardcoded values."""
+        """AuthManager defaults retain the production 30/180-day policy."""
         mgr = AuthManager(shared_key="test")
         self.assertEqual(mgr.pairing_code_ttl, 300)
-        self.assertEqual(mgr.session_token_ttl, 3600)
-        self.assertEqual(mgr.session_token_absolute_ttl, 86400)
+        self.assertEqual(mgr.session_token_ttl, 2592000)
+        self.assertEqual(mgr.session_token_absolute_ttl, 15552000)
 
     def test_env_var_parsing_wee_prefix(self):
         """WEE_-prefixed env vars are read by the env-parsing pattern."""
@@ -47,8 +47,8 @@ class TestIssue376ConfigurableTTLs(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False):
             pairing = int(os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300")))
-            session = int(os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "3600")))
-            absolute = int(os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")))
+            session = int(os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "2592000")))
+            absolute = int(os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000")))
         self.assertEqual(pairing, 600)
         self.assertEqual(session, 14400)
         self.assertEqual(absolute, 172800)
@@ -65,8 +65,8 @@ class TestIssue376ConfigurableTTLs(unittest.TestCase):
             for k in clean_keys:
                 os.environ.pop(k, None)
             pairing = int(os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300")))
-            session = int(os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "3600")))
-            absolute = int(os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")))
+            session = int(os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "2592000")))
+            absolute = int(os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000")))
         self.assertEqual(pairing, 120)
         self.assertEqual(session, 7200)
         self.assertEqual(absolute, 43200)
@@ -83,8 +83,8 @@ class TestIssue376ConfigurableTTLs(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False):
             pairing = int(os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300")))
-            session = int(os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "3600")))
-            absolute = int(os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")))
+            session = int(os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "2592000")))
+            absolute = int(os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000")))
         self.assertEqual(pairing, 999)
         self.assertEqual(session, 888)
         self.assertEqual(absolute, 777)
