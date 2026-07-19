@@ -9887,6 +9887,36 @@ User Request:
 
                 content_text = "".join(round_content)
 
+                # Some Ollama models accept an OpenAI-compatible `tools`
+                # payload but then produce an empty stream with no tool call.
+                # Treat that as provider incompatibility and retry the first
+                # turn once without tools, just as we do when the endpoint
+                # rejects the tools parameter outright (#434).
+                if (
+                    round_num == 0
+                    and not content_text.strip()
+                    and not tool_calls_acc
+                    and "tools" in create_kwargs
+                ):
+                    print(
+                        "[Wee Native] Empty tool-enabled response, retrying without tools",
+                        file=sys.stderr,
+                    )
+                    retry_kwargs = dict(create_kwargs)
+                    retry_kwargs.pop("tools", None)
+                    retry_stream = client.chat.completions.create(**retry_kwargs)
+                    retry_content = []
+                    for chunk in retry_stream:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            token = delta.content
+                            retry_content.append(token)
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": token})
+                    content_text = "".join(retry_content)
+
                 # No tool calls — we have the final answer
                 if not tool_calls_acc:
                     # Issue #343: When call_agent was the last tool and model returns
