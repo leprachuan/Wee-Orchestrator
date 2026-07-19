@@ -1233,7 +1233,7 @@ def check_runtime_available(runtime: str) -> bool:
         "devin": "devin",
         "cursor": "agent",  # Cursor uses 'agent' binary
         "opencode": "opencode",
-        "wee": "openai",  # OpenAI-compatible API (no binary needed),
+        "wee": "copilot",  # Copilot SDK BYOK (OpenAI fallback during migration),
     }
 
     executable_name = runtime_map.get(runtime)
@@ -1246,6 +1246,11 @@ def check_runtime_available(runtime: str) -> bool:
             if runtime == "claude-sdk":
                 # Package is installed as claude_agent_sdk
                 __import__("claude_agent_sdk")
+            elif runtime == "wee":
+                try:
+                    __import__("copilot")
+                except ImportError:
+                    __import__("openai")
             else:
                 module_name = executable_name.replace("-", "_")
                 __import__(module_name)
@@ -4742,7 +4747,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         if cached and _time.time() - cached_ts < ollama_ttl:
             return cached
 
-        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
+        ).rstrip("/")
+        if ollama_base.endswith("/v1"):
+            ollama_base = ollama_base[:-3]
+        if not ollama_base.startswith(("http://", "https://")):
+            ollama_base = f"http://{ollama_base}"
+        ollama_url = ollama_base + "/api/tags"
         try:
             req = _urllib_req.Request(ollama_url)
             resp = _urllib_req.urlopen(req, timeout=5)
@@ -9194,7 +9209,156 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+        """Execute Wee through Copilot SDK BYOK, with the legacy loop as fallback.
+
+        Provider-qualified model IDs are resolved by the shared Wee SDK module,
+        so API sessions and the standalone CLI use identical Ollama/OpenRouter
+        routing behavior.
+        """
+        try:
+            from copilot import Tool
+            from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
+
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
+            effective_timeout = timeout if timeout is not None else self.command_timeout
+            channel = session_data.get("channel", "webui")
+            route = resolve_wee_provider(
+                model,
+                api_base=session_data.get("api_base") or os.environ.get("WEE_API_BASE"),
+                api_key=session_data.get("api_key") or os.environ.get("WEE_API_KEY"),
+            )
+
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type=render_type,
+                timeout=effective_timeout,
+                runtime="wee",
+                model=route.qualified_model,
+                channel=channel,
+            )
+            context_prompt = self._wee_augment_system_prompt_with_tools(context_prompt)
+            context_prompt += _wee_anti_hallucination_prompt()
+            stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+
+            async def call_agent_handler(invocation):
+                return self._wee_execute_tool(
+                    "call_agent", dict(invocation.arguments or {}), agent
+                )
+
+            call_agent_tool = Tool(
+                name="call_agent",
+                description=(
+                    "Delegate a task to another configured Wee agent. Use background "
+                    "mode for long-running work and quick mode for short questions."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "agent": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["quick", "background"],
+                            "default": "background",
+                        },
+                    },
+                    "required": ["agent", "prompt"],
+                },
+                handler=call_agent_handler,
+            )
+
+            def on_sdk_event(kind, payload):
+                if not stream_buffer:
+                    return
+                if kind == "chunk":
+                    stream_buffer.push("chunk", {"text": str(payload)})
+                elif kind == "tool_call":
+                    event_data = getattr(payload, "data", None)
+                    event_type = str(getattr(payload, "type", "tool"))
+                    stream_buffer.push(
+                        "tool_call",
+                        {
+                            "id": str(
+                                getattr(event_data, "tool_call_id", None)
+                                or getattr(event_data, "id", None)
+                                or f"tc_wee_sdk_{int(time.time() * 1000)}"
+                            ),
+                            "name": str(
+                                getattr(event_data, "tool_name", None)
+                                or getattr(event_data, "name", None)
+                                or "tool"
+                            ),
+                            "status": (
+                                "complete" if "complete" in event_type else "running"
+                            ),
+                        },
+                    )
+                elif kind == "done":
+                    stream_buffer.push("done", str(payload or ""))
+
+            saved_sdk_session = session_data.get("wee_copilot_session_id")
+            output, actual_session_id = execute_wee_copilot(
+                prompt=context_prompt,
+                route=route,
+                working_directory=agent_dir,
+                timeout=float(effective_timeout),
+                session_id=saved_sdk_session,
+                resume=bool(resume and saved_sdk_session),
+                tools=[call_agent_tool],
+                enable_tools=True,
+                event_callback=on_sdk_event,
+            )
+            if actual_session_id:
+                self.update_session_field(
+                    n8n_session_id, "wee_copilot_session_id", actual_session_id
+                )
+            print(
+                f"[Wee Copilot SDK] provider={route.provider} "
+                f"model={route.model} session={n8n_session_id[:8]}...",
+                file=sys.stderr,
+            )
+            return output
+        except Exception as sdk_error:
+            fallback_enabled = os.environ.get(
+                "WEE_OPENAI_FALLBACK_ENABLED", "1"
+            ).lower() not in {"0", "false", "no", "off"}
+            print(
+                f"[Wee Copilot SDK] failed: {type(sdk_error).__name__}: {sdk_error}",
+                file=sys.stderr,
+            )
+            if not fallback_enabled:
+                error_msg = f"Error: Wee Copilot SDK failed: {sdk_error}"
+                stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+                if stream_buffer:
+                    stream_buffer.push("done", error_msg)
+                return error_msg
+            print("[Wee Copilot SDK] using OpenAI-compatible fallback", file=sys.stderr)
+            return self._run_wee_openai_fallback(
+                prompt,
+                model,
+                agent,
+                session_id,
+                resume,
+                n8n_session_id,
+                timeout,
+                render_type,
+            )
+
+    def _run_wee_openai_fallback(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        resume: bool,
+        n8n_session_id: str,
+        timeout: Optional[int] = None,
+        render_type: str = "text",
+    ) -> str:
+        """Execute via the legacy OpenAI-compatible Wee agent loop.
 
         Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
         LM Studio, etc.) using the openai Python package. No external CLI
@@ -9696,7 +9860,7 @@ User Request:
                     if stream_buffer:
                         stream_buffer.push("chunk", {"text": _fb_msg})
                     # Recurse with next model (single fallback step)
-                    return self.run_wee_native(
+                    return self._run_wee_openai_fallback(
                         prompt=prompt, model=_next_model, agent=agent,
                         session_id=session_id, resume=resume,
                         n8n_session_id=n8n_session_id, timeout=timeout,

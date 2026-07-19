@@ -47,6 +47,10 @@ from wee_runtime import (  # noqa: E402
     list_available_models,
     resolve_model_and_endpoint,
 )
+from wee_copilot_sdk import (  # noqa: E402
+    execute_wee_copilot,
+    resolve_wee_provider,
+)
 
 _TOOL_PREAMBLE_PROMPT = (
     "\n\n[Tool Use Style]\n"
@@ -62,6 +66,46 @@ DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.json")
 HISTORY_FILE = os.path.join(DEFAULT_CONFIG_DIR, "history")
 SESSION_DIR = os.path.join(DEFAULT_CONFIG_DIR, "sessions")
 _SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _chat_via_copilot_sdk(
+    *,
+    messages: list,
+    qualified_model: str,
+    api_base: str,
+    api_key: str,
+    timeout: float,
+    tools_enabled: bool,
+    stream_output: bool = True,
+) -> str:
+    """Run a Wee CLI turn through the shared Copilot SDK BYOK path."""
+    route = resolve_wee_provider(qualified_model, api_base=api_base, api_key=api_key)
+    transcript = []
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        content = message.get("content")
+        if content:
+            transcript.append(f"[{role}]\n{content}")
+    prompt = "\n\n".join(transcript)
+    streamed = [False]
+
+    def on_event(kind, payload):
+        if kind == "chunk" and stream_output:
+            streamed[0] = True
+            sys.stdout.write(str(payload))
+            sys.stdout.flush()
+
+    response, _ = execute_wee_copilot(
+        prompt=prompt,
+        route=route,
+        working_directory=os.getcwd(),
+        timeout=float(timeout),
+        enable_tools=tools_enabled,
+        event_callback=on_event,
+    )
+    if streamed[0]:
+        print()
+    return response
 
 
 def load_config() -> dict:
@@ -1228,17 +1272,35 @@ def run_interactive(
 
         try:
             tool_results_buffer = {}  # Clear buffer for new interaction
-            response = chat_stream(
-                client=client,
-                model=model,
-                messages=messages,
-                tools_enabled=tools_enabled,
-                temperature=temperature,
-                token_tracker=token_tracker,
-                permission=permission,
-                tool_results_buffer=tool_results_buffer,
-                show_thinking=show_thinking,
-            )
+            try:
+                response = _chat_via_copilot_sdk(
+                    messages=messages,
+                    qualified_model=model_for_persistence,
+                    api_base=api_base,
+                    api_key=api_key,
+                    timeout=timeout,
+                    tools_enabled=tools_enabled and permission != "restricted",
+                )
+            except Exception as sdk_error:
+                fallback_enabled = os.environ.get(
+                    "WEE_OPENAI_FALLBACK_ENABLED", "1"
+                ).lower() not in {"0", "false", "no", "off"}
+                if not fallback_enabled:
+                    raise
+                _print_info(
+                    f"Copilot SDK unavailable ({sdk_error}); using direct provider fallback."
+                )
+                response = chat_stream(
+                    client=client,
+                    model=model,
+                    messages=messages,
+                    tools_enabled=tools_enabled,
+                    temperature=temperature,
+                    token_tracker=token_tracker,
+                    permission=permission,
+                    tool_results_buffer=tool_results_buffer,
+                    show_thinking=show_thinking,
+                )
             messages.append({"role": "assistant", "content": response})
             if session_name:
                 save_session_data(
@@ -1319,6 +1381,7 @@ def run_single_shot(
     permission: str = "auto",
     existing_messages: list = None,
     show_thinking: bool = False,
+    qualified_model: str = None,
 ):
     """Run a single prompt and exit."""
     client = _make_client(api_base, api_key, timeout)
@@ -1331,17 +1394,36 @@ def run_single_shot(
     stream_output = output_format == "text"
 
     try:
-        response = chat_stream(
-            client=client,
-            model=model,
-            messages=messages,
-            tools_enabled=tools_enabled,
-            temperature=temperature,
-            token_tracker=token_tracker,
-            permission=permission,
-            stream_output=stream_output,
-            show_thinking=show_thinking,
-        )
+        try:
+            response = _chat_via_copilot_sdk(
+                messages=messages,
+                qualified_model=qualified_model or model,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                tools_enabled=tools_enabled and permission != "restricted",
+                stream_output=stream_output,
+            )
+        except Exception as sdk_error:
+            fallback_enabled = os.environ.get(
+                "WEE_OPENAI_FALLBACK_ENABLED", "1"
+            ).lower() not in {"0", "false", "no", "off"}
+            if not fallback_enabled:
+                raise
+            _print_info(
+                f"Copilot SDK unavailable ({sdk_error}); using direct provider fallback."
+            )
+            response = chat_stream(
+                client=client,
+                model=model,
+                messages=messages,
+                tools_enabled=tools_enabled,
+                temperature=temperature,
+                token_tracker=token_tracker,
+                permission=permission,
+                stream_output=stream_output,
+                show_thinking=show_thinking,
+            )
         messages.append({"role": "assistant", "content": response})
         # For non-streaming formats (json/markdown), strip thinking here since
         # ThinkingBuffer only applies during streaming (text format).
@@ -1659,6 +1741,7 @@ def main(argv=None):
             permission=permission,
             existing_messages=existing_messages,
             show_thinking=args.show_thinking,
+            qualified_model=model_str,
         )
         if session_name:
             save_session_data(

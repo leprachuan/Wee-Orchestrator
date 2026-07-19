@@ -565,9 +565,9 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Usage:** `/runtime set copilot-sdk`
 - **Issues:** [#76](../../issues/76), [#87](../../issues/87), [#91](../../issues/91)
 
-#### Wee Native Runtime
-- **Also Known As:** `wee` — OpenAI-compatible API backend runtime
-- **Description:** Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter, LM Studio, etc.) without depending on external CLI tools like GitHub Copilot CLI, Claude Code, or OpenCode.
+#### Wee Runtime
+- **Also Known As:** `wee` — Copilot SDK agent runtime with BYOK providers
+- **Description:** Uses the GitHub Copilot SDK agent loop while routing inference to OpenAI-compatible endpoints such as Ollama, OpenRouter, and LM Studio. The previous direct OpenAI-compatible loop remains available as a migration fallback.
 - **Supported Backends:**
   - **Ollama** at `http://192.168.1.101:11434/v1` — local, free (Kubuntu)
   - **OpenRouter** at `https://openrouter.ai/api/v1` — cloud fallback, 100+ models
@@ -586,6 +586,11 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Environment Variables:**
   - `WEE_API_BASE` — Override API base URL (e.g., `http://192.168.1.101:11434/v1`)
   - `WEE_API_KEY` — API key for authenticated endpoints (OpenRouter, etc.)
+  - `WEE_OLLAMA_HOST` / `WEE_OLLAMA_BASE_URL` — Configured Ollama server used for discovery and SDK routing
+  - `WEE_OPENROUTER_BASE_URL` — Override the OpenRouter-compatible endpoint
+  - `WEE_COPILOT_SDK_ENABLED` — Set to `0` to disable the SDK path temporarily
+  - `WEE_OPENAI_FALLBACK_ENABLED` — Set to `0` to fail instead of using the legacy direct-provider loop
+  - `WEE_COPILOT_WIRE_API` — `completions` (default) or `responses`
   - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
   - `WEE_SEARXNG_URL` — SearXNG base URL for the `search` tool (default: `http://192.168.1.100:8888`)
 - **Native Tools (available in agentic `--tools` mode):**
@@ -594,7 +599,9 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `call_agent` — Delegate to a Wee Orchestrator sub-agent (quick or background mode)
   - `search` — Web search via self-hosted SearXNG (`q`, `count` up to 20, `format` json/text); requires `WEE_SEARXNG_URL` or defaults to `http://192.168.1.100:8888` (Issue #255)
 - **Features:**
-  - In-process execution using OpenAI Python SDK
+  - Structured Copilot SDK streaming, tool events, permissions, and session continuity
+  - Copilot SDK BYOK routing to Ollama and OpenRouter with provider-qualified model IDs
+  - Direct OpenAI Python SDK fallback during migration
   - Real-time SSE streaming to WebUI
   - Provider presets auto-resolve API base URLs and API keys
   - Graceful error handling with informative messages
@@ -2575,4 +2582,3 @@ All outstanding work is tracked in GitHub Issues. Check the repository issues bo
 - **Blocked** - Waiting on dependencies
 
 Start here: [GitHub Issues](../../issues)
-

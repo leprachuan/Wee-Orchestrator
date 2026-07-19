@@ -1695,6 +1695,53 @@ def main():
         args.model, args.api_base, args.api_key
     )
 
+    # Primary path: use the same Copilot SDK BYOK executor as the API and wee-cli.
+    # The direct OpenAI-compatible loop below remains as a migration fallback.
+    try:
+        from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
+
+        route = resolve_wee_provider(
+            args.model, api_base=args.api_base, api_key=args.api_key
+        )
+        sdk_prompt = (args.system_prompt or "") + _ANTI_HALLUCINATION_PROMPT
+        if args.tools:
+            sdk_prompt += _WEE_TOOL_CAPABILITY_PROMPT
+        sdk_prompt += f"\n\n[USER]\n{args.prompt}"
+        sdk_streamed = [False]
+
+        def _sdk_event(kind, payload):
+            if kind == "chunk":
+                sdk_streamed[0] = True
+                sys.stdout.write(str(payload))
+                sys.stdout.flush()
+
+        sdk_output, _ = execute_wee_copilot(
+            prompt=sdk_prompt,
+            route=route,
+            working_directory=os.getcwd(),
+            timeout=float(args.timeout),
+            enable_tools=args.tools,
+            event_callback=_sdk_event,
+        )
+        if sdk_streamed[0]:
+            sys.stdout.write("\n")
+        elif sdk_output:
+            sys.stdout.write(sdk_output + "\n")
+        sys.stdout.flush()
+        return
+    except Exception as sdk_error:
+        fallback_enabled = os.environ.get(
+            "WEE_OPENAI_FALLBACK_ENABLED", "1"
+        ).lower() not in {"0", "false", "no", "off"}
+        if not fallback_enabled:
+            print(f"Error: Wee Copilot SDK failed: {sdk_error}", file=sys.stderr)
+            sys.exit(1)
+        print(
+            f"[Wee] Copilot SDK unavailable ({sdk_error}); "
+            "using direct provider fallback.",
+            file=sys.stderr,
+        )
+
     try:
         from openai import OpenAI
     except ImportError:
