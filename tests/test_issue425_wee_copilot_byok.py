@@ -144,6 +144,67 @@ def test_sdk_session_receives_byok_provider_and_resolved_model(monkeypatch):
     assert recorded["disconnected"] is True
 
 
+def test_unusably_short_ollama_sdk_response_triggers_fallback(monkeypatch):
+    """A truncated one-character Ollama SDK result must not reach the user."""
+
+    class Events:
+        ASSISTANT_STREAMING_DELTA = "assistant.delta"
+        ASSISTANT_MESSAGE_DELTA = "assistant.message_delta"
+        ASSISTANT_MESSAGE = "assistant.message"
+        TOOL_EXECUTION_START = "tool.start"
+        TOOL_EXECUTION_COMPLETE = "tool.complete"
+        COMMAND_EXECUTE = "command.execute"
+        SESSION_ERROR = "session.error"
+        MODEL_CALL_FAILURE = "model.failure"
+
+    class PermissionHandler:
+        approve_all = object()
+
+    class Session:
+        session_id = "sdk-session-short"
+
+        async def send_and_wait(self, prompt, timeout):
+            return types.SimpleNamespace(data=types.SimpleNamespace(content="I"))
+
+        def disconnect(self):
+            return None
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def create_session(self, **kwargs):
+            return Session()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "copilot",
+        types.SimpleNamespace(
+            CopilotClient=Client,
+            PermissionHandler=PermissionHandler,
+            SessionEventType=Events,
+        ),
+    )
+    monkeypatch.setenv("WEE_OLLAMA_HOST", "http://ollama-dev.example:11434")
+    route = resolve_wee_provider("ollama/gemma4:e4b")
+
+    with pytest.raises(
+        wee_copilot_sdk.WeeCopilotSDKError,
+        match="unusably short response",
+    ):
+        asyncio.run(
+            execute_wee_copilot_async(
+                prompt="hello",
+                route=route,
+                working_directory="/tmp",
+                timeout=42,
+            )
+        )
+
+
 def test_api_wee_runtime_uses_shared_sdk_executor(monkeypatch):
     from agent_manager import SessionManager
 

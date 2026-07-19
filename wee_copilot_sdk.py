@@ -279,6 +279,10 @@ async def execute_wee_copilot_async(
             disconnect_result = session.disconnect()
             if asyncio.iscoroutine(disconnect_result):
                 await disconnect_result
+            if route.provider == "ollama" and len(result_text.strip()) <= 1:
+                raise WeeCopilotSDKError(
+                    "Ollama Copilot SDK returned an unusably short response"
+                )
             return result_text, str(actual_session_id) if actual_session_id else None
         except Exception as exc:
             if isinstance(exc, WeeCopilotSDKError):
