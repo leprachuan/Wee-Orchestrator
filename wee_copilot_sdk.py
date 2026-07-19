@@ -49,6 +49,29 @@ def _with_v1(value: str) -> str:
     return value if value.endswith("/v1") else f"{value}/v1"
 
 
+def _webui_secret(name: str) -> Optional[str]:
+    """Read a credential stored by the WebUI Secret Manager.
+
+    The API deliberately keeps these credentials out of the service
+    environment and stores them with ``secret_tool``'s encrypted file backend.
+    Runtime consumers therefore need to use the same backend instead of
+    assuming every credential is exported as an environment variable.
+    """
+    try:
+        from secret_tool.secret_tool import FileBackend
+
+        result = FileBackend().get(name)
+        if result.get("status") == "success":
+            credential = result.get("credential")
+            if isinstance(credential, str) and credential.strip():
+                return credential.strip()
+    except Exception:
+        # A missing/locked secret store is equivalent to an absent credential.
+        # The caller raises the user-facing configuration error.
+        pass
+    return None
+
+
 def _openrouter_key(explicit_key: Optional[str] = None) -> Optional[str]:
     key = explicit_key or os.environ.get("OPENROUTER_API_KEY")
     if key:
@@ -56,9 +79,16 @@ def _openrouter_key(explicit_key: Optional[str] = None) -> Optional[str]:
     try:
         import keyring
 
-        return keyring.get_password("openrouter", "api_key")
+        key = keyring.get_password("openrouter", "api_key")
     except Exception:
-        return None
+        key = None
+    if key:
+        return key
+
+    # OPENROUTER_API_KEY is the documented Secret Manager name. Retain the
+    # lowercase alias for installations that created it before this contract
+    # was documented.
+    return _webui_secret("OPENROUTER_API_KEY") or _webui_secret("openrouter_api_key")
 
 
 def resolve_wee_provider(
@@ -89,14 +119,14 @@ def resolve_wee_provider(
         key = api_key or os.environ.get("WEE_OLLAMA_API_KEY")
     elif provider == "openrouter":
         base = (
-            os.environ.get("WEE_OPENROUTER_BASE_URL")
-            or "https://openrouter.ai/api/v1"
+            os.environ.get("WEE_OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
         ).rstrip("/")
         key = _openrouter_key(api_key)
         if not key:
             raise ValueError(
-                "OpenRouter API key not found; set OPENROUTER_API_KEY or store "
-                "the key in the system keyring"
+                "OpenRouter API key not found. Save OPENROUTER_API_KEY in "
+                "Wee Secrets, set it in the service environment, or store it "
+                "in the system keyring"
             )
     elif provider == "lmstudio":
         configured = os.environ.get("WEE_LMSTUDIO_BASE_URL")
