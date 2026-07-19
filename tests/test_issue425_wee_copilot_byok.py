@@ -198,3 +198,64 @@ def test_legacy_api_endpoint_uses_configured_ollama(monkeypatch):
     assert model == "qwen3:8b"
     assert base_url == "http://ollama-dev.example:11434/v1"
     assert api_key == "ollama"
+
+
+def test_cancellation_propagates_instead_of_being_swallowed(monkeypatch):
+    """Issue #425 follow-up: asyncio cancellation during send_and_wait must
+    propagate as CancelledError, not get wrapped into WeeCopilotSDKError by
+    the broad except-Exception handler in execute_wee_copilot_async."""
+
+    class Events:
+        ASSISTANT_STREAMING_DELTA = "assistant.delta"
+        ASSISTANT_MESSAGE_DELTA = "assistant.message_delta"
+        ASSISTANT_MESSAGE = "assistant.message"
+        TOOL_EXECUTION_START = "tool.start"
+        TOOL_EXECUTION_COMPLETE = "tool.complete"
+        COMMAND_EXECUTE = "command.execute"
+        SESSION_ERROR = "session.error"
+        MODEL_CALL_FAILURE = "model.failure"
+
+    class PermissionHandler:
+        approve_all = object()
+
+    class Session:
+        session_id = "sdk-session-cancel"
+
+        async def send_and_wait(self, prompt, timeout):
+            raise asyncio.CancelledError()
+
+        def disconnect(self):
+            pass
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def create_session(self, **kwargs):
+            return Session()
+
+    fake_copilot = types.SimpleNamespace(
+        CopilotClient=Client,
+        PermissionHandler=PermissionHandler,
+        SessionEventType=Events,
+    )
+    monkeypatch.setitem(sys.modules, "copilot", fake_copilot)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    route = resolve_wee_provider("openrouter/meta-llama/llama-3.3-70b")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            execute_wee_copilot_async(
+                prompt="hello",
+                route=route,
+                working_directory="/tmp",
+                timeout=42,
+                enable_tools=False,
+            )
+        )
