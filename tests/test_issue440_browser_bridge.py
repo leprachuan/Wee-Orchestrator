@@ -75,9 +75,10 @@ def test_browser_api_requires_a_real_owned_session(monkeypatch, tmp_path):
     import agent_manager
     from fastapi.testclient import TestClient
 
-    session_file = tmp_path / "sessions.json"
-    monkeypatch.setattr(agent_manager, "SESSION_MAP_FILE", str(session_file))
     client = TestClient(agent_manager.create_api_app())
+    session_file = tmp_path / "sessions.json"
+    agent_manager._session_mgr.session_map_file = session_file
+    agent_manager._api_auth_manager.shared_key = "issue440"
     headers = {"Authorization": "Bearer shared_issue440"}
 
     missing = client.post(
@@ -117,9 +118,10 @@ def test_browser_api_rejects_unauthenticated_registration(monkeypatch, tmp_path)
     import agent_manager
     from fastapi.testclient import TestClient
 
-    session_file = tmp_path / "sessions.json"
-    monkeypatch.setattr(agent_manager, "SESSION_MAP_FILE", str(session_file))
     client = TestClient(agent_manager.create_api_app())
+    session_file = tmp_path / "sessions.json"
+    agent_manager._session_mgr.session_map_file = session_file
+    agent_manager._api_auth_manager.shared_key = "issue440-auth"
     response = client.post(
         "/api/v1/browser/sessions/anything/register",
         json={"client_id": "mac-a"},
