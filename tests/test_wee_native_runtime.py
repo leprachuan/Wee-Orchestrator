@@ -157,6 +157,35 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         self.assertEqual(call_kwargs["model"], "gemma4:e4b")
 
     @patch("openai.OpenAI")
+    def test_empty_tool_stream_retries_without_tools(self, mock_openai_cls):
+        """Ollama models that silently ignore tools get one plain retry (#434)."""
+        mgr = _make_mgr()
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "plain retry response"
+        chunk.choices[0].delta.tool_calls = None
+        mock_client.chat.completions.create.side_effect = [[], [chunk]]
+
+        test_session = "test_wee_empty_tool_stream"
+        mgr.session_map[test_session] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
+
+        result = _run_wee_native_test(mgr, test_session)
+
+        self.assertEqual(result, "plain retry response")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+        first_kwargs = mock_client.chat.completions.create.call_args_list[0].kwargs
+        retry_kwargs = mock_client.chat.completions.create.call_args_list[1].kwargs
+        self.assertIn("tools", first_kwargs)
+        self.assertNotIn("tools", retry_kwargs)
+
+    @patch("openai.OpenAI")
     def test_run_wee_native_openrouter_model(self, mock_openai_cls):
         """OpenRouter model prefix should resolve to the correct API base."""
         mgr = _make_mgr()
