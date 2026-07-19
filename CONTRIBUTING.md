@@ -1,4 +1,4 @@
-# Contributing to n8n-copilot-shim
+# Contributing to Wee-Orchestrator
 
 Thank you for your interest in contributing! This document provides guidelines and instructions for contributing to the project.
 
@@ -54,11 +54,17 @@ This project is committed to providing a welcoming and inclusive environment. Pl
 
 ## Development Workflow
 
-### Create a Branch
+### Choose a Branch
+
+Development may happen on any branch, including `main`. Feature branches are
+useful when they make review, experimentation, or parallel work clearer, but
+they are optional. Maintainers may commit directly to `main` when that is the
+most appropriate workflow; a pull request is not a release gate.
 
 ```bash
+# Optional: create a focused branch
 git checkout -b feature/your-feature-name
-# or
+# Or work on an existing branch, including main
 git checkout -b fix/your-bug-fix
 ```
 
@@ -91,7 +97,7 @@ Branch naming conventions:
 ./run_tests.sh -c
 ```
 
-**All tests must pass before submitting a PR.**
+Run the relevant tests before publishing a change or creating a release.
 
 ### Commit Changes
 
@@ -104,19 +110,36 @@ More detailed explanation of the changes if needed.
 Include references to related issues: Closes #123"
 ```
 
-### Push and Create Pull Request
+### Push and optionally create a Pull Request
+
+Push the branch that contains the completed work. A pull request is optional;
+use one when it improves collaboration or review.
 
 ```bash
-# Push to your fork
+# Push the current branch
 git push origin feature/your-feature-name
 
-# Create PR on GitHub
+# Optional: create a PR on GitHub
 gh pr create --title "Brief description" --body "Detailed description"
 ```
 
+## What is released
+
+Branches are development locations, not distribution channels. Only published
+GitHub release assets are supported deliverables:
+
+- API releases use `api-vMAJOR.MINOR.PATCH` and are documented in
+  [API releases](docs/API_RELEASES.md).
+- macOS releases use `macos-vMAJOR.MINOR.PATCH` and are documented in the
+  macOS repository's [release guide](https://github.com/leprachuan/wee-orchestrator-macos/blob/main/docs/RELEASING.md).
+
+Create a release only from a tested, committed revision. The release tag and
+its artifacts—not whether the source came from a feature branch or `main`—are
+what users install.
+
 ## Pull Request Guidelines
 
-When submitting a pull request, please ensure:
+When choosing to submit a pull request, please ensure:
 
 1. **Tests Pass**: All tests must pass (`./run_tests.sh`)
 2. **New Tests**: Add tests for new functionality
@@ -133,10 +156,8 @@ PRs should include:
 - Testing performed
 - Checklist completion
 
-The project uses automated checks:
-- GitHub Actions CI/CD runs tests
-- Code owners review changes
-- Pull request requires approval to merge
+The project may use automated checks and review; those checks complement, but
+do not replace, the required test and release-artifact validation.
 
 ## Code Style
 
@@ -254,4 +275,4 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ---
 
-**Thank you for contributing to n8n-copilot-shim!** 🚀
+**Thank you for contributing to Wee-Orchestrator!** 🚀

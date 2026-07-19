@@ -586,8 +586,16 @@ class AuthManager:
         shared_key: str,
         pairing_code_length: int = 6,
         pairing_code_ttl: int = 300,
-        session_token_ttl: int = 3600,
-        session_token_absolute_ttl: int = 86400,
+        # Sliding window, refreshed on every authenticated request — as long
+        # as a client (iOS app, WebUI, etc.) is used at least this often it
+        # never has to re-pair. Personal single-tenant deployment, and the
+        # iOS client now gates re-entry locally with Face ID, so a long
+        # sliding window doesn't weaken on-device security.
+        session_token_ttl: int = 2592000,  # 30 days
+        # Hard cap from creation regardless of activity — bounds how long a
+        # token stays valid if a device is lost, without forcing re-pairing
+        # during normal day-to-day use.
+        session_token_absolute_ttl: int = 15552000,  # 180 days
         sessions_file: Optional[str] = None,
     ):
         self.shared_key = shared_key
@@ -1888,6 +1896,16 @@ class SessionManager:
                 "Claude Opus (Latest)",
                 ["claude-opus", "claude-opus-4-6", "claude-opus-4.6", "opus-4.6"],
             ),
+            (
+                "claude-sonnet-5",
+                "Claude Sonnet 5",
+                ["sonnet-5", "claude-sonnet5"],
+            ),
+            (
+                "claude-fable-5",
+                "Claude Fable 5",
+                ["fable-5", "claude-fable5"],
+            ),
         ],
         "US Frontier Models (Comparison)": [
             (
@@ -1971,6 +1989,10 @@ class SessionManager:
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
+            ("gpt-5.6", "GPT-5.6", ["gpt-5.6"]),
+            ("gpt-5.6-luna", "GPT-5.6 Luna", ["luna"]),
+            ("gpt-5.6-terral", "GPT-5.6 Terral", ["terral"]),
+            ("gpt-5.6-sol", "GPT-5.6 Sol", ["sol"]),
             ("gpt-5.5", "GPT-5.5", ["gpt-5.5"]),
             ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
             ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),
@@ -2638,6 +2660,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             # Generate the new session ID up front so the handoff can reference it
             new_session_id = str(uuid4())
 
+            handoff_prepared = False
+
             # Prepare session handoff if the runtime is actually changing and
             # there is prior history to hand off
             if prev_runtime != new_runtime and prev_session_id:
@@ -2661,6 +2685,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         prev_runtime,
                         new_runtime,
                     )
+                    handoff_prepared = True
                     print(
                         f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
                         f"(prev_session={prev_session_id}, new_session={new_session_id})",
@@ -2683,8 +2708,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
-            # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
-            # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
+            # Runtime CLIs use incompatible backend session identifiers (e.g.
+            # OpenCode uses "ses_*" while Claude/Codex use UUIDs), so create a
+            # new backend ID. This is not a conversation reset: when prepared
+            # above, SessionHandoff injects the prior transcript and summary on
+            # the first message in the new runtime.
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
             # When switching runtime, also reset the model to a default for that runtime
@@ -2711,7 +2739,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
-            return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
+            if prev_runtime != new_runtime and handoff_prepared:
+                return (
+                    f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. "
+                    "Conversation context will be handed off to the new runtime."
+                )
+            if prev_runtime != new_runtime:
+                return (
+                    f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. "
+                    "A new runtime session was created; no earlier context was available to hand off."
+                )
+            return f"✓ Runtime remains **{new_runtime}**. Model set to `{default_model}`."
 
     def _slash_agent(self, argument, session_data, n8n_session_id):
         """Handle /agent slash command."""
@@ -4606,6 +4644,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         truth), then the deprecated CODEX_MODELS_JSON env var override, then
         the static CODEX_MODELS fallback.
         """
+        # A ChatGPT-authenticated Codex CLI currently selects its supported
+        # model server-side. Passing arbitrary catalog IDs (including model
+        # variants valid in other runtimes) causes a structured 400 response.
+        # Offer only the account default in that configuration.
+        if self._codex_uses_chatgpt_account():
+            return {"Codex CLI": ["default"]}
+
         manifest_models = self._manifest_models_to_dict("codex")
         if manifest_models:
             return manifest_models
@@ -4626,6 +4671,31 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
+
+    def _codex_uses_chatgpt_account(self) -> bool:
+        """Return whether the local Codex CLI is logged in with ChatGPT OAuth.
+
+        The result is cached for the API process: this method is used by both
+        catalog discovery and execution, and `codex login status` is a local,
+        credential-free status command.
+        """
+        cached = getattr(self, "_codex_chatgpt_account", None)
+        if cached is not None:
+            return cached
+
+        try:
+            status = subprocess.run(
+                ["codex", "login", "status"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            output = f"{status.stdout}\n{status.stderr}".lower()
+            self._codex_chatgpt_account = "logged in using chatgpt" in output
+        except (OSError, subprocess.SubprocessError):
+            self._codex_chatgpt_account = False
+        return self._codex_chatgpt_account
 
     def fetch_devin_models(self) -> Dict:
         """Return available Devin models by querying the CLI directly.
@@ -5993,7 +6063,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def load_agent_skills(self, agent_path: str) -> str:
+    def load_agent_skills(self, agent_path: str, compact: bool = False) -> str:
         """Load all SKILL.md files from agent's .github/skills/ directory.
 
         Looks for skills in this order:
@@ -6001,6 +6071,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         2. {agent_path}/.claude/skills/
 
         Returns formatted skills context or empty string if no skills found.
+
+        Args:
+            compact: Issue #400 - when True, skip the "how to add a skill"
+                tutorial (repeated verbatim on every single request regardless
+                of whether the user asked about skills) and just list what's
+                loaded. _render_skills_section already covers the how-to in
+                one line for compact callers.
         """
         skills_context = ""
         agent_path_obj = Path(agent_path)
@@ -6061,7 +6138,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             skills_context = "\n[Agent Skills - Available]\n"
             for skill in available_skills:
                 skills_context += f"- {skill['name']}: {skill['description']}\n"
-            skills_context += """
+            if not compact:
+                skills_context += """
 To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.
 
 To add new skills to this agent:
@@ -6084,6 +6162,8 @@ To get skills from Anthropic's official repository:
 - Copy them to .github/skills/ or .claude/skills/
 - Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills
 """
+        elif compact:
+            skills_context = ""
         else:
             skills_context = """
 [Agent Skills - Setup Instructions]
@@ -6424,6 +6504,102 @@ Example skill structure:
 
         return output
 
+    def _render_skills_section(
+        self, agent_path: str, skills_context: str, compact: bool = False
+    ) -> str:
+        """Render the [Skills Discovery & Management] system-prompt section.
+
+        Issue #400: the full version is a step-by-step tutorial plus a
+        skill_repositories.json walkthrough with example JSON and a list of
+        community repos to add — useful reference material, but disproportionate
+        to a small local model's context budget. Compact mode keeps every
+        capability (discover, load, configure repos) referenced in a few lines
+        instead of ~75.
+        """
+        if compact:
+            loaded = skills_context.replace("\n[Agent Skills - Available]\n", "").strip() or "none"
+            return f"""[Skills] Loaded: {loaded}
+Repos: {self._format_repository_info()}
+Use /discover-skills [query] to find more, /load-skill <name> [repo] to install one (lands in {agent_path}/.github/skills/, available next session). Configure repos via skill_repositories.json in the project root (repositories: [{{name, url, description, enabled}}], default_repository)."""
+
+        return f"""[Skills Discovery & Management]
+You can help users discover and load additional skills for this agent from configured skill repositories.
+
+Configured Skill Repositories:
+{self._format_repository_info()}
+
+Current Skills Loaded:
+{skills_context}
+
+How to Discover Skills:
+1. When a user asks about available skills or requests a specific skill:
+   - Search available repositories for matching skills
+   - List relevant skills and their purposes
+   - Explain what each skill does and when it's useful
+   - Indicate which repository each skill comes from
+
+2. When a user wants to load a specific skill:
+   - Verify the skill exists in one of the available repositories
+   - Explain what the skill provides and how to use it
+   - Guide them on how to load it (system will auto-install when requested)
+   - Skills are installed to: {agent_path}/.github/skills/
+   - Skills become available immediately in the next session
+
+3. Skill Loading Process:
+   - User requests: "load the helm-deploy skill" or similar
+   - You verify it exists in available repositories and describe its capabilities
+   - System automatically clones and installs the skill
+   - Skill documentation becomes available immediately
+   - User can use the skill's features in subsequent interactions
+
+[Configuring Custom Skill Repositories]
+To add custom skill repositories or manage repository settings:
+
+1. Create or edit `skill_repositories.json` in the project root directory
+
+2. Repository configuration structure:
+{{
+  "repositories": [
+    {{
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    }},
+    {{
+      "name": "Community Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": false
+    }},
+    {{
+      "name": "Your Custom Skills",
+      "url": "https://github.com/your-org/custom-skills.git",
+      "description": "Organization-specific skills",
+      "enabled": false
+    }}
+  ],
+  "default_repository": "Anthropic Official"
+}}
+
+3. Field explanations:
+   - name: Human-readable repository name
+   - url: Git repository URL (must end with .git)
+   - description: Brief description of the repository
+   - enabled: Set to true to enable, false to disable (without deleting config)
+
+4. Popular community repositories to add:
+   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
+   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
+   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
+   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
+
+5. After updating skill_repositories.json:
+   - The new repositories become available immediately on next session start
+   - Agents will see all enabled repositories in their context
+   - Users can discover and load skills from all enabled repositories
+   - Existing skills continue to work without changes"""
+
     def build_agent_context_prompt(
         self,
         agent: str,
@@ -6435,11 +6611,22 @@ Example skill structure:
         model: str = "gpt-5-mini",
         channel: str = "webui",
         bg_identity: Optional[str] = None,
+        compact: bool = True,
     ) -> str:
         """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
 
         Args:
             channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
+            compact: Issue #400 - when True (the default, for every runtime), drop
+                tutorial-style exposition (skill repository config walkthroughs,
+                lettered image-retrieval options, irrelevant workspace file listings)
+                while keeping every capability referenced, just stated tersely instead
+                of as a walkthrough. Originally added only for the wee runtime (small
+                local models were getting buried by the verbose form), then made the
+                default everywhere after confirming the trimmed content was tutorial
+                fluff no model benefits from having repeated on every single turn.
+                Pass compact=False to get the original full walkthrough form back
+                (e.g. for comparison/rollback).
         """
         if agent not in self.AGENTS:
             agent = "devops"
@@ -6450,22 +6637,32 @@ Example skill structure:
         agent_path = agent_info.get("path", "")
 
         # Load agent skills and workspace context
-        skills_context = self.load_agent_skills(agent_path)
+        skills_context = self.load_agent_skills(agent_path, compact=compact)
 
         files_context = ""
-        try:
-            agent_path_obj = Path(agent_path)
-            if agent_path_obj.exists():
-                files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
-                if files:
-                    files_list = "\n".join([f"  - {f.name}" for f in files])
-                    files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
-        except Exception:
-            pass
+        if not compact:
+            # Issue #400: this raw directory listing is unfiltered noise (random
+            # screenshots, status files, etc.) that eats tokens without helping
+            # small local models; drop it in compact mode.
+            try:
+                agent_path_obj = Path(agent_path)
+                if agent_path_obj.exists():
+                    files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
+                    if files:
+                        files_list = "\n".join([f"  - {f.name}" for f in files])
+                        files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
+            except Exception:
+                pass
 
         # Add render type instruction to the context
         render_instruction = ""
-        if render_type == "markdown":
+        if render_type == "markdown" and compact:
+            # Issue #400: same rule, without the lettered walkthrough — small
+            # models don't need three spelled-out options to embed an image.
+            render_instruction = f"""
+[Output Format: markdown]
+[Image Retrieval: If asked for an image/photo/logo, fetch a real image URL first (e.g. via WebFetch on Wikipedia/the official site) — never guess a URL from memory. Embed with ![caption](url). If you can't confirm a real URL, skip the image entirely rather than link a fake one. No ASCII art or SVG placeholders.]"""
+        elif render_type == "markdown":
             render_instruction = f"""
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
@@ -6569,12 +6766,26 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             agent_timeout_min = agent_timeout / 60
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
+        # Multi-API awareness (F-remote-api-injection): when this process is a
+        # "local" instance spun up alongside a separate remote Wee Orchestrator
+        # (e.g. the macOS app's local dev API), tell agents the remote instance
+        # exists so they don't assume this is the only Wee Orchestrator API and
+        # don't conflate local-only state (sessions, tasks, schedules) with it.
+        _remote_api_url = os.environ.get("WEE_REMOTE_API_URL", "").strip()
+        _local_app_env = os.environ.get("APP_ENV", "PROD").upper()
+        multi_api_instruction = ""
+        if _remote_api_url:
+            _remote_api_label = os.environ.get("WEE_REMOTE_API_LABEL", "remote").strip() or "remote"
+            multi_api_instruction = f"""
+- Environment: {_local_app_env} (this is a LOCAL Wee Orchestrator instance)
+[Multi-API Awareness] A separate {_remote_api_label} Wee Orchestrator API is also running at {_remote_api_url}. It has its own sessions, background tasks, schedules, and memory — nothing here is shared with it automatically. Do not assume you are the only Wee Orchestrator instance. If the user asks about "the other Wee", production, or remote state, note that this local instance cannot see it directly and the user should check the {_remote_api_label} instance instead."""
+
         # Add runtime, model, and slash commands information
         runtime_instruction = f"""
 [System Configuration]
 - Runtime: {runtime}
 - Model: {model}
-- Agent: {agent_name}
+- Agent: {agent_name}{multi_api_instruction}
 
 [Available Slash Commands]
 These commands allow you to control the agent's behavior and are processed by the system (not the model):
@@ -6612,83 +6823,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /verbose <on|off> - Toggle verbose mode (show tool calls in responses)
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
-[Skills Discovery & Management]
-You can help users discover and load additional skills for this agent from configured skill repositories.
-
-Configured Skill Repositories:
-{self._format_repository_info()}
-
-Current Skills Loaded:
-{skills_context}
-
-How to Discover Skills:
-1. When a user asks about available skills or requests a specific skill:
-   - Search available repositories for matching skills
-   - List relevant skills and their purposes
-   - Explain what each skill does and when it's useful
-   - Indicate which repository each skill comes from
-
-2. When a user wants to load a specific skill:
-   - Verify the skill exists in one of the available repositories
-   - Explain what the skill provides and how to use it
-   - Guide them on how to load it (system will auto-install when requested)
-   - Skills are installed to: {agent_path}/.github/skills/
-   - Skills become available immediately in the next session
-
-3. Skill Loading Process:
-   - User requests: "load the helm-deploy skill" or similar
-   - You verify it exists in available repositories and describe its capabilities
-   - System automatically clones and installs the skill
-   - Skill documentation becomes available immediately
-   - User can use the skill's features in subsequent interactions
-
-[Configuring Custom Skill Repositories]
-To add custom skill repositories or manage repository settings:
-
-1. Create or edit `skill_repositories.json` in the project root directory
-
-2. Repository configuration structure:
-{{
-  "repositories": [
-    {{
-      "name": "Anthropic Official",
-      "url": "https://github.com/anthropics/skills.git",
-      "description": "Official Anthropic skills repository with production-ready skills",
-      "enabled": true
-    }},
-    {{
-      "name": "Community Skills",
-      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
-      "description": "Community-contributed agent skills (300+ skills)",
-      "enabled": false
-    }},
-    {{
-      "name": "Your Custom Skills",
-      "url": "https://github.com/your-org/custom-skills.git",
-      "description": "Organization-specific skills",
-      "enabled": false
-    }}
-  ],
-  "default_repository": "Anthropic Official"
-}}
-
-3. Field explanations:
-   - name: Human-readable repository name
-   - url: Git repository URL (must end with .git)
-   - description: Brief description of the repository
-   - enabled: Set to true to enable, false to disable (without deleting config)
-
-4. Popular community repositories to add:
-   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
-   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
-   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
-   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
-
-5. After updating skill_repositories.json:
-   - The new repositories become available immediately on next session start
-   - Agents will see all enabled repositories in their context
-   - Users can discover and load skills from all enabled repositories
-   - Existing skills continue to work without changes"""
+{self._render_skills_section(agent_path, skills_context, compact=compact)}"""
 
         # Background tasks instruction — tell the agent how to create tasks
         # that appear in the WebUI Tasks panel via the orchestrator API.
@@ -6836,7 +6971,9 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             )
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}
+
+{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
 
 User Request:
 {prompt}"""
@@ -7766,6 +7903,18 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        if model and self._codex_uses_chatgpt_account():
+            # ChatGPT OAuth does not accept client-selected model IDs. Let the
+            # Codex service select the account's supported default instead of
+            # issuing `-m <unsupported-model>` and returning an empty turn.
+            requested_model = model
+            model = ""
+            self.update_session_field(n8n_session_id, "model", "default")
+            print(
+                f"[Codex] Ignoring requested model '{requested_model}' for ChatGPT-authenticated Codex; using account default.",
+                file=sys.stderr,
+            )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
@@ -9381,6 +9530,9 @@ User Request:
         api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
 
         # Provider presets
+        # The desktop app uses WEE_OLLAMA_HOST for its same-Mac runner.
+        # Accept both Wee and Ollama conventions and normalize the OpenAI
+        # compatibility suffix without producing a duplicate /v1.
         _ollama_base = (
             os.environ.get("WEE_OLLAMA_BASE_URL")
             or os.environ.get("WEE_OLLAMA_HOST")
@@ -9439,6 +9591,7 @@ User Request:
             runtime="wee",
             model=resolved_model,
             channel=channel,
+            # compact defaults to True — this was the original motivating case (#400)
         )
         # Issue #111: Augment system prompt with explicit tool capability section
         # so models that ignore JSON schemas still know tools are available.
@@ -9552,6 +9705,32 @@ User Request:
             {
                 "type": "function",
                 "function": {
+                    "name": "search",
+                    "description": "Search the web and return current, cited results.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "q": {
+                                "type": "string",
+                                "description": "The web search query",
+                            },
+                            "count": {
+                                "type": "integer",
+                                "description": "Results to return (1-20; default 5)",
+                            },
+                            "format": {
+                                "type": "string",
+                                "enum": ["text", "json"],
+                                "description": "Result format (default text)",
+                            },
+                        },
+                        "required": ["q"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "python",
                     "description": "Execute Python 3 code and return the output.",
                     "parameters": {
@@ -9606,13 +9785,16 @@ User Request:
 
         try:
             for round_num in range(MAX_TOOL_ROUNDS + 1):
-                # Build create kwargs — include tools unless on final safety round
+                # Build create kwargs — a number of smaller local models keep
+                # requesting `search` forever after receiving results. After a
+                # successful search, force the next pass to synthesize an
+                # answer instead of offering another search call.
                 create_kwargs = {
                     "model": resolved_model,
                     "messages": messages,
                     "stream": True,
                 }
-                if round_num < MAX_TOOL_ROUNDS:
+                if round_num < MAX_TOOL_ROUNDS and "search" not in _last_tool_names:
                     create_kwargs["tools"] = _WEE_TOOLS
 
                 try:
@@ -9755,6 +9937,7 @@ User Request:
                 messages.append(assistant_msg)
 
                 # Execute each tool call and emit SSE events (Issue #109)
+                completed_search_results = []
                 for tc_entry in assistant_tool_calls:
                     tc_id = tc_entry["id"]
                     func_name = tc_entry["function"]["name"]
@@ -9807,6 +9990,19 @@ User Request:
                             "content": _raw,
                         }
                     )
+                    if func_name == "search" and tool_result:
+                        completed_search_results.append(tool_result)
+
+                # Some small local models repeatedly request search despite
+                # already having the results. Search output is already a
+                # user-readable, sourced response, so finish immediately.
+                # This guarantees a completed turn rather than leaving the
+                # user on an endless "Running search…" state.
+                if completed_search_results:
+                    collected_output.append(
+                        "Web search completed.\n\n" + completed_search_results[-1]
+                    )
+                    break
 
                 # Issue #343: record which tools were called in this round
                 _last_tool_names = {tc["function"]["name"] for tc in assistant_tool_calls}
@@ -10004,7 +10200,9 @@ User Request:
             "  Parameters: q (required, search query), count (optional, 1-20, default 5), format (optional, 'json' or 'text')\n"
             "  Env: WEE_SEARXNG_URL (default: http://localhost:8888)\n"
             "\n"
-            "CRITICAL RULES:\n"
+            # Issue #400: named distinctly from the separate anti-hallucination
+            # "[CRITICAL RULES]" block so the two aren't mistaken for one list.
+            "[Tool Usage Rules]\n"
             "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
             "2. For delegating work to other agents: use call_agent\n"
             "3. For running shell commands: use bash tool\n"
@@ -10437,7 +10635,7 @@ User Request:
     def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
         """Execute a tool call from the wee runtime agentic loop.
 
-        Issue #107: Supports bash and python tools.  Uses the same
+        Issue #107: Supports bash, python, and web search tools. Uses the same
         _execute_bash_command infrastructure as other runtimes.
         """
         try:
@@ -10469,11 +10667,18 @@ User Request:
                     else:
                         return f"✗ Failed with exit code: {result.returncode}"
                 return output.strip()
+            elif func_name == "search":
+                # Keep search behavior shared with the standalone Wee runtime:
+                # it prefers a configured SearXNG instance and has a graceful
+                # public-search fallback when a local instance is unavailable.
+                from wee_runtime import _execute_search
+
+                return _execute_search(func_args)
             elif func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
                 return self._wee_call_agent(func_args)
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: bash, python, call_agent"
+                return f"Error: Unknown tool '{func_name}'. Available: bash, python, search, call_agent"
         except subprocess.TimeoutExpired:
             return f"Error: Tool '{func_name}' timed out"
         except Exception as e:
@@ -11515,6 +11720,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # ---- configuration from environment ----
     APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
     IS_PRODUCTION = APP_ENV != "DEV"
+    REMOTE_API_URL = os.environ.get("WEE_REMOTE_API_URL", "").strip()
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
     if not SHARED_KEY:
         print(
@@ -11526,10 +11732,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300"))
     )
     SESSION_TOKEN_TTL = int(
-        os.environ.get("WEE_SESSION_TOKEN_TTL", os.environ.get("SESSION_TOKEN_TTL", "3600"))
+        os.environ.get(
+            "WEE_SESSION_TOKEN_TTL",
+            os.environ.get("SESSION_TOKEN_TTL", "2592000"),
+        )
     )
     SESSION_TOKEN_ABSOLUTE_TTL = int(
-        os.environ.get("WEE_SESSION_TOKEN_ABSOLUTE_TTL", os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400"))
+        os.environ.get(
+            "WEE_SESSION_TOKEN_ABSOLUTE_TTL",
+            os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000"),
+        )
     )
     # CLI --config takes priority so `--api --config <path>` can select an
     # isolated agents.json the same way non-API mode does (see
@@ -12072,6 +12284,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
             "active_sessions": len(session_mgr.load_session_map()),
+            "remote_api_url": REMOTE_API_URL or None,
         }
 
     @app.get("/api/v1/service-status")
@@ -15376,6 +15589,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         due: Optional[str] = None
         priority: Optional[str] = None
         urgency: Optional[str] = None
+        labels: Optional[list[str]] = None
 
     class KanbanCommentRequest(BaseModel):
         body: str
@@ -15470,6 +15684,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 due=body.due,
                 priority=body.priority,
                 urgency=body.urgency,
+                labels=body.labels,
             )
         except Exception as exc:
             _kanban_http_error(exc)
@@ -17648,6 +17863,119 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
+
+    @app.get("/api/v1/settings/model-manifest")
+    async def get_model_manifest_settings(request: Request, runtime: str = "claude"):
+        """Return the editable model list for a runtime.
+
+        `wee` is excluded — its catalog is assembled dynamically from local
+        Ollama and OpenRouter discovery, not the static manifest.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        runtime_key = _model_manifest_runtime_key(runtime)
+        if runtime_key == "wee":
+            raise HTTPException(
+                status_code=400,
+                detail="The wee runtime catalog is discovered dynamically and is not editable here.",
+            )
+        try:
+            manifest = load_model_manifest()
+            runtimes = manifest.get("runtimes", {})
+            available_runtimes = sorted(k for k in runtimes.keys() if k != "wee")
+            models = runtimes.get(runtime_key)
+            if models is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"{runtime_key} is not a configured runtime in model-manifest.json",
+                )
+            return {
+                "runtime": runtime_key,
+                "models": models,
+                "available_runtimes": available_runtimes,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read model-manifest.json: {e}"
+            )
+
+    @app.put("/api/v1/settings/model-manifest")
+    async def put_model_manifest_settings(request: Request):
+        """Save an updated model list for one runtime.
+
+        Preserves every other runtime's list and the rest of the manifest
+        document. `wee` is rejected for the same reason it's excluded from
+        the GET above.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        runtime = body.get("runtime", "")
+        models = body.get("models", [])
+        runtime_key = _model_manifest_runtime_key(runtime)
+        if runtime_key == "wee":
+            raise HTTPException(
+                status_code=400,
+                detail="The wee runtime catalog is discovered dynamically and is not editable here.",
+            )
+        if not isinstance(models, list) or not all(isinstance(m, str) for m in models):
+            raise HTTPException(status_code=400, detail="models must be a list of strings")
+
+        normalized: List[str] = []
+        for candidate in models:
+            model_id = candidate.strip()
+            if model_id and model_id not in normalized:
+                normalized.append(model_id)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="Add at least one model before saving.")
+
+        try:
+            if MODEL_MANIFEST_PATH.exists():
+                document = json.loads(MODEL_MANIFEST_PATH.read_text())
+            else:
+                document = {"runtimes": {}}
+            runtimes = document.get("runtimes", {})
+            if runtime_key not in runtimes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{runtime_key} is not a configured runtime in model-manifest.json",
+                )
+
+            # Backup before overwrite, mirroring the .env editor's safety net.
+            if MODEL_MANIFEST_PATH.exists():
+                backup_path = Path(str(MODEL_MANIFEST_PATH) + ".bak")
+                shutil.copy2(MODEL_MANIFEST_PATH, backup_path)
+
+            from datetime import datetime, timezone
+
+            runtimes[runtime_key] = normalized
+            document["runtimes"] = runtimes
+            document["last_updated"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
+            MODEL_MANIFEST_PATH.write_text(
+                json.dumps(document, indent=2, sort_keys=True) + "\n"
+            )
+            # Drop the mtime cache so the next /api/v1/models read picks this up
+            # immediately instead of waiting on the next file-change poll.
+            load_model_manifest._cache_key = None
+            return {"saved": True, "runtime": runtime_key, "models": normalized}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save model-manifest.json: {e}"
+            )
 
     @app.post("/api/v1/settings/restart-services")
     async def restart_services(request: Request):

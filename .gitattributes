@@ -1,0 +1,2 @@
+# Host-specific agent definitions must never be included in published archives.
+agents.json export-ignore

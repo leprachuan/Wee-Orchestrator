@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import difflib
+import html
 import json
 import os
 import re
@@ -473,6 +474,87 @@ SEARCH_TIMEOUT = 10  # seconds for SearXNG queries
 SEARCH_MAX_CHARS = 2000  # max result chars to avoid context bloat
 
 
+def _format_search_results(query: str, results: list, output_format: str) -> str:
+    """Format normalized search result dictionaries for an LLM tool response."""
+    if not results:
+        return "No results found."
+    if output_format == "json":
+        return json.dumps(results, ensure_ascii=False)[:SEARCH_MAX_CHARS]
+
+    lines = [f"Search results for: {query}"]
+    for i, result in enumerate(results, 1):
+        lines.append(
+            f"\n{i}. {result.get('title', '(no title)')}\n"
+            f"   {result.get('url', '')}\n"
+            f"   {result.get('snippet', '')}"
+        )
+    return "\n".join(lines)[:SEARCH_MAX_CHARS]
+
+
+def _decode_search_value(value: str) -> str:
+    """Decode the JSON-style strings embedded in Brave's server-rendered data."""
+    try:
+        return json.loads(f'"{value}"')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return value
+
+
+def _execute_brave_search(
+    query: str, count: int, output_format: str, searxng_url: str
+) -> str:
+    """Fallback for a Mac without a configured/reachable SearXNG service."""
+    url = "https://search.brave.com/search?" + urllib.parse.urlencode({"q": query})
+    try:
+        # Search providers frequently reject Python's HTTP TLS fingerprint.
+        # curl is available on supported macOS/Linux hosts and supplies a
+        # browser-compatible transport without executing user-provided shell.
+        response = subprocess.run(
+            [
+                "curl", "-fsSL", "--max-time", str(SEARCH_TIMEOUT),
+                "-A", "Mozilla/5.0",
+                "-H", "Accept-Language: en-US,en;q=0.9",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=SEARCH_TIMEOUT + 2,
+        )
+        if response.returncode != 0:
+            raise RuntimeError(response.stderr.strip() or f"curl exited {response.returncode}")
+        page = response.stdout
+    except Exception as error:
+        return (
+            f"Search unavailable ({searxng_url}): SearXNG and fallback search "
+            f"could not be reached ({error})"
+        )
+
+    # Brave includes the result data in its server-rendered hydration payload.
+    # Parsing that payload avoids a JavaScript runtime while preserving direct
+    # source URLs and result descriptions.
+    raw_results = re.findall(
+        r'title:"((?:\\.|[^"\\])*)",url:"((?:\\.|[^"\\])*)".*?description:"((?:\\.|[^"\\])*)"',
+        page,
+        re.S,
+    )
+    results = []
+    seen_urls = set()
+    for title_raw, url_raw, description_raw in raw_results:
+        destination = _decode_search_value(url_raw)
+        if not destination.startswith(("http://", "https://")) or destination in seen_urls:
+            continue
+        seen_urls.add(destination)
+        title = _decode_search_value(title_raw)
+        description = _decode_search_value(description_raw)
+        results.append({
+            "title": html.unescape(re.sub(r"<[^>]+>", "", title)).strip(),
+            "url": html.unescape(destination).strip(),
+            "snippet": html.unescape(re.sub(r"<[^>]+>", "", description)).strip()[:300],
+        })
+        if len(results) >= count:
+            break
+    return _format_search_results(query, results, output_format)
+
+
 def _execute_search(func_args: dict) -> str:
     """Handle search tool calls via SearXNG (Issue #255).
 
@@ -513,37 +595,20 @@ def _execute_search(func_args: dict) -> str:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except urllib.error.URLError as e:
-        return f"Search unavailable ({searxng_url}): {e.reason}"
+    except urllib.error.URLError:
+        return _execute_brave_search(query, count, output_format, searxng_url)
     except Exception as e:
         return f"Search error: {e}"
 
-    results = data.get("results", [])[:count]
-    if not results:
-        return "No results found."
-
-    if output_format == "json":
-        slim = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": (r.get("content", "") or "")[:300],
-            }
-            for r in results
-        ]
-        raw = json.dumps(slim, ensure_ascii=False)
-        return raw[:SEARCH_MAX_CHARS]
-
-    # Plain text summary
-    lines = [f"Search results for: {query}"]
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "(no title)")
-        url_r = r.get("url", "")
-        snippet = (r.get("content", "") or "").strip()[:200]
-        lines.append(f"\n{i}. {title}\n   {url_r}\n   {snippet}")
-
-    summary = "\n".join(lines)
-    return summary[:SEARCH_MAX_CHARS]
+    results = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": (item.get("content", "") or "")[:300],
+        }
+        for item in data.get("results", [])[:count]
+    ]
+    return _format_search_results(query, results, output_format)
 
 
 # Tool definitions (Issue #107)
