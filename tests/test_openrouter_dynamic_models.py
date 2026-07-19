@@ -4,7 +4,7 @@ Tests:
 1. fetch_openrouter_models() deduplicates variant suffixes (:free, :thinking, etc.)
 2. Models are collapsed into a single "OpenRouter" group
 3. Falls back to static WEE_MODELS on network error
-4. Falls back to static WEE_MODELS when no API key
+4. Uses OpenRouter's public model catalog when no API key is configured
 5. Static aliases are preserved for known base model IDs
 6. Cache TTL works (second call returns cached result without HTTP)
 7. fetch_wee_models() integrates with fetch_openrouter_models()
@@ -101,27 +101,18 @@ class TestFetchOpenrouterModels(unittest.TestCase):
         names = [m[1].lower() for m in result["OpenRouter"]]
         self.assertEqual(names, sorted(names))
 
+    @patch("urllib.request.urlopen")
     @patch("keyring.get_password", side_effect=Exception("no keyring"))
     @patch.dict("os.environ", {}, clear=True)
-    def test_fallback_no_api_key(self, mock_keyring):
-        """Without an API key, returns normalized static WEE_MODELS fallback."""
+    def test_public_discovery_without_api_key(self, mock_keyring, mock_urlopen):
+        """The public model catalog does not require an OpenRouter API key."""
+        mock_urlopen.side_effect = self._urlopen_mock
         result = self.sm.fetch_openrouter_models()
         self.assertIn("OpenRouter", result)
-        models = result["OpenRouter"]
-        self.assertTrue(len(models) > 0)
-        # Issue #172: static fallback must not expose variant suffix IDs
-        all_ids = [m[0] for m in models]
-        for mid in all_ids:
-            self.assertFalse(
-                mid.endswith(":free")
-                or mid.endswith(":thinking")
-                or mid.endswith(":extended")
-                or mid.endswith(":beta")
-                or mid.endswith(":nitro")
-                or mid.endswith(":floor")
-                or mid.endswith(":preview"),
-                f"Static fallback exposes variant ID: {mid}",
-            )
+        all_ids = [m[0] for m in result["OpenRouter"]]
+        self.assertIn("openrouter/openai/gpt-4o", all_ids)
+        request = mock_urlopen.call_args.args[0]
+        self.assertNotIn("Authorization", request.headers)
 
     @patch("keyring.get_password", return_value="test-key-123")
     @patch("urllib.request.urlopen", side_effect=Exception("network error"))
