@@ -164,7 +164,7 @@ def test_unusably_short_ollama_sdk_response_triggers_fallback(monkeypatch):
         session_id = "sdk-session-short"
 
         async def send_and_wait(self, prompt, timeout):
-            return types.SimpleNamespace(data=types.SimpleNamespace(content="I"))
+            return types.SimpleNamespace(data=types.SimpleNamespace(content="To"))
 
         def disconnect(self):
             return None
