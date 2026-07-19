@@ -591,6 +591,7 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `WEE_COPILOT_SDK_ENABLED` — Set to `0` to disable the SDK path temporarily
   - `WEE_OPENAI_FALLBACK_ENABLED` — Set to `0` to fail instead of using the legacy direct-provider loop
   - `WEE_COPILOT_WIRE_API` — `completions` (default) or `responses`
+  - `WEE_PLAIN_UI` — Set to `1` to disable the Rich interactive layout while preserving plain terminal output
   - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
   - `WEE_SEARXNG_URL` — SearXNG base URL for the `search` tool (default: `http://192.168.1.100:8888`)
 - **Native Tools (available in agentic `--tools` mode):**
@@ -606,6 +607,7 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - Provider presets auto-resolve API base URLs and API keys
   - Graceful error handling with informative messages
   - Background task subprocess execution via `wee_runtime.py`
+  - Rich agentic terminal UI with a colored prompt area, activity spinner, Markdown responses, tool activity, model/provider status, and automatic plain-output fallback for pipes and non-TTY consumers
 - **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
 - **Usage:** `/runtime set wee`
 
