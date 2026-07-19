@@ -4170,7 +4170,8 @@ You can mention an agent in your prompt and it will auto-delegate:
           2. Live API call to https://openrouter.ai/api/v1/models
           3. Static WEE_MODELS fallback (Wee Native (OpenRouter)/(OpenRouter Free))
 
-        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        Authentication is optional for the public model catalog. When present,
+        the keyring/OpenRouter environment key is attached to the request.
         """
         # Build static fallback + alias lookup from the curated WEE_MODELS lists,
         # normalizing variant-suffixed IDs (Issue #172).
@@ -4208,19 +4209,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         if not api_key:
             api_key = os.getenv("OPENROUTER_API_KEY")
 
-        if not api_key:
-            print(
-                "[wee] OpenRouter: no API key available, using static fallback",
-                file=sys.stderr,
-            )
-            return static_fallback
-
         try:
             import urllib.request as _urlreq
 
+            headers = {"Accept": "application/json"}
+            if api_key:
+                headers["Authorization"] = "Bearer " + api_key
             req = _urlreq.Request(
                 "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
+                headers=headers,
             )
             resp = _urlreq.urlopen(req, timeout=15)
             data = json.loads(resp.read())
