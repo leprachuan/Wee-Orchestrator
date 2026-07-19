@@ -828,6 +828,7 @@ Wee CLI Interactive Mode — Commands:
   /history            Show conversation history
   /model MODEL         Switch model
   /model set MODEL     Switch model (explicit form)
+  /model current       Show the current provider-qualified model
   /model list          List all available models
   /model list PROVIDER List models from specific provider (ollama, openrouter, lmstudio)
   /tokens             Show token usage
@@ -957,8 +958,8 @@ def run_interactive(
                 if model_arg.lower().startswith("set "):
                     model_arg = model_arg[4:].strip()
 
-                if not model_arg:
-                    _print_info(f"Current model: {model}")
+                if not model_arg or model_arg.lower() in {"current", "show", "get"}:
+                    _print_info(f"Current model: {model_for_persistence}")
                 elif model_arg.lower() == "list":
                     list_available_models()
                 elif model_arg.lower().startswith("list "):
@@ -966,7 +967,7 @@ def run_interactive(
                     provider = model_arg[5:].strip()
                     list_available_models(provider)
                 else:
-                    old_model = model
+                    old_model = model_for_persistence
                     model_for_persistence = (
                         model_arg  # Keep provider-qualified ID for persistence
                     )
@@ -976,7 +977,9 @@ def run_interactive(
                     client = _make_client(api_base, api_key, timeout)
                     model = resolved_model  # Use resolved model for API calls
                     token_tracker.context_window = get_context_window(model)
-                    _print_info(f"Model switched: {old_model} → {model}")
+                    _print_info(
+                        f"Model switched: {old_model} → {model_for_persistence}"
+                    )
                 continue
 
             elif cmd == "/tokens":

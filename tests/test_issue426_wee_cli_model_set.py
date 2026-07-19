@@ -63,3 +63,20 @@ def test_normal_model_is_unchanged():
     assert _normalize_model_identifier(
         "openrouter/openai/gpt-5.6-luna"
     ) == "openrouter/openai/gpt-5.6-luna"
+
+
+def test_model_current_does_not_switch_models():
+    with patch("wee_cli.resolve_model_and_endpoint") as resolve:
+        with patch("sys.stderr", new_callable=StringIO) as stderr:
+            model = _run_with_inputs(["/model current", "exit"])
+
+    resolve.assert_not_called()
+    assert model == "qwen3.5:4b"
+    assert "Current model: qwen3.5:4b" in stderr.getvalue()
+
+
+def test_model_status_aliases_are_read_only():
+    for command in ("/model", "/model show", "/model get"):
+        with patch("wee_cli.resolve_model_and_endpoint") as resolve:
+            _run_with_inputs([command, "exit"])
+        resolve.assert_not_called()
