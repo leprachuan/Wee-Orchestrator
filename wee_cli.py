@@ -35,14 +35,11 @@ __version__ = "0.2.0"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from wee_runtime import _WEE_TOOLS  # noqa: E402
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
     COMPACT_TRIGGER_FRACTION,
-    MAX_TOOL_ROUNDS,
     compact_messages,
     count_message_tokens,
-    execute_tool,
     get_context_window,
     list_available_models,
     resolve_model_and_endpoint,
@@ -797,221 +794,6 @@ class TokenTracker:
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Core chat function (streaming)
-# ---------------------------------------------------------------------------
-def chat_stream(
-    client,
-    model: str,
-    messages: list,
-    tools_enabled: bool = False,
-    temperature: float = None,
-    token_tracker: TokenTracker = None,
-    permission: str = "auto",
-    stream_output: bool = True,
-    tool_results_buffer: dict = None,
-    show_thinking: bool = False,
-) -> str:
-    """Send a chat completion request and stream the response.
-
-    Args:
-        stream_output: When False, suppress stdout streaming (used for JSON/markdown
-            output modes where the caller formats and prints the final response).
-        permission: Tool execution permission level. "restricted" blocks all tool
-            execution. "auto" (default) executes tools as requested. "elevated" is
-            treated the same as "auto" (no additional privilege escalation in CLI).
-        tool_results_buffer: Optional dict to collect tool results. Will be populated
-            with {tool_name: result} entries during tool execution.
-        show_thinking: When True, stream <think>...</think> blocks to stdout.
-            When False (default), thinking blocks are suppressed from stdout but
-            the full response (including thinking) is still returned for history.
-    Returns the full response text including thinking. Handles tool-calling loops.
-    """
-    tool_call_counter = 0
-    collected_output = []
-    if tool_results_buffer is None:
-        tool_results_buffer = {}
-    thinking_filter = ThinkingBuffer(show=show_thinking)
-
-    for round_num in range(MAX_TOOL_ROUNDS + 1):
-        create_kwargs = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-        }
-        if temperature is not None:
-            create_kwargs["temperature"] = temperature
-        if tools_enabled and round_num < MAX_TOOL_ROUNDS:
-            create_kwargs["tools"] = _WEE_TOOLS
-
-        try:
-            stream = client.chat.completions.create(**create_kwargs)
-        except Exception as tools_err:
-            if "tools" in create_kwargs:
-                _print_info(f"[Wee] Tools not supported, retrying without: {tools_err}")
-                create_kwargs.pop("tools", None)
-                stream = client.chat.completions.create(**create_kwargs)
-            else:
-                raise
-
-        round_content = []
-        tool_calls_acc = {}
-
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-
-            if delta.content:
-                token = delta.content
-                round_content.append(token)
-                if stream_output:
-                    filtered = thinking_filter.feed(token)
-                    if filtered:
-                        sys.stdout.write(filtered)
-                        sys.stdout.flush()
-
-            if getattr(delta, "tool_calls", None):
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tool_calls_acc:
-                        tool_call_counter += 1
-                        tool_calls_acc[idx] = {
-                            "id": getattr(tc_delta, "id", None)
-                            or f"tc_wee_{tool_call_counter}",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    if tc_delta.id:
-                        tool_calls_acc[idx]["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tool_calls_acc[idx]["name"] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tool_calls_acc[idx][
-                                "arguments"
-                            ] += tc_delta.function.arguments
-
-            # Track usage from the final chunk
-            if hasattr(chunk, "usage") and chunk.usage and token_tracker:
-                token_tracker.update(chunk.usage)
-
-        if stream_output:
-            remaining = thinking_filter.flush()
-            if remaining:
-                sys.stdout.write(remaining)
-                sys.stdout.flush()
-
-        content_text = "".join(round_content)
-
-        if not tool_calls_acc:
-            collected_output.append(content_text)
-            break
-
-        # Tool calls detected
-        _print_info(f"[Wee] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s)")
-
-        assistant_tool_calls = []
-        for idx in sorted(tool_calls_acc.keys()):
-            tc = tool_calls_acc[idx]
-            assistant_tool_calls.append(
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                }
-            )
-
-        messages.append(
-            {
-                "role": "assistant",
-                "content": content_text or None,
-                "tool_calls": assistant_tool_calls,
-            }
-        )
-
-        for tc_info in assistant_tool_calls:
-            tc_id = tc_info["id"]
-            func_name = tc_info["function"]["name"]
-            try:
-                func_args = json.loads(tc_info["function"]["arguments"])
-            except json.JSONDecodeError:
-                func_args = {"command": tc_info["function"]["arguments"]}
-
-            _print_info(
-                f"[Wee] Executing: {func_name}({json.dumps(func_args)[:300]})"
-                + ("..." if len(json.dumps(func_args)) > 300 else "")
-            )
-            tool_result = execute_tool(func_name, func_args, permission=permission)
-
-            # Display tool result to user
-            if tool_result:
-                result_preview = (
-                    tool_result[:500] if len(str(tool_result)) > 500 else tool_result
-                )
-                _print_info(f"[Wee] Result: {result_preview}")
-
-            # Store tool result for later viewing
-            if func_name not in tool_results_buffer:
-                tool_results_buffer[func_name] = []
-            tool_results_buffer[func_name].append(
-                {
-                    "args": func_args,
-                    "result": tool_result or "No output",
-                    "tool_id": tc_id,
-                }
-            )
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": tool_result or "No output",
-                }
-            )
-    else:
-        # All rounds had tool calls
-        last_results = [m["content"] for m in messages if m.get("role") == "tool"]
-        if last_results:
-            fallback = (
-                "Tool execution completed. Last result:\n" + last_results[-1][:2000]
-            )
-        else:
-            fallback = "Max tool rounds reached without final response."
-        collected_output.append(fallback)
-        if stream_output:
-            sys.stdout.write(fallback)
-
-    if stream_output:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-
-    if token_tracker and not token_tracker.turns:
-        token_tracker.turns = 1
-
-    return "".join(collected_output)
-
-
-# ---------------------------------------------------------------------------
-# OpenAI client factory
-# ---------------------------------------------------------------------------
-def _make_client(api_base: str, api_key: str, timeout: float):
-    """Create an OpenAI client."""
-    try:
-        from openai import OpenAI
-    except ImportError:
-        _print_error("openai package not installed. Run: pip install openai")
-        sys.exit(1)
-
-    import httpx
-
-    return OpenAI(
-        base_url=api_base,
-        api_key=api_key,
-        timeout=httpx.Timeout(timeout=timeout, connect=15.0),
-        max_retries=0,
-    )
-
 
 # ---------------------------------------------------------------------------
 # Interactive REPL
@@ -1532,39 +1314,16 @@ def run_interactive(
             if status_context:
                 activity = status_context.__enter__()
             try:
-                try:
-                    response = _chat_via_copilot_sdk(
-                        messages=messages,
-                        qualified_model=model_for_persistence,
-                        api_base=api_base,
-                        api_key=api_key,
-                        timeout=timeout,
-                        tools_enabled=tools_enabled and permission != "restricted",
-                        stream_output=not rich_ui,
-                        activity_callback=on_activity,
-                    )
-                except Exception as sdk_error:
-                    fallback_enabled = os.environ.get(
-                        "WEE_OPENAI_FALLBACK_ENABLED", "1"
-                    ).lower() not in {"0", "false", "no", "off"}
-                    if not fallback_enabled:
-                        raise
-                    _print_info(
-                        f"Copilot SDK unavailable ({sdk_error}); "
-                        "using direct provider fallback."
-                    )
-                    response = chat_stream(
-                        client=client,
-                        model=model,
-                        messages=messages,
-                        tools_enabled=tools_enabled,
-                        temperature=temperature,
-                        token_tracker=token_tracker,
-                        permission=permission,
-                        stream_output=not rich_ui,
-                        tool_results_buffer=tool_results_buffer,
-                        show_thinking=show_thinking,
-                    )
+                response = _chat_via_copilot_sdk(
+                    messages=messages,
+                    qualified_model=model_for_persistence,
+                    api_base=api_base,
+                    api_key=api_key,
+                    timeout=timeout,
+                    tools_enabled=tools_enabled and permission != "restricted",
+                    stream_output=not rich_ui,
+                    activity_callback=on_activity,
+                )
             finally:
                 if status_context:
                     status_context.__exit__(None, None, None)
@@ -1669,7 +1428,6 @@ def run_single_shot(
     qualified_model: str = None,
 ):
     """Run a single prompt and exit."""
-    client = _make_client(api_base, api_key, timeout)
     token_tracker = TokenTracker(context_window=get_context_window(model))
     messages, _ = _prepare_session_messages(system_prompt, existing_messages)
 
@@ -1679,36 +1437,15 @@ def run_single_shot(
     stream_output = output_format == "text"
 
     try:
-        try:
-            response = _chat_via_copilot_sdk(
-                messages=messages,
-                qualified_model=qualified_model or model,
-                api_base=api_base,
-                api_key=api_key,
-                timeout=timeout,
-                tools_enabled=tools_enabled and permission != "restricted",
-                stream_output=stream_output,
-            )
-        except Exception as sdk_error:
-            fallback_enabled = os.environ.get(
-                "WEE_OPENAI_FALLBACK_ENABLED", "1"
-            ).lower() not in {"0", "false", "no", "off"}
-            if not fallback_enabled:
-                raise
-            _print_info(
-                f"Copilot SDK unavailable ({sdk_error}); using direct provider fallback."
-            )
-            response = chat_stream(
-                client=client,
-                model=model,
-                messages=messages,
-                tools_enabled=tools_enabled,
-                temperature=temperature,
-                token_tracker=token_tracker,
-                permission=permission,
-                stream_output=stream_output,
-                show_thinking=show_thinking,
-            )
+        response = _chat_via_copilot_sdk(
+            messages=messages,
+            qualified_model=qualified_model or model,
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            tools_enabled=tools_enabled and permission != "restricted",
+            stream_output=stream_output,
+        )
         messages.append({"role": "assistant", "content": response})
         # For non-streaming formats (json/markdown), strip thinking here since
         # ThinkingBuffer only applies during streaming (text format).

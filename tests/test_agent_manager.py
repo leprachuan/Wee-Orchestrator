@@ -1836,15 +1836,6 @@ class TestWeeToolOutputCap(unittest.TestCase):
         # Raw bash output should be 10000 chars (plus possible newline)
         self.assertGreaterEqual(len(result), 10000)
 
-    def test_wee_execute_tool_large_output(self):
-        """_wee_execute_tool returns large output; injection site is responsible for capping."""
-        result = self.manager._wee_execute_tool(
-            "bash",
-            {"command": "python3 -c \"print('y' * 10000)\""},
-            "orchestrator",
-        )
-        self.assertGreaterEqual(len(result), 10000)
-
     def test_tool_output_cap_constant_value(self):
         """WEE_TOOL_OUTPUT_CAP is set to 8000 per the agentic loop local."""
         # The constant is a local variable inside the agentic loop method.
