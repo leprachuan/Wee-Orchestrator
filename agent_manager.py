@@ -9641,8 +9641,14 @@ User Request:
             if context_prompt:
                 messages.append({"role": "system", "content": context_prompt})
         messages.append({"role": "user", "content": prompt})
+        context_window = self._wee_get_context_limit_for_api(resolved_model, api_base)
         messages = self._wee_maybe_compact(
-            client, n8n_session_id, messages, resolved_model, context_prompt
+            client,
+            n8n_session_id,
+            messages,
+            resolved_model,
+            context_prompt,
+            context_window=context_window,
         )
 
         # -- Tool definitions for agentic loop (Issue #107) --
@@ -9794,6 +9800,14 @@ User Request:
                     "messages": messages,
                     "stream": True,
                 }
+                # Ollama otherwise loads its conservative 4K default context.
+                # Local agent runs need the configured long window for tool
+                # transcripts and multi-turn planning to remain usable.
+                ollama_num_ctx = self._wee_ollama_context_window_for_api(api_base)
+                if ollama_num_ctx:
+                    create_kwargs["extra_body"] = {
+                        "options": {"num_ctx": ollama_num_ctx}
+                    }
                 if round_num < MAX_TOOL_ROUNDS and "search" not in _last_tool_names:
                     create_kwargs["tools"] = _WEE_TOOLS
 
@@ -10253,11 +10267,39 @@ User Request:
         """Resolve the context window size for a wee model."""
         return self._wee_get_context_limit_for_api(model, "")
 
+    @staticmethod
+    def _wee_ollama_context_window_for_api(api_base: str) -> Optional[int]:
+        """Return the configured context window when ``api_base`` is Ollama.
+
+        Ollama defaults to 4K unless each generation supplies ``num_ctx``.
+        The desktop Local API sets this value to 64K, while server deployments
+        remain unchanged unless they explicitly opt in through the same env var.
+        """
+        configured = os.environ.get("WEE_OLLAMA_CONTEXT_WINDOW", "").strip()
+        if not configured:
+            return None
+        try:
+            context_window = int(configured)
+        except ValueError:
+            return None
+        if context_window < 4_096:
+            return None
+
+        endpoint = (api_base or "").rstrip("/").lower()
+        ollama_host = os.environ.get(
+            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        ).rstrip("/").lower()
+        return context_window if endpoint.startswith(ollama_host) else None
+
     def _wee_get_context_limit_for_api(self, model: str, api_base: str) -> int:
         """Resolve the context window size for a wee model and endpoint."""
+        if configured_window := self._wee_ollama_context_window_for_api(api_base):
+            return configured_window
+
         normalized = (model or "").lower()
         known_windows = [
             ("gemma4", 128000),
+            ("gemma3", 131072),
             ("llama-4-scout", 131072),
             ("llama-3.1", 131072),
             ("64k", 65536),
