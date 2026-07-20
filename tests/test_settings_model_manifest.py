@@ -124,6 +124,50 @@ class TestSettingsModelManifest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_issue442_put_leaves_no_stray_tmp_file_on_success(self):
+        """PUT must write through a temp file and rename it into place,
+        never leaving a `.model-manifest.json.*.tmp` artifact behind."""
+        resp = self.client.put(
+            "/api/v1/settings/model-manifest",
+            headers=self.shared_header,
+            json={"runtime": "codex", "models": ["gpt-5.5"]},
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        manifest_dir = os.path.dirname(self.manifest_path)
+        leftovers = [
+            name
+            for name in os.listdir(manifest_dir)
+            if name.startswith(".model-manifest.json.") and name.endswith(".tmp")
+        ]
+        self.assertEqual(leftovers, [])
+
+    def test_issue442_put_failure_does_not_corrupt_existing_manifest(self):
+        """If the atomic rename step fails, the manifest on disk must be left
+        exactly as it was -- never a half-written file."""
+        from unittest.mock import patch
+
+        original_on_disk = self._read_manifest()
+
+        with patch("agent_manager.os.replace", side_effect=OSError("simulated failure")):
+            resp = self.client.put(
+                "/api/v1/settings/model-manifest",
+                headers=self.shared_header,
+                json={"runtime": "codex", "models": ["gpt-5.5-broken"]},
+            )
+        self.assertEqual(resp.status_code, 500)
+
+        # Untouched: still valid JSON, still the pre-failure content.
+        self.assertEqual(self._read_manifest(), original_on_disk)
+
+        manifest_dir = os.path.dirname(self.manifest_path)
+        leftovers = [
+            name
+            for name in os.listdir(manifest_dir)
+            if name.startswith(".model-manifest.json.") and name.endswith(".tmp")
+        ]
+        self.assertEqual(leftovers, [])
+
 
 if __name__ == "__main__":
     unittest.main()

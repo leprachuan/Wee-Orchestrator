@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -18190,9 +18191,21 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             document["last_updated"] = (
                 datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             )
-            MODEL_MANIFEST_PATH.write_text(
-                json.dumps(document, indent=2, sort_keys=True) + "\n"
+            # Write-then-rename so a crash or concurrent reader never observes
+            # a partially written manifest (issue #442).
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                dir=str(MODEL_MANIFEST_PATH.parent),
+                prefix=f".{MODEL_MANIFEST_PATH.name}.",
+                suffix=".tmp",
             )
+            try:
+                with os.fdopen(tmp_fd, "w") as tmp_file:
+                    tmp_file.write(json.dumps(document, indent=2, sort_keys=True) + "\n")
+                os.replace(tmp_name, MODEL_MANIFEST_PATH)
+            except Exception:
+                if os.path.exists(tmp_name):
+                    os.remove(tmp_name)
+                raise
             # Drop the mtime cache so the next /api/v1/models read picks this up
             # immediately instead of waiting on the next file-change poll.
             load_model_manifest._cache_key = None
