@@ -211,6 +211,31 @@ _DEFAULT_FREE_CONFIG = {
 }
 
 
+def _get_orchestrator_token() -> str | None:
+    """Return the configured credential for internal Orchestrator API calls.
+
+    Runtime subprocesses inherit ``API_SHARED_KEY`` from the service environment.
+    Deployments may instead supply a scoped ``WEE_ORCHESTRATOR_TOKEN``.  Do not
+    provide a literal fallback: using an old key can authenticate as the wrong
+    caller after credentials are rotated.
+    """
+    token = os.environ.get("WEE_ORCHESTRATOR_TOKEN")
+    if token:
+        return token
+    shared_key = os.environ.get("API_SHARED_KEY")
+    return f"shared_{shared_key}" if shared_key else None
+
+
+def _add_orchestrator_caller_headers(request) -> None:
+    """Forward trusted caller routing context injected by the parent process."""
+    identity = os.environ.get("WEE_ORCHESTRATOR_USER_IDENTITY")
+    channel = os.environ.get("WEE_ORCHESTRATOR_AUTH_CHANNEL")
+    if identity:
+        request.add_header("X-User-Identity", identity)
+    if channel:
+        request.add_header("X-Auth-Channel", channel)
+
+
 def load_free_model_config(config_path: str = None) -> dict:
     """Load wee_free_models.json; fall back to hardcoded defaults."""
     if config_path is None:
@@ -1276,9 +1301,9 @@ def _list_background_tasks_handler(func_args: dict) -> str:
             protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
         api_url = f"{protocol}://{api_host}:{api_port}"
 
-    token = os.environ.get(
-        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
-    )
+    token = _get_orchestrator_token()
+    if not token:
+        return "Error: Wee Orchestrator authentication is not configured"
 
     try:
         endpoint = "/api/v1/background-tasks"
@@ -1288,6 +1313,7 @@ def _list_background_tasks_handler(func_args: dict) -> str:
         url = f"{api_url}{endpoint}"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {token}")
+        _add_orchestrator_caller_headers(req)
 
         import ssl
 
@@ -1342,15 +1368,16 @@ def _check_task_status_handler(func_args: dict) -> str:
             protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
         api_url = f"{protocol}://{api_host}:{api_port}"
 
-    token = os.environ.get(
-        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
-    )
+    token = _get_orchestrator_token()
+    if not token:
+        return "Error: Wee Orchestrator authentication is not configured"
 
     try:
         endpoint = f"/api/v1/background-tasks/{task_id}"
         url = f"{api_url}{endpoint}"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {token}")
+        _add_orchestrator_caller_headers(req)
 
         import ssl
 
@@ -1450,9 +1477,9 @@ def _call_agent_handler(func_args: dict) -> str:
             protocol = "http" if api_host in ("127.0.0.1", "localhost") else "https"
         api_url = f"{protocol}://{api_host}:{api_port}"
 
-    token = os.environ.get(
-        "WEE_ORCHESTRATOR_TOKEN", "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU"
-    )
+    token = _get_orchestrator_token()
+    if not token:
+        return "[Wee] ERROR: Wee Orchestrator authentication is not configured"
 
     # Try with primary runtime first, then fallback
     runtimes_to_try = [
@@ -1506,11 +1533,17 @@ def _call_agent_handler(func_args: dict) -> str:
                     "model": model,
                     "timeout": 1800,
                 }
+                origin_session_id = os.environ.get(
+                    "WEE_ORIGIN_SESSION_ID", os.environ.get("WEE_SESSION_ID", "")
+                )
+                if origin_session_id:
+                    task_data["origin_session_id"] = origin_session_id
 
             url = f"{api_url}{endpoint}"
             req = urllib.request.Request(url, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", f"Bearer {token}")
+            _add_orchestrator_caller_headers(req)
 
             import ssl
 

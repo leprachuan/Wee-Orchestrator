@@ -6,6 +6,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import contextvars
 import hashlib
 import inspect
 import json
@@ -22,6 +23,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
+
+
+# Native Wee tool calls run in-process, so they cannot rely on subprocess
+# environment variables to retain the originating authenticated session.
+_wee_dispatch_context = contextvars.ContextVar("wee_dispatch_context", default=None)
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -7150,7 +7156,13 @@ User Request:
 
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
-            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
+            _sub_env = {
+                **os.environ,
+                "WEE_SESSION_ID": n8n_session_id,
+                "WEE_ORIGIN_SESSION_ID": n8n_session_id,
+                "WEE_ORCHESTRATOR_USER_IDENTITY": session_data.get("identity", ""),
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": channel,
+            }
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -10813,8 +10825,7 @@ User Request:
     def _wee_call_agent(self, func_args: dict) -> str:
         # Issue #343: Handle call_agent tool calls from the wee agentic loop.
         # Dispatches to the Wee Orchestrator background-tasks API (mode=background)
-        # or query API (mode=quick).  Uses environment variables for API URL/token,
-        # falling back to the same defaults as wee_runtime._call_agent_handler.
+        # or query API (mode=quick). Uses configured process credentials only.
         import ssl
         import urllib.error
         import urllib.request
@@ -10839,10 +10850,12 @@ User Request:
             protocol = "http" if host in ("127.0.0.1", "localhost") else "https"
             api_url = f"{protocol}://{host}:{port}"
 
-        token = os.environ.get(
-            "WEE_ORCHESTRATOR_TOKEN",
-            "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU",
-        )
+        token = os.environ.get("WEE_ORCHESTRATOR_TOKEN")
+        if not token:
+            shared_key = os.environ.get("API_SHARED_KEY")
+            token = f"shared_{shared_key}" if shared_key else None
+        if not token:
+            return "Error: Wee Orchestrator authentication is not configured"
 
         agent_cfg = self.AGENTS.get(agent, {})
         runtime = agent_cfg.get("primary_runtime", "copilot")
@@ -10855,6 +10868,12 @@ User Request:
                 "prompt": prompt, "agent": agent,
                 "runtime": runtime, "model": model, "timeout": 1800,
             }
+            caller_context = _wee_dispatch_context.get() or {}
+            origin_session_id = os.environ.get(
+                "WEE_ORIGIN_SESSION_ID", os.environ.get("WEE_SESSION_ID", "")
+            ) or caller_context.get("origin_session_id", "")
+            if origin_session_id:
+                task_data["origin_session_id"] = origin_session_id
         else:
             endpoint = "/api/v1/query"
             http_timeout = 120
@@ -10867,6 +10886,13 @@ User Request:
         req = urllib.request.Request(url, method="POST")
         req.add_header("Content-Type", "application/json")
         req.add_header("Authorization", f"Bearer {token}")
+        caller_context = _wee_dispatch_context.get() or {}
+        identity = os.environ.get("WEE_ORCHESTRATOR_USER_IDENTITY") or caller_context.get("identity")
+        channel = os.environ.get("WEE_ORCHESTRATOR_AUTH_CHANNEL") or caller_context.get("channel")
+        if identity:
+            req.add_header("X-User-Identity", identity)
+        if channel:
+            req.add_header("X-Auth-Channel", channel)
 
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -11338,16 +11364,27 @@ User Request:
                 render_type,
             )
         elif runtime == "wee":
-            result = self.run_wee_native(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            context_token = _wee_dispatch_context.set(
+                {
+                    "origin_session_id": n8n_session_id,
+                    "identity": session_data.get("identity"),
+                    "channel": session_data.get("channel"),
+                }
             )
+            try:
+                result = self.run_wee_native(
+                    prompt,
+                    model,
+                    agent,
+                    session_id if can_resume else None,
+                    can_resume,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
+                )
+            finally:
+                _wee_dispatch_context.reset(context_token)
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -14800,6 +14837,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "WEE_AGENT_DIR": agent_dir,
                 "WEE_SESSION_ID": session_id,
                 "WEE_TASK_ID": task_id,
+                "WEE_ORIGIN_SESSION_ID": (
+                    bg_task_mgr.get_task(task_id) or {}
+                ).get("origin_session_id", ""),
+                "WEE_ORCHESTRATOR_USER_IDENTITY": user_identity,
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": channel,
             }
 
             # Use Popen for incremental output capture
@@ -15235,6 +15277,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         channel = user["channel"]
         identity = user["identity"]
 
+        # Origin sessions are routing targets, so never accept an arbitrary
+        # session ID from another user/channel.  Omitting it remains valid for
+        # API-created tasks that only need normal per-user notifications.
+        if body.origin_session_id:
+            origin = session_mgr.load_session_data(body.origin_session_id)
+            if (
+                not isinstance(origin, dict)
+                or origin.get("identity") != identity
+                or origin.get("channel") != channel
+            ):
+                raise HTTPException(status_code=422, detail="Invalid origin session")
+
         # Check concurrent limit (used below after resolving params)
 
         # Resolve agent/runtime/model — default to user's current session config
@@ -15411,12 +15465,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/sessions/{session_id}/bg-events")
     async def get_session_bg_events(session_id: str, request: Request):
         """Return and clear pending BG task completion events."""
-        await authenticate(
+        user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        origin = session_mgr.load_session_data(session_id)
+        if (
+            not isinstance(origin, dict)
+            or origin.get("identity") != user["identity"]
+            or origin.get("channel") != user["channel"]
+        ):
+            raise HTTPException(status_code=404, detail="Session not found")
         events = bg_task_mgr.pop_bg_events(session_id)
         return {"events": events}
 
