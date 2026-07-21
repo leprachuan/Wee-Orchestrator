@@ -71,8 +71,11 @@ class TestWeeExecuteToolCallAgent(unittest.TestCase):
             )
 
         self.assertEqual(result, expected)
+        # Issue #444: n8n_session_id is forwarded as origin_session_id so
+        # background-task result routing survives delegation.
         mock_ca.assert_called_once_with(
-            {"agent": "research", "prompt": "Find LLM info", "mode": "background"}
+            {"agent": "research", "prompt": "Find LLM info", "mode": "background"},
+            origin_session_id=None,
         )
 
     def test_unknown_tool_error_includes_call_agent(self):

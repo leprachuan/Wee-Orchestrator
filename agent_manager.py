@@ -9354,7 +9354,10 @@ User Request:
 
             async def call_agent_handler(invocation):
                 return self._wee_execute_tool(
-                    "call_agent", dict(invocation.arguments or {}), agent
+                    "call_agent",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
                 )
 
             call_agent_tool = Tool(
@@ -10040,7 +10043,9 @@ User Request:
         try:
             if func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
-                return self._wee_call_agent(func_args)
+                # Issue #444: propagate the originating chat session so the
+                # background task can be routed back and notified correctly.
+                return self._wee_call_agent(func_args, origin_session_id=n8n_session_id)
             elif func_name == "browser":
                 if not n8n_session_id:
                     return "Error: Browser tool requires a chat session"
@@ -10056,11 +10061,12 @@ User Request:
         except Exception as e:
             return f"Error executing {func_name}: {e}"
 
-    def _wee_call_agent(self, func_args: dict) -> str:
+    def _wee_call_agent(
+        self, func_args: dict, origin_session_id: Optional[str] = None
+    ) -> str:
         # Issue #343: Handle call_agent tool calls from the wee agentic loop.
         # Dispatches to the Wee Orchestrator background-tasks API (mode=background)
-        # or query API (mode=quick).  Uses environment variables for API URL/token,
-        # falling back to the same defaults as wee_runtime._call_agent_handler.
+        # or query API (mode=quick).  Uses environment variables for API URL/token.
         import ssl
         import urllib.error
         import urllib.request
@@ -10085,10 +10091,22 @@ User Request:
             protocol = "http" if host in ("127.0.0.1", "localhost") else "https"
             api_url = f"{protocol}://{host}:{port}"
 
-        token = os.environ.get(
-            "WEE_ORCHESTRATOR_TOKEN",
-            "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU",
-        )
+        # Issue #444: the API authenticates requests against
+        # f"shared_{API_SHARED_KEY}" (see _api_config / the background-tasks
+        # instruction block above). A hard-coded fallback secret here would
+        # silently keep authenticating with a stale key after rotation, or
+        # authenticate as a different, unrelated deployment's shared key.
+        # Explicit overrides are still honored, but otherwise derive the
+        # token from the live shared key so it always matches this instance.
+        token = os.environ.get("WEE_ORCHESTRATOR_TOKEN")
+        if not token:
+            shared_key = os.environ.get("API_SHARED_KEY", "")
+            if not shared_key:
+                return (
+                    "Error: call_agent cannot authenticate — "
+                    "API_SHARED_KEY is not configured"
+                )
+            token = f"shared_{shared_key}"
 
         agent_cfg = self.AGENTS.get(agent, {})
         runtime = agent_cfg.get("primary_runtime", "copilot")
@@ -10100,6 +10118,7 @@ User Request:
             task_data = {
                 "prompt": prompt, "agent": agent,
                 "runtime": runtime, "model": model, "timeout": 1800,
+                "origin_session_id": origin_session_id,
             }
         else:
             endpoint = "/api/v1/query"
