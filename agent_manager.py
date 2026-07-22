@@ -10030,6 +10030,22 @@ User Request:
 
                 # No tool calls — we have the final answer
                 if not tool_calls_acc:
+                    # Some providers occasionally emit a prose promise to search
+                    # instead of the structured ``search`` call they were given.
+                    # Do not leave the user with that non-answer: run the safe
+                    # search tool once against the original request and return
+                    # its sourced result.
+                    if self._wee_response_promises_search(content_text):
+                        search_result = self._wee_execute_tool(
+                            "search",
+                            {"q": prompt, "count": 5, "format": "text"},
+                            agent,
+                            n8n_session_id,
+                        )
+                        if search_result and not search_result.startswith("Error"):
+                            content_text = "Web search completed.\n\n" + search_result
+                            if stream_buffer:
+                                stream_buffer.push("chunk", {"text": content_text})
                     # Issue #343: When call_agent was the last tool and model returns
                     # empty synthesis, surface the task dispatch result as confirmation.
                     if not content_text.strip() and "call_agent" in _last_tool_names:
@@ -10217,6 +10233,17 @@ User Request:
                 stream_buffer.push("done", error_msg)
 
             return error_msg
+
+    @staticmethod
+    def _wee_response_promises_search(text: str) -> bool:
+        """Return true only for an explicit, unfinished promise to web-search."""
+        normalized = " ".join((text or "").lower().split())
+        return bool(
+            re.search(
+                r"\b(?:i(?:'|’)ll|i will|let me|i need to)\s+(?:web\s+)?search\b",
+                normalized,
+            )
+        )
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
