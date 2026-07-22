@@ -7160,12 +7160,13 @@ User Request:
 
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
+            caller_session_data = self.load_session_data(n8n_session_id) or {}
             _sub_env = {
                 **os.environ,
                 "WEE_SESSION_ID": n8n_session_id,
                 "WEE_ORIGIN_SESSION_ID": n8n_session_id,
-                "WEE_ORCHESTRATOR_USER_IDENTITY": session_data.get("identity", ""),
-                "WEE_ORCHESTRATOR_AUTH_CHANNEL": channel,
+                "WEE_ORCHESTRATOR_USER_IDENTITY": caller_session_data.get("identity", ""),
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": caller_session_data.get("channel", "webui"),
             }
             # GUI-launched macOS processes receive a minimal system PATH.  CLI
             # wrappers installed by Homebrew (including Codex, whose launcher
@@ -14182,35 +14183,35 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         error=None,
         notify: bool = True,
         agent: Optional[str] = None,
+        is_critical: bool = False,
     ):
         """Emit a background task completion notification via notification_mgr.
 
         When ``is_critical`` is True the notification bypasses the global
         suppression toggle (used for heartbeat alerts and system crashes).
         """
-        if notification_mgr is None:
-            return
         try:
-            # Re-check per-identity mute preference at emit time
-            # (user may have muted after the task was created).
-            if notify and not is_critical:
-                if notification_mgr.is_muted(user_identity):
-                    notify = False
-                elif agent and notification_mgr.is_agent_muted(user_identity, agent):
-                    notify = False
+            if notification_mgr is not None:
+                # Re-check per-identity mute preference at emit time
+                # (user may have muted after the task was created).
+                if notify and not is_critical:
+                    if notification_mgr.is_muted(user_identity):
+                        notify = False
+                    elif agent and notification_mgr.is_agent_muted(user_identity, agent):
+                        notify = False
 
-            user_key = bg_task_mgr._user_key(channel, user_identity)
-            notification_mgr.create_notification(
-                task_id=task_id,
-                description=prompt[:200],
-                status=status,
-                channel=channel,
-                user_key=user_key,
-                output_preview=output_preview,
-                error=error,
-                skip_external=not notify,
-                agent=agent,
-            )
+                user_key = bg_task_mgr._user_key(channel, user_identity)
+                notification_mgr.create_notification(
+                    task_id=task_id,
+                    description=prompt[:200],
+                    status=status,
+                    channel=channel,
+                    user_key=user_key,
+                    output_preview=output_preview,
+                    error=error,
+                    skip_external=not notify,
+                    agent=agent,
+                )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
             origin_sid = task.get("origin_session_id") if task else None

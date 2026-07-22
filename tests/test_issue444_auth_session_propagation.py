@@ -1,6 +1,7 @@
 """Regression coverage for issue #444 internal delegation context."""
 
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -96,3 +97,39 @@ def test_dispatch_fails_closed_without_configured_credentials(monkeypatch):
     assert "authentication is not configured" in runtime_result
     assert "authentication is not configured" in manager_result
     urlopen.assert_not_called()
+
+
+def test_wee_runtime_subprocess_inherits_stored_caller_context(tmp_path):
+    """The native runtime launcher supplies defined, session-scoped context."""
+    from agent_manager import SessionManager
+
+    manager = SessionManager.__new__(SessionManager)
+    manager._stream_queues = {}
+    manager._stream_buffers = {}
+    manager._last_exit_codes = {}
+    manager.load_session_data = lambda session_id: {
+        "identity": "user-444",
+        "channel": "webui",
+    }
+    manager.track_running_query = lambda *args: None
+    manager.clear_running_query = lambda *args: None
+    manager.clear_live_status = lambda *args: None
+    manager.update_query_output = lambda *args: None
+
+    result = manager._execute_subprocess_with_tracking(
+        [
+            sys.executable,
+            "-c",
+            "import os; print('|'.join(os.environ[key] for key in ("
+            "'WEE_ORIGIN_SESSION_ID', 'WEE_ORCHESTRATOR_USER_IDENTITY', "
+            "'WEE_ORCHESTRATOR_AUTH_CHANNEL')))"
+        ],
+        str(tmp_path),
+        10,
+        "wee",
+        "orchestrator",
+        "diagnostic",
+        "origin-session",
+    )
+
+    assert result.strip() == "origin-session|user-444|webui"
