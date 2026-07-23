@@ -207,6 +207,82 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
     return sanitized
 
 
+def _sdk_event_mapping(value) -> dict:
+    """Convert a Copilot SDK payload to a mapping when its transport permits."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    for method_name in ("model_dump", "to_dict", "dict"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                converted = method()
+            except Exception:
+                continue
+            if isinstance(converted, dict):
+                return converted
+    try:
+        return vars(value)
+    except TypeError:
+        return {}
+
+
+def _sdk_event_field(payload, *names):
+    """Read a field from either an SDK event object or its data payload."""
+    event_data = getattr(payload, "data", None)
+    for candidate in (payload, event_data):
+        mapping = _sdk_event_mapping(candidate)
+        for name in names:
+            value = mapping.get(name) if mapping else getattr(candidate, name, None)
+            if value is not None and value != "":
+                return value
+    return None
+
+
+def _sdk_tool_display_value(value) -> str:
+    """Serialize structured SDK fields without turning None into visible text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _normalize_wee_sdk_tool_event(payload, tool_ids: dict) -> dict:
+    """Return the stable, detail-preserving tool event sent to SSE clients."""
+    event_type = str(getattr(payload, "type", "tool")).lower()
+    is_command = "command" in event_type
+    raw_name = _sdk_event_field(
+        payload, "tool_name", "toolName", "name", "function_name", "functionName"
+    )
+    tool_name = "shell" if is_command else str(raw_name or "tool")
+    call_id = _sdk_event_field(payload, "tool_call_id", "toolCallId", "id")
+    call_id = str(call_id or tool_ids.get(tool_name) or f"tc_wee_sdk_{int(time.time() * 1000)}")
+    tool_ids[tool_name] = call_id
+    input_fields = (
+        ("command", "command_line", "commandLine", "text", "input", "arguments")
+        if is_command
+        else ("arguments", "input", "parameters", "params", "command", "text")
+    )
+    return {
+        "id": call_id,
+        "name": tool_name,
+        "input": _sdk_tool_display_value(_sdk_event_field(payload, *input_fields)),
+        "output": _sdk_tool_display_value(
+            _sdk_event_field(payload, "output", "result", "content", "stdout", "stderr", "message", "error")
+        )[:500],
+        "status": "complete" if "complete" in event_type else "running",
+    }
+
+
 def _codex_item_name(item: dict) -> str:
     """Return a UI-friendly tool/event name for a Codex transport item."""
     if not isinstance(item, dict):
@@ -9351,6 +9427,7 @@ User Request:
             context_prompt = self._wee_augment_system_prompt_with_tools(context_prompt)
             context_prompt += _wee_anti_hallucination_prompt()
             stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+            sdk_tool_ids: Dict[str, str] = {}
 
             async def call_agent_handler(invocation):
                 return self._wee_execute_tool(
@@ -9431,25 +9508,9 @@ User Request:
                 if kind == "chunk":
                     stream_buffer.push("chunk", {"text": str(payload)})
                 elif kind == "tool_call":
-                    event_data = getattr(payload, "data", None)
-                    event_type = str(getattr(payload, "type", "tool"))
                     stream_buffer.push(
                         "tool_call",
-                        {
-                            "id": str(
-                                getattr(event_data, "tool_call_id", None)
-                                or getattr(event_data, "id", None)
-                                or f"tc_wee_sdk_{int(time.time() * 1000)}"
-                            ),
-                            "name": str(
-                                getattr(event_data, "tool_name", None)
-                                or getattr(event_data, "name", None)
-                                or "tool"
-                            ),
-                            "status": (
-                                "complete" if "complete" in event_type else "running"
-                            ),
-                        },
+                        _normalize_wee_sdk_tool_event(payload, sdk_tool_ids),
                     )
                 elif kind == "done":
                     stream_buffer.push("done", str(payload or ""))
