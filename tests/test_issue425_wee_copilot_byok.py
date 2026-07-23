@@ -320,3 +320,43 @@ def test_cancellation_propagates_instead_of_being_swallowed(monkeypatch):
                 enable_tools=False,
             )
         )
+
+
+def test_wee_sdk_command_event_retains_command_payload():
+    """Command events must not degrade into a blank generic tool call."""
+    from agent_manager import _normalize_wee_sdk_tool_event
+
+    payload = types.SimpleNamespace(
+        type="command.execute",
+        data={"id": "cmd-1", "command": "vm_stat"},
+    )
+
+    event = _normalize_wee_sdk_tool_event(payload, {})
+
+    assert event["id"] == "cmd-1"
+    assert event["name"] == "shell"
+    assert event["input"] == "vm_stat"
+    assert event["status"] == "running"
+
+
+def test_wee_sdk_dict_tool_event_retains_name_arguments_and_result():
+    """Dictionary SDK payloads retain the fields needed by macOS tool details."""
+    from agent_manager import _normalize_wee_sdk_tool_event
+
+    payload = types.SimpleNamespace(
+        type="tool.complete",
+        data={
+            "toolName": "read_file",
+            "toolCallId": "read-1",
+            "arguments": {"path": "/tmp/example.txt"},
+            "result": {"contents": "hello"},
+        },
+    )
+
+    event = _normalize_wee_sdk_tool_event(payload, {})
+
+    assert event["id"] == "read-1"
+    assert event["name"] == "read_file"
+    assert event["input"] == '{"path": "/tmp/example.txt"}'
+    assert event["output"] == '{"contents": "hello"}'
+    assert event["status"] == "complete"
