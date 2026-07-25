@@ -9658,6 +9658,42 @@ User Request:
                 handler=call_agent_handler,
             )
 
+            async def search_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "search",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            search_tool = Tool(
+                name="search",
+                description=(
+                    "Search the web and return sourced results. Use this to find "
+                    "current information; use web_fetch only when you already "
+                    "know the exact URL."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "q": {"type": "string", "description": "The search query."},
+                        "count": {
+                            "type": "integer",
+                            "description": "How many results to return (max 20).",
+                            "default": 5,
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["text", "json"],
+                            "default": "text",
+                        },
+                    },
+                    "required": ["q"],
+                },
+                handler=search_handler,
+            )
+
             async def browser_handler(invocation):
                 return await asyncio.to_thread(
                     self._wee_execute_tool,
@@ -9730,7 +9766,7 @@ User Request:
                 timeout=float(effective_timeout),
                 session_id=saved_sdk_session,
                 resume=bool(resume and saved_sdk_session),
-                tools=[call_agent_tool, browser_tool],
+                tools=[search_tool, call_agent_tool, browser_tool],
                 enable_tools=True,
                 event_callback=on_sdk_event,
             )
@@ -9759,7 +9795,7 @@ User Request:
                         timeout=float(effective_timeout),
                         session_id=retry_session,
                         resume=bool(retry_session),
-                        tools=[call_agent_tool, browser_tool],
+                        tools=[search_tool, call_agent_tool, browser_tool],
                         enable_tools=True,
                         event_callback=on_sdk_event,
                     )
@@ -9955,8 +9991,8 @@ User Request:
                 self.save_session_map(session_map)
 
     def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
-        """Issue #111 / #443: Describe only the custom tools wee registers on top
-        of the Copilot SDK session (call_agent, browser).
+        """Issue #111 / #443 / #397: Describe only the custom tools wee registers
+        on top of the Copilot SDK session (search, call_agent, browser).
 
         The Copilot SDK session already knows about and describes its own
         built-in tools (shell, file read/write, etc.) — don't redeclare those
@@ -9967,6 +10003,11 @@ User Request:
         tool_section = (
             "\n[Additional Tools]\n"
             "Beyond your built-in tools, you also have access to:\n"
+            "\n"
+            "**search** -- Search the web and get sourced results.\n"
+            '  Call: search tool with {"q": "your query", "count": 5}\n'
+            "  Use for: current information you do not already have a URL for. "
+            "Prefer this over web_fetch unless you already know the exact URL.\n"
             "\n"
             "**call_agent** -- Delegate tasks to other specialized Wee agents (PREFERRED for background tasks).\n"
             '  Call: call_agent tool with {"agent": "agent_name", "prompt": "task", "mode": "background", ...}\n'
@@ -10440,11 +10481,22 @@ User Request:
     ) -> str:
         """Execute a tool call handler bound to a Wee Copilot SDK custom Tool.
 
-        Only call_agent and browser are wired here — the Copilot SDK owns
-        shell/file/search execution directly, so wee no longer hand-rolls those.
+        The Copilot SDK owns shell and file execution, so wee does not hand-roll
+        those. It does not provide web *search* though — only web_fetch for a URL
+        already known — so search is wired here alongside call_agent and browser
+        (issue #397).
         """
         try:
-            if func_name == "call_agent":
+            if func_name == "search":
+                # Issue #397: the Copilot SDK ships web_fetch (retrieve a known
+                # URL) but no web *search*, so a local agent had no way to
+                # discover pages for a query. _execute_search survived #443 —
+                # only its caller was removed — and prefers a configured SearXNG
+                # instance with a public-search fallback.
+                from wee_runtime import _execute_search
+
+                return _execute_search(func_args)
+            elif func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
                 # Issue #444: propagate the originating chat session so the
                 # background task can be routed back and notified correctly.
@@ -10460,7 +10512,10 @@ User Request:
                     timeout=min(float(self.command_timeout), 90.0),
                 )
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: call_agent, browser"
+                return (
+                    f"Error: Unknown tool '{func_name}'. "
+                    "Available: search, call_agent, browser"
+                )
         except Exception as e:
             return f"Error executing {func_name}: {e}"
 
