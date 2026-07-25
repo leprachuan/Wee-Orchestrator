@@ -193,6 +193,25 @@ def _event_content(event: Any) -> str:
     return ""
 
 
+def prefer_longer_text(final_text: Optional[str], streamed_text: Optional[str]) -> str:
+    """Choose between a transport's final message and its assembled stream.
+
+    A complete assistant message is normally authoritative, but the
+    OpenAI-compatible transport used for Ollama can end a turn on a single
+    delta fragment (observed: a turn whose stream was "OK"/"I"/"I" reported
+    just "I"). The deltas were forwarded to the caller for live rendering but
+    never accumulated, so that fragment became the answer and downstream
+    length checks rejected it as unusable.
+
+    Preferring whichever is longer keeps the normal case untouched — a full
+    final message is never shorter than its own stream — while recovering the
+    content when the final event is only a fragment.
+    """
+    final = (final_text or "").strip()
+    assembled = (streamed_text or "").strip()
+    return assembled if len(assembled) > len(final) else final
+
+
 async def execute_wee_copilot_async(
     *,
     prompt: str,
@@ -218,6 +237,11 @@ async def execute_wee_copilot_async(
 
     collected: list[str] = []
     errors: list[str] = []
+    # Streaming deltas were forwarded to the caller but never accumulated, so a
+    # provider that only ever emits deltas (Ollama, via the OpenAI-compatible
+    # transport) left `result_text` holding whatever single fragment
+    # send_and_wait happened to return. Keep the assembled stream as a fallback.
+    streamed: list[str] = []
 
     def on_event(event: Any) -> None:
         event_type = getattr(event, "type", None)
@@ -227,6 +251,7 @@ async def execute_wee_copilot_async(
         ):
             content = _event_content(event)
             if content:
+                streamed.append(content)
                 if event_callback:
                     event_callback("chunk", content)
         elif event_type == SessionEventType.ASSISTANT_MESSAGE:
@@ -272,6 +297,7 @@ async def execute_wee_copilot_async(
             result_text = _event_content(result) if result else ""
             if not result_text and collected:
                 result_text = collected[-1]
+            result_text = prefer_longer_text(result_text, "".join(streamed))
             if not result_text and errors:
                 raise WeeCopilotSDKError(errors[-1])
             if event_callback:
