@@ -9662,7 +9662,15 @@ User Request:
                 handler=browser_handler,
             )
 
+            # Issue #398: track whether the model actually invoked anything, so a
+            # turn that only *promised* to act can be detected afterwards. The
+            # counter must be updated even when nothing is streaming, so it sits
+            # before the stream_buffer guard.
+            tool_calls_seen = {"count": 0}
+
             def on_sdk_event(kind, payload):
+                if kind == "tool_call":
+                    tool_calls_seen["count"] += 1
                 if not stream_buffer:
                     return
                 if kind == "chunk":
@@ -9691,6 +9699,45 @@ User Request:
                 self.update_session_field(
                     n8n_session_id, "wee_copilot_session_id", actual_session_id
                 )
+
+            # Issue #398: some local models narrate an action instead of calling
+            # the tool. Re-prompt once, in the same SDK session so the context
+            # carries, telling the model to actually perform it. Bounded to a
+            # single attempt: if it narrates twice, returning its second answer
+            # is better than looping.
+            if self._wee_turn_is_incomplete(output, tool_calls_seen["count"]):
+                print(
+                    "[Wee Copilot SDK] incomplete agentic turn "
+                    "(promised an action, made no tool call) — retrying once",
+                    file=sys.stderr,
+                )
+                retry_session = actual_session_id or saved_sdk_session
+                try:
+                    retry_output, retry_session_id = execute_wee_copilot(
+                        prompt=self.WEE_COMPLETION_INSTRUCTION,
+                        route=route,
+                        working_directory=agent_dir,
+                        timeout=float(effective_timeout),
+                        session_id=retry_session,
+                        resume=bool(retry_session),
+                        tools=[call_agent_tool, browser_tool],
+                        enable_tools=True,
+                        event_callback=on_sdk_event,
+                    )
+                except Exception as retry_error:
+                    # The first answer is still the user's best available result.
+                    print(
+                        f"[Wee Copilot SDK] completion retry failed: {retry_error}",
+                        file=sys.stderr,
+                    )
+                else:
+                    if retry_session_id:
+                        self.update_session_field(
+                            n8n_session_id, "wee_copilot_session_id", retry_session_id
+                        )
+                    if retry_output and retry_output.strip():
+                        output = retry_output
+
             print(
                 f"[Wee Copilot SDK] provider={route.provider} "
                 f"model={route.model} session={n8n_session_id[:8]}...",
@@ -9718,6 +9765,63 @@ User Request:
                 normalized,
             )
         )
+
+    # Issue #398: an incomplete agentic turn is prose that *announces* an action
+    # the model then never performs. The verbs below are the ones the SDK can
+    # actually act on (its own search/shell/file tools, plus wee's call_agent
+    # and browser); announcing anything else is not a recoverable turn.
+    _WEE_PROMISED_ACTION_RE = re.compile(
+        r"\b(?:i(?:'|’)ll|i will|let me|i(?:'|’)m going to|i am going to|i need to|"
+        r"give me a moment (?:to|while i)|hold on while i)\s+"
+        r"(?:now\s+|just\s+|quickly\s+|first\s+)*"
+        r"(?:web\s+)?"
+        r"(?:search|look\s+(?:up|at|into)|check|read|open|fetch|browse|run|execute|"
+        r"inspect|grep|find|list|delegate|ask\s+\w+|call\s+\w+)\b"
+    )
+
+    # Phrases that mean the work already happened, or that the model is
+    # declining. Neither is an incomplete turn, so they must not trigger a retry.
+    _WEE_COMPLETED_OR_REFUSED_RE = re.compile(
+        # "read" is deliberately absent: past and present tense are identical in
+        # English, so "while i read the log" (a promise) is indistinguishable
+        # from "i read the log" (done). A promise always carries a lead-in
+        # phrase, so omitting it here costs nothing and avoids a false negative.
+        r"\b(?:search\s+completed|i\s+(?:searched|checked|ran|found)|"
+        r"here\s+(?:are|is)\s+the\s+(?:results|result)|based\s+on\s+(?:the\s+)?(?:results|output)|"
+        r"i\s+(?:cannot|can(?:'|’)t|am\s+unable\s+to|do\s+not\s+have\s+access)"
+        r"(?:\s+\w+){0,3}\s+(?:search|browse|access|read|run))\b"
+    )
+
+    @classmethod
+    def _wee_turn_is_incomplete(cls, text: str, tool_calls_made: int) -> bool:
+        """Return whether a finished turn only *promised* to act.
+
+        Issue #398. Two conditions must hold:
+
+        * the model performed no tool call at all during the turn, and
+        * its final text announces an action it was equipped to take.
+
+        A turn that used any tool is left alone even if its prose still reads
+        like a promise — the model did work, and re-prompting it risks
+        duplicating a side effect (a delegated task, a shell command).
+        """
+        if tool_calls_made > 0:
+            return False
+        normalized = " ".join((text or "").lower().split())
+        if not normalized:
+            return False
+        if cls._WEE_COMPLETED_OR_REFUSED_RE.search(normalized):
+            return False
+        return bool(cls._WEE_PROMISED_ACTION_RE.search(normalized))
+
+    # Appended verbatim to the retry so the instruction is auditable and the
+    # model is told to act rather than narrate.
+    WEE_COMPLETION_INSTRUCTION = (
+        "You described an action but did not perform it. Carry it out now using "
+        "your tools, then answer with the result. Do not restate your intent, and "
+        "do not ask for confirmation. If the action is genuinely impossible, say "
+        "plainly why in one sentence."
+    )
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
