@@ -21,6 +21,17 @@ from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import pytest
+
+# These tests import wee_cli.chat_stream, removed when wee_cli was refactored; no equivalent symbol is exported today.
+# Left in place rather than deleted so the coverage gap stays visible, but
+# skipped at module level: an ImportError here aborted collection of the ENTIRE
+# suite (~3500 tests), so nothing could run at all.
+pytest.importorskip("_wee_removed_api_placeholder_", reason=(
+    "wee_cli.chat_stream no longer exists; this module needs rewriting against the "
+    "current API before it can run again"
+))
+
 from wee_cli import (
     ThinkingBuffer,
     _strip_thinking,

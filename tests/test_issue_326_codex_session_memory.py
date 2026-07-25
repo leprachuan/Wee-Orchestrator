@@ -157,22 +157,39 @@ class TestIssue326CodexSessionMemory(unittest.TestCase):
                     f"Expected UUID {real_uuid!r}, got {result!r}",
                 )
 
-    def test_codex_in_session_id_update_runtime_list(self):
-        """Verify codex is in the runtime list that triggers session ID update."""
-        # This tests the fix itself: the source code must include codex in the
-        # post-dispatch session ID update block.
+    def test_codex_session_id_is_captured_from_codex_itself(self):
+        """Codex must still retain session-turn memory — now via a real ID.
+
+        Originally this asserted "codex" appeared in the post-dispatch
+        mtime-scan list. #449 replaced that mechanism: scanning the shared
+        ~/.codex/sessions directory could adopt an unrelated Codex Desktop
+        session. run_codex now records the `thread_id` Codex reports for its own
+        turn, which serves #326's goal better because the ID is observed rather
+        than inferred.
+        """
         import inspect
-        source = inspect.getsource(self.sm.execute)
-        # Find the section after _dispatch_single_runtime call
-        assert '"codex"' in source, (
-            '"codex" must appear in the session ID update block inside dispatch_query'
+
+        run_codex_source = inspect.getsource(self.sm.run_codex)
+        assert "codex_thread_id_from_output" in run_codex_source, (
+            "run_codex must record the session ID Codex reported for this turn"
         )
-        # Verify it's near the other runtimes in the same block
-        update_block_idx = source.find("Handle session ID mapping")
-        assert update_block_idx != -1, "Session ID mapping block not found"
-        block_snippet = source[update_block_idx : update_block_idx + 700]
-        assert '"codex"' in block_snippet, (
-            '"codex" not found in the session ID mapping block — fix not applied'
+        assert 'update_session_field(n8n_session_id, "session_id"' in run_codex_source, (
+            "the captured thread_id must be persisted for the next turn to resume"
+        )
+
+        # And the mtime scan must no longer claim a codex session (#449).
+        execute_source = inspect.getsource(self.sm.execute)
+        block_idx = execute_source.find("Handle session ID mapping")
+        assert block_idx != -1, "Session ID mapping block not found"
+        block = execute_source[block_idx : block_idx + 900]
+        scan_call_idx = block.find("get_most_recent_session_id")
+        assert scan_call_idx != -1, "expected the mtime scan to remain for other runtimes"
+        runtime_tuple = block[:scan_call_idx]
+        assert '"codex"' not in runtime_tuple, (
+            "codex must not be in the mtime-scan runtime list (#449)"
+        )
+        assert '"copilot"' in runtime_tuple, (
+            "other runtimes should still use the scan"
         )
 
 

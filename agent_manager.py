@@ -9133,6 +9133,38 @@ User Request:
 
         return self.strip_metadata(output, "gemini")
 
+    @staticmethod
+    def codex_thread_id_from_output(raw_output: str) -> Optional[str]:
+        """Extract the session UUID Codex reports for the turn we just ran.
+
+        Issue #449: the session ID was previously inferred by scanning
+        ~/.codex/sessions for the newest rollout file. That directory is shared
+        with Codex Desktop and any other local Codex use, so the newest file can
+        belong to an unrelated task — `codex exec resume` then hangs or resumes
+        someone else's context.
+
+        `codex exec --json` states the ID outright:
+
+            {"type": "thread.started", "thread_id": "019f96bd-...-19277a22af5e"}
+
+        Reading it removes the guess. Returns None when the frame is absent so
+        the caller can decline to adopt any ID rather than fall back to a scan.
+        """
+        for line in (raw_output or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{") or "thread.started" not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") != "thread.started":
+                continue
+            thread_id = event.get("thread_id")
+            if isinstance(thread_id, str) and thread_id.strip():
+                return thread_id.strip()
+        return None
+
     def run_codex(
         self,
         prompt: str,
@@ -9282,6 +9314,13 @@ User Request:
 
         if "Error: CODEX command failed" in output:
             return output
+
+        # Issue #449: record the ID Codex itself reported for this turn, so the
+        # next turn resumes exactly this session instead of whatever rollout
+        # file happened to be newest in the shared sessions directory.
+        _codex_thread_id = self.codex_thread_id_from_output(output)
+        if _codex_thread_id:
+            self.update_session_field(n8n_session_id, "session_id", _codex_thread_id)
 
         stripped = self.strip_metadata(output, "codex")
         if not stripped.strip() and output.strip():
@@ -11141,11 +11180,15 @@ User Request:
         # Codex is included here: it creates sessions with its own UUID that differs
         # from the pre-generated UUID in the session map, so we must capture the real
         # session ID after each new run for resume to work correctly on the next turn.
+        # Issue #449: codex is deliberately absent here. run_codex records the
+        # thread_id Codex reported for its own turn; scanning the shared
+        # ~/.codex/sessions directory by mtime could adopt a Codex Desktop
+        # session instead. #326 (session-turn memory) still holds because that
+        # recorded ID is the real one, not an inferred one.
         if not can_resume and current_runtime in (
             "copilot",
             "opencode",
             "gemini",
-            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
