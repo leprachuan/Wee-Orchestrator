@@ -34,7 +34,8 @@ def _get_session_mgr():
     mgr.copilot_bin = "/usr/local/bin/copilot"
     mgr.AGENTS = {
         "orchestrator": {
-            "path": "/opt/n8n-copilot-shim-dev",
+            # Real directory — dispatch refuses a missing agent workspace (iOS #8).
+            "path": __import__("tempfile").gettempdir(),
             "description": "Test",
             "name": "orchestrator",
         }

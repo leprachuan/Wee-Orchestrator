@@ -109,7 +109,8 @@ def _make_manager():
     mgr.mode = None
     mgr.claude_bin = "/usr/bin/claude"
     mgr.AGENTS = {
-        "orchestrator": {"path": "/opt/n8n-copilot-shim-dev", "name": "orchestrator"},
+        # Real directory — dispatch refuses a missing agent workspace (iOS #8).
+        "orchestrator": {"path": __import__("tempfile").gettempdir(), "name": "orchestrator"},
         "wee-dev": {"path": "/opt/wee-dev", "name": "wee-dev"},
     }
     mgr.get_or_create_session_data = MagicMock(

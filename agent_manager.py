@@ -10963,6 +10963,37 @@ User Request:
                         },
                     )
 
+    @staticmethod
+    def describe_missing_agent_workspace(agent: str, path: str) -> str:
+        """Explain an agent whose configured workspace is not on this host.
+
+        iOS issue #8. A configured agent whose path does not exist produced a raw
+        subprocess failure — "[Errno 2] No such file or directory:
+        '/mnt/nas/Agents/research'" — naming neither the agent nor what to do.
+        Every runtime passes this path as a subprocess cwd, so the same opaque
+        error surfaced from all of them, and it looked like a client bug because
+        a session on a *different* agent worked fine.
+        """
+        return (
+            f"Error: the '{agent}' agent is configured with working directory "
+            f"'{path}', which does not exist on the API host. Create that "
+            f"directory, correct the agent's path in agents.json, or pick a "
+            f"different agent. Other agents are unaffected."
+        )
+
+    def agent_workspace_error(self, agent: str) -> Optional[str]:
+        """Return an actionable message when the agent cannot be dispatched to.
+
+        None means the workspace is usable. A blank configured path is left
+        alone: some deployments intentionally rely on the process working
+        directory rather than a per-agent workspace.
+        """
+        info = self.AGENTS.get(agent) or self.AGENTS.get("orchestrator") or {}
+        path = (info.get("path") or "").strip()
+        if not path or os.path.isdir(path):
+            return None
+        return self.describe_missing_agent_workspace(agent, path)
+
     def _dispatch_single_runtime(
         self,
         runtime: str,
@@ -10979,6 +11010,14 @@ User Request:
         """Dispatch prompt to a single runtime and return the output."""
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
+
+        # iOS issue #8: every runtime hands this path to a subprocess as its
+        # cwd, so a missing agent workspace failed identically from all of them
+        # with a bare Errno 2. Check once, here, and say what to fix.
+        workspace_error = self.agent_workspace_error(agent)
+        if workspace_error:
+            print(f"[Dispatch] {workspace_error}", file=sys.stderr)
+            return workspace_error
 
         if runtime == "copilot":
             result = self.run_copilot(
