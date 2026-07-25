@@ -9,7 +9,9 @@ the session's ``provider`` configuration.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -212,6 +214,75 @@ def prefer_longer_text(final_text: Optional[str], streamed_text: Optional[str]) 
     return assembled if len(assembled) > len(final) else final
 
 
+def _ollama_num_ctx(base_url: str, model: str) -> Optional[int]:
+    """Return the effective num_ctx for an Ollama model, or None if unknown.
+
+    Ollama reports a model's *architecture* context (e.g. gemma4.context_length
+    = 131072) regardless of what it will actually allocate. What matters is the
+    `num_ctx` parameter baked into the model's Modelfile — without it Ollama
+    falls back to its own small default, which is the difference between a
+    working turn and a degenerate one.
+    """
+    root = (base_url or "").rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3].rstrip("/")
+    if not root:
+        return None
+    try:
+        request = urllib.request.Request(
+            f"{root}/api/show",
+            data=json.dumps({"model": model}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            document = json.loads(response.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+    for line in str(document.get("parameters") or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "num_ctx":
+            try:
+                return int(parts[1])
+            except ValueError:
+                return None
+    return None
+
+
+def describe_degenerate_ollama_turn(
+    model: str, prompt_chars: int, num_ctx: Optional[int]
+) -> str:
+    """Explain a turn that produced no usable content, and how to fix it.
+
+    The previous message blamed response length ("unusably short response"),
+    which is misleading: the usual cause is that the request does not fit the
+    model's allocated context, so Ollama has no room left to generate and stops
+    after roughly one token. Naming num_ctx turns a mystery into an action.
+    """
+    detail = (
+        f"Ollama model '{model}' returned no usable content. The Wee system "
+        f"prompt alone is ~{prompt_chars} characters"
+    )
+    if num_ctx is None:
+        return (
+            detail + ", and this model has no num_ctx set in its Modelfile, so "
+            "Ollama falls back to its small default and has no room left to "
+            "generate. Use a variant with a large num_ctx baked in, or set "
+            "OLLAMA_CONTEXT_LENGTH on the Ollama host."
+        )
+    if num_ctx < 16_384:
+        return (
+            detail + f", but this model allocates only num_ctx={num_ctx}. That "
+            "is too small for the agent prompt, leaving no room to generate. "
+            "Use a larger-context variant of this model."
+        )
+    return (
+        detail + f" and num_ctx={num_ctx} looks adequate, so the cause is "
+        "elsewhere — check the Ollama host logs for this request."
+    )
+
+
 async def execute_wee_copilot_async(
     *,
     prompt: str,
@@ -307,7 +378,11 @@ async def execute_wee_copilot_async(
                 await disconnect_result
             if route.provider == "ollama" and len(result_text.strip()) < 4:
                 raise WeeCopilotSDKError(
-                    "Ollama Copilot SDK returned an unusably short response"
+                    describe_degenerate_ollama_turn(
+                        route.model,
+                        len(prompt or ""),
+                        _ollama_num_ctx(route.base_url, route.model),
+                    )
                 )
             return result_text, str(actual_session_id) if actual_session_id else None
         except Exception as exc:

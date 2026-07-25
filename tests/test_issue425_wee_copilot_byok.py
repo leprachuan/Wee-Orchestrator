@@ -191,10 +191,11 @@ def test_unusably_short_ollama_sdk_response_triggers_fallback(monkeypatch):
     monkeypatch.setenv("WEE_OLLAMA_HOST", "http://ollama-dev.example:11434")
     route = resolve_wee_provider("ollama/gemma4:e4b")
 
-    with pytest.raises(
-        wee_copilot_sdk.WeeCopilotSDKError,
-        match="unusably short response",
-    ):
+    # Issue #451: the wording changed from "unusably short response" to a
+    # diagnosis, because blaming response length hid the real cause (the
+    # request not fitting the model's allocated num_ctx). Assert the behaviour
+    # and that the message is actionable, rather than pinning old prose.
+    with pytest.raises(wee_copilot_sdk.WeeCopilotSDKError) as raised:
         asyncio.run(
             execute_wee_copilot_async(
                 prompt="hello",
@@ -203,6 +204,11 @@ def test_unusably_short_ollama_sdk_response_triggers_fallback(monkeypatch):
                 timeout=42,
             )
         )
+
+    message = str(raised.value)
+    assert "no usable content" in message
+    assert "gemma4:e4b" in message, "must name the model that failed"
+    assert "num_ctx" in message, "must point at the context window"
 
 
 def test_api_wee_runtime_uses_shared_sdk_executor(monkeypatch):
