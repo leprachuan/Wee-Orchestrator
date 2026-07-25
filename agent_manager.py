@@ -5728,6 +5728,61 @@ You can mention an agent in your prompt and it will auto-delegate:
         "environment variable, then try the chat again."
     )
 
+    @staticmethod
+    def _codex_error_text(payload, _depth: int = 0) -> str:
+        """Reduce a Codex error payload to the message a human should read.
+
+        Issue #410: Codex reports failures double-encoded — the frame is
+        `{"type":"error","message":"<json string>"}` and the readable sentence
+        sits at `error.message` *inside* that string:
+
+            {"type":"error","status":400,
+             "error":{"type":"invalid_request_error",
+                      "message":"The 'gpt-5.6' model is not supported when
+                                 using Codex with a ChatGPT account."}}
+
+        Surfacing the frame verbatim put that whole blob in the transcript.
+        Unwrap repeatedly (bounded, so a pathological payload cannot spin) and
+        prefer the innermost human sentence, falling back to whatever text is
+        available rather than dropping the failure entirely.
+        """
+        # Bounded purely to stop runaway recursion on pathological input; deep
+        # enough that realistically nested payloads still reduce to a sentence.
+        if _depth > 8 or payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            text = payload.strip()
+            if not text:
+                return ""
+            # Only try to unwrap when it actually looks like a JSON object.
+            if text.startswith("{"):
+                try:
+                    return (
+                        SessionManager._codex_error_text(json.loads(text), _depth + 1)
+                        or text
+                    )
+                except (ValueError, TypeError):
+                    return text
+            return text
+
+        if isinstance(payload, dict):
+            # Most specific first: a nested error object's own message.
+            nested = payload.get("error")
+            if nested is not None:
+                inner = SessionManager._codex_error_text(nested, _depth + 1)
+                if inner:
+                    return inner
+            for key in ("message", "detail", "text"):
+                value = payload.get(key)
+                if isinstance(value, (str, dict)):
+                    inner = SessionManager._codex_error_text(value, _depth + 1)
+                    if inner:
+                        return inner
+            return ""
+
+        return str(payload).strip()
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
@@ -5969,15 +6024,30 @@ You can mention an agent in your prompt and it will auto-delegate:
                                 jsonl_texts.append(_text)
                     elif _etype == "turn.failed":
                         _codex_turn_failed = True
-                        _err = _event.get("error") or {}
+                        # Issue #410: unwrap the double-encoded payload so the
+                        # transcript shows the sentence, not the JSON frame.
                         _codex_error_msg = (
-                            _err.get("message", "") if isinstance(_err, dict)
-                            else str(_err)
+                            self._codex_error_text(_event.get("error"))
+                            or _codex_error_msg
                         )
                     elif _etype == "error":
-                        _codex_error_msg = _event.get("message", "") or str(
-                            _event.get("error", "")
+                        _codex_error_msg = (
+                            self._codex_error_text(_event.get("message"))
+                            or self._codex_error_text(_event.get("error"))
+                            or _codex_error_msg
                         )
+                    elif (
+                        _etype == "item.completed"
+                        and isinstance(_event.get("item"), dict)
+                        and _event["item"].get("type") == "error"
+                    ):
+                        # Codex also reports non-fatal problems as error items
+                        # (e.g. unknown model metadata). Keep one as context if
+                        # nothing more specific arrives.
+                        if not _codex_error_msg:
+                            _codex_error_msg = self._codex_error_text(
+                                _event["item"].get("message")
+                            )
                 except (ValueError, KeyError):
                     continue
 
