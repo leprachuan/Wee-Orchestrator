@@ -4651,11 +4651,16 @@ You can mention an agent in your prompt and it will auto-delegate:
         truth), then the deprecated CODEX_MODELS_JSON env var override, then
         the static CODEX_MODELS fallback.
         """
-        # A ChatGPT-authenticated Codex CLI currently selects its supported
-        # model server-side. Passing arbitrary catalog IDs (including model
-        # variants valid in other runtimes) causes a structured 400 response.
-        # Offer only the account default in that configuration.
+        # Issue #448: a ChatGPT-authenticated Codex CLI rejects model IDs the
+        # account does not carry ("The '<model>' model is not supported when
+        # using Codex with a ChatGPT account"), but it does support a real set
+        # of them. Collapsing the catalog to "default" made codex the only
+        # runtime where no model could be chosen. Offer the account's own list,
+        # falling back to "default" only when it cannot be determined.
         if self._codex_uses_chatgpt_account():
+            account_models = self._codex_account_models()
+            if account_models:
+                return {"Codex CLI": ["default"] + account_models}
             return {"Codex CLI": ["default"]}
 
         manifest_models = self._manifest_models_to_dict("codex")
@@ -4678,6 +4683,38 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
+
+    def _codex_account_models(self) -> Optional[List[str]]:
+        """Return the model slugs the local Codex CLI offers for this account.
+
+        Codex CLI still has no model-listing subcommand, but v0.14x maintains
+        `~/.codex/models_cache.json` — the same catalog the CLI itself
+        consults. Only entries marked `visibility: "list"` are user-selectable;
+        others (for example `codex-auto-review`) are internal and must not be
+        offered. Returns None when the cache is absent or unusable so callers
+        can fall back to the account default.
+        """
+        cache_path = Path.home() / ".codex" / "models_cache.json"
+        try:
+            with open(cache_path, "r", encoding="utf-8") as handle:
+                document = json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+        entries = document.get("models")
+        if not isinstance(entries, list):
+            return None
+
+        slugs: List[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("visibility") != "list":
+                continue
+            slug = entry.get("slug")
+            if isinstance(slug, str) and slug.strip() and slug not in slugs:
+                slugs.append(slug.strip())
+        return slugs or None
 
     def _codex_uses_chatgpt_account(self) -> bool:
         """Return whether the local Codex CLI is logged in with ChatGPT OAuth.
@@ -9010,16 +9047,35 @@ User Request:
         effective_timeout = timeout if timeout is not None else self.command_timeout
 
         if model and self._codex_uses_chatgpt_account():
-            # ChatGPT OAuth does not accept client-selected model IDs. Let the
-            # Codex service select the account's supported default instead of
-            # issuing `-m <unsupported-model>` and returning an empty turn.
-            requested_model = model
-            model = ""
-            self.update_session_field(n8n_session_id, "model", "default")
-            print(
-                f"[Codex] Ignoring requested model '{requested_model}' for ChatGPT-authenticated Codex; using account default.",
-                file=sys.stderr,
-            )
+            # A ChatGPT-authenticated Codex CLI rejects models the account does
+            # not carry, returning a structured 400 and an empty turn. Only
+            # override in that case (issue #448) — a model the account *does*
+            # support must be honored, otherwise selecting one silently does
+            # nothing. "default" already means "let the account decide".
+            account_models = self._codex_account_models()
+            if model != "default" and account_models is not None and model not in account_models:
+                requested_model = model
+                model = ""
+                self.update_session_field(n8n_session_id, "model", "default")
+                print(
+                    f"[Codex] Model '{requested_model}' is not available to this "
+                    f"ChatGPT account; using the account default instead.",
+                    file=sys.stderr,
+                )
+            elif model == "default":
+                # Sentinel, not a real model ID — omit -m entirely.
+                model = ""
+            elif account_models is None:
+                # Cache unreadable: fall back to the previous conservative
+                # behavior rather than risking a 400 on an unverifiable model.
+                requested_model = model
+                model = ""
+                self.update_session_field(n8n_session_id, "model", "default")
+                print(
+                    f"[Codex] Could not verify '{requested_model}' against this "
+                    f"ChatGPT account; using the account default instead.",
+                    file=sys.stderr,
+                )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
