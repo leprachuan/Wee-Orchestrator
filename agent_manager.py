@@ -11515,12 +11515,6 @@ User Request:
                     "", current_runtime, n8n_session_id=n8n_session_id
                 )
             )
-        elif current_runtime == "codex":
-            # Codex Desktop and the local API share ~/.codex/sessions. A
-            # filesystem scan can therefore select an unrelated Desktop task
-            # and make `codex exec resume` hang or return its context. Until
-            # the API owns isolated Codex session state, start a clean turn.
-            can_resume = False
         elif current_runtime == "wee":
             # Issue #108 fix: Wee has no external session_id — history is keyed
             # by n8n_session_id in session_map.  Must pass n8n_session_id so
@@ -11556,6 +11550,7 @@ User Request:
             "copilot",
             "opencode",
             "gemini",
+            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
