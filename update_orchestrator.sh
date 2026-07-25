@@ -84,6 +84,19 @@ sleep 3
 # ------------------------------------------------------------------
 cd "$REPO_DIR"
 echo "--- Git pull ($BRANCH) ---"
+# Issues #406/#411: a downloaded package has no .git, so git pull cannot work.
+# Hand off to the package updater, which verifies a published sha256 before
+# replacing anything — the same contract the macOS updater uses.
+if [ ! -d "$REPO_DIR/.git" ]; then
+    echo "No git checkout detected — using package-based update"
+    if [ -x "$REPO_DIR/scripts/update-api-package.sh" ]; then
+        exec bash "$REPO_DIR/scripts/update-api-package.sh" "$REPO_DIR"
+    fi
+    echo "ERROR: scripts/update-api-package.sh missing; cannot update"
+    notify "❌ $ENV_NAME Wee Orchestrator update FAILED — no git checkout and no package updater"
+    exit 1
+fi
+
 git fetch origin "$BRANCH" 2>&1 || true
 BEFORE=$(git rev-parse --short HEAD)
 if ! git pull origin "$BRANCH" 2>&1; then
