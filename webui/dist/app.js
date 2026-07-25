@@ -351,8 +351,11 @@ function updateContextRing(usage) {
   const fill = $('ctx-ring-fill');
   if (fill) {
     // Offset shrinks as usage grows, so the arc sweeps clockwise from empty.
+    // Must be an inline *style*, not setAttribute: app.css declares
+    // stroke-dashoffset, and a CSS declaration beats an SVG presentation
+    // attribute, so setAttribute() renders nothing. Verified in a browser.
     const offset = CTX_RING_CIRCUMFERENCE * (1 - percent / 100);
-    fill.setAttribute('stroke-dashoffset', String(offset));
+    fill.style.strokeDashoffset = String(offset);
   }
 
   const label = $('meta-context-label');

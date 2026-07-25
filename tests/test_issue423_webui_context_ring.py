@@ -56,6 +56,16 @@ class TestIssue423WebUIContextRing(unittest.TestCase):
         call_at = self.js.index("updateContextRing(data?.wee_context_usage)")
         self.assertGreater(call_at, meta_at)
 
+    def test_offset_is_set_as_inline_style_not_an_attribute(self):
+        """A CSS declaration beats an SVG presentation attribute.
+
+        app.css declares stroke-dashoffset, so setAttribute('stroke-dashoffset')
+        is silently ignored and the arc never moves. Caught in a browser, where
+        computed dashoffset stayed at the empty value while the label read 18%.
+        """
+        self.assertIn("style.strokeDashoffset", self.js)
+        self.assertNotIn("setAttribute('stroke-dashoffset'", self.js)
+
     def test_hides_itself_when_the_runtime_reports_nothing(self):
         self.assertIn("pill.hidden = true", self.js)
 
