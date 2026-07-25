@@ -181,10 +181,19 @@ class TestBgEventsEndpoint:
             "/api/v1/sessions/no-such-session/bg-events",
             headers=self.headers,
         )
-        assert resp.status_code == 200
-        assert resp.json()["events"] == []
+        assert resp.status_code == 404
 
     def test_bg_events_returns_and_clears(self):
+        # TestClient is not loopback, so shared-key authentication resolves to
+        # shared_key_user rather than trusting X-User-Identity.
+        import agent_manager
+
+        agent_manager._session_mgr.get_or_create_session_data(
+            "test-sess-f017", identity="shared_key_user"
+        )
+        agent_manager._session_mgr.update_session_field(
+            "test-sess-f017", "channel", "webui"
+        )
         bg_mgr = self.app.state.bg_task_mgr
         bg_mgr.push_bg_event(
             "test-sess-f017",
@@ -213,3 +222,15 @@ class TestBgEventsEndpoint:
     def test_bg_events_requires_auth(self):
         resp = self.client.get("/api/v1/sessions/any-session/bg-events")
         assert resp.status_code in (401, 403)
+
+    def test_background_task_rejects_unowned_origin_session(self):
+        response = self.client.post(
+            "/api/v1/background-tasks",
+            json={
+                "prompt": "must not route to another user",
+                "origin_session_id": "missing-or-unowned-session",
+            },
+            headers=self.headers,
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"] == "Invalid origin session"

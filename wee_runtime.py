@@ -128,6 +128,31 @@ _DEFAULT_FREE_CONFIG = {
 }
 
 
+def _get_orchestrator_token() -> str | None:
+    """Return the configured credential for internal Orchestrator API calls.
+
+    Runtime subprocesses inherit ``API_SHARED_KEY`` from the service environment.
+    Deployments may instead supply a scoped ``WEE_ORCHESTRATOR_TOKEN``.  Do not
+    provide a literal fallback: using an old key can authenticate as the wrong
+    caller after credentials are rotated.
+    """
+    token = os.environ.get("WEE_ORCHESTRATOR_TOKEN")
+    if token:
+        return token
+    shared_key = os.environ.get("API_SHARED_KEY")
+    return f"shared_{shared_key}" if shared_key else None
+
+
+def _add_orchestrator_caller_headers(request) -> None:
+    """Forward trusted caller routing context injected by the parent process."""
+    identity = os.environ.get("WEE_ORCHESTRATOR_USER_IDENTITY")
+    channel = os.environ.get("WEE_ORCHESTRATOR_AUTH_CHANNEL")
+    if identity:
+        request.add_header("X-User-Identity", identity)
+    if channel:
+        request.add_header("X-Auth-Channel", channel)
+
+
 def load_free_model_config(config_path: str = None) -> dict:
     """Load wee_free_models.json; fall back to hardcoded defaults."""
     if config_path is None:

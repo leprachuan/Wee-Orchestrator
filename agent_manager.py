@@ -6,6 +6,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import contextvars
 import hashlib
 import inspect
 import json
@@ -23,6 +24,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
+
+
+# Native Wee tool calls run in-process, so they cannot rely on subprocess
+# environment variables to retain the originating authenticated session.
+_wee_dispatch_context = contextvars.ContextVar("wee_dispatch_context", default=None)
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2198,6 +2204,7 @@ class SessionManager:
         # Executable paths (resolved dynamically)
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
+        self.codex_bin = find_executable("codex")
         self.devin_bin = find_executable("devin")
         self.cursor_bin = find_executable("agent")
 
@@ -4697,11 +4704,16 @@ You can mention an agent in your prompt and it will auto-delegate:
         truth), then the deprecated CODEX_MODELS_JSON env var override, then
         the static CODEX_MODELS fallback.
         """
-        # A ChatGPT-authenticated Codex CLI currently selects its supported
-        # model server-side. Passing arbitrary catalog IDs (including model
-        # variants valid in other runtimes) causes a structured 400 response.
-        # Offer only the account default in that configuration.
+        # Issue #448: a ChatGPT-authenticated Codex CLI rejects model IDs the
+        # account does not carry ("The '<model>' model is not supported when
+        # using Codex with a ChatGPT account"), but it does support a real set
+        # of them. Collapsing the catalog to "default" made codex the only
+        # runtime where no model could be chosen. Offer the account's own list,
+        # falling back to "default" only when it cannot be determined.
         if self._codex_uses_chatgpt_account():
+            account_models = self._codex_account_models()
+            if account_models:
+                return {"Codex CLI": ["default"] + account_models}
             return {"Codex CLI": ["default"]}
 
         manifest_models = self._manifest_models_to_dict("codex")
@@ -4725,6 +4737,38 @@ You can mention an agent in your prompt and it will auto-delegate:
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
 
+    def _codex_account_models(self) -> Optional[List[str]]:
+        """Return the model slugs the local Codex CLI offers for this account.
+
+        Codex CLI still has no model-listing subcommand, but v0.14x maintains
+        `~/.codex/models_cache.json` — the same catalog the CLI itself
+        consults. Only entries marked `visibility: "list"` are user-selectable;
+        others (for example `codex-auto-review`) are internal and must not be
+        offered. Returns None when the cache is absent or unusable so callers
+        can fall back to the account default.
+        """
+        cache_path = Path.home() / ".codex" / "models_cache.json"
+        try:
+            with open(cache_path, "r", encoding="utf-8") as handle:
+                document = json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+        entries = document.get("models")
+        if not isinstance(entries, list):
+            return None
+
+        slugs: List[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("visibility") != "list":
+                continue
+            slug = entry.get("slug")
+            if isinstance(slug, str) and slug.strip() and slug not in slugs:
+                slugs.append(slug.strip())
+        return slugs or None
+
     def _codex_uses_chatgpt_account(self) -> bool:
         """Return whether the local Codex CLI is logged in with ChatGPT OAuth.
 
@@ -4737,8 +4781,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             return cached
 
         try:
+            codex_bin = (
+                getattr(self, "codex_bin", None) or find_executable("codex") or "codex"
+            )
             status = subprocess.run(
-                ["codex", "login", "status"],
+                [codex_bin, "login", "status"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -5734,6 +5781,61 @@ You can mention an agent in your prompt and it will auto-delegate:
         "environment variable, then try the chat again."
     )
 
+    @staticmethod
+    def _codex_error_text(payload, _depth: int = 0) -> str:
+        """Reduce a Codex error payload to the message a human should read.
+
+        Issue #410: Codex reports failures double-encoded — the frame is
+        `{"type":"error","message":"<json string>"}` and the readable sentence
+        sits at `error.message` *inside* that string:
+
+            {"type":"error","status":400,
+             "error":{"type":"invalid_request_error",
+                      "message":"The 'gpt-5.6' model is not supported when
+                                 using Codex with a ChatGPT account."}}
+
+        Surfacing the frame verbatim put that whole blob in the transcript.
+        Unwrap repeatedly (bounded, so a pathological payload cannot spin) and
+        prefer the innermost human sentence, falling back to whatever text is
+        available rather than dropping the failure entirely.
+        """
+        # Bounded purely to stop runaway recursion on pathological input; deep
+        # enough that realistically nested payloads still reduce to a sentence.
+        if _depth > 8 or payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            text = payload.strip()
+            if not text:
+                return ""
+            # Only try to unwrap when it actually looks like a JSON object.
+            if text.startswith("{"):
+                try:
+                    return (
+                        SessionManager._codex_error_text(json.loads(text), _depth + 1)
+                        or text
+                    )
+                except (ValueError, TypeError):
+                    return text
+            return text
+
+        if isinstance(payload, dict):
+            # Most specific first: a nested error object's own message.
+            nested = payload.get("error")
+            if nested is not None:
+                inner = SessionManager._codex_error_text(nested, _depth + 1)
+                if inner:
+                    return inner
+            for key in ("message", "detail", "text"):
+                value = payload.get(key)
+                if isinstance(value, (str, dict)):
+                    inner = SessionManager._codex_error_text(value, _depth + 1)
+                    if inner:
+                        return inner
+            return ""
+
+        return str(payload).strip()
+
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
         # Strip [STATUS_UPDATE: ...] markers (F004 — mobile channel progress)
@@ -5975,15 +6077,30 @@ You can mention an agent in your prompt and it will auto-delegate:
                                 jsonl_texts.append(_text)
                     elif _etype == "turn.failed":
                         _codex_turn_failed = True
-                        _err = _event.get("error") or {}
+                        # Issue #410: unwrap the double-encoded payload so the
+                        # transcript shows the sentence, not the JSON frame.
                         _codex_error_msg = (
-                            _err.get("message", "") if isinstance(_err, dict)
-                            else str(_err)
+                            self._codex_error_text(_event.get("error"))
+                            or _codex_error_msg
                         )
                     elif _etype == "error":
-                        _codex_error_msg = _event.get("message", "") or str(
-                            _event.get("error", "")
+                        _codex_error_msg = (
+                            self._codex_error_text(_event.get("message"))
+                            or self._codex_error_text(_event.get("error"))
+                            or _codex_error_msg
                         )
+                    elif (
+                        _etype == "item.completed"
+                        and isinstance(_event.get("item"), dict)
+                        and _event["item"].get("type") == "error"
+                    ):
+                        # Codex also reports non-fatal problems as error items
+                        # (e.g. unknown model metadata). Keep one as context if
+                        # nothing more specific arrives.
+                        if not _codex_error_msg:
+                            _codex_error_msg = self._codex_error_text(
+                                _event["item"].get("message")
+                            )
                 except (ValueError, KeyError):
                     continue
 
@@ -7203,7 +7320,27 @@ User Request:
 
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
-            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
+            caller_session_data = self.load_session_data(n8n_session_id) or {}
+            _sub_env = {
+                **os.environ,
+                "WEE_SESSION_ID": n8n_session_id,
+                "WEE_ORIGIN_SESSION_ID": n8n_session_id,
+                "WEE_ORCHESTRATOR_USER_IDENTITY": caller_session_data.get("identity", ""),
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": caller_session_data.get("channel", "webui"),
+            }
+            # GUI-launched macOS processes receive a minimal system PATH.  CLI
+            # wrappers installed by Homebrew (including Codex, whose launcher
+            # invokes `env node`) need the Homebrew Node directory available to
+            # their child process as well as to the initial executable lookup.
+            _cli_paths = [
+                str(Path.home() / ".local" / "bin"),
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+            ]
+            _existing_paths = _sub_env.get("PATH", "").split(os.pathsep)
+            _sub_env["PATH"] = os.pathsep.join(
+                _cli_paths + [path for path in _existing_paths if path not in _cli_paths]
+            )
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -7956,18 +8093,6 @@ User Request:
 
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
-
-        if model and self._codex_uses_chatgpt_account():
-            # ChatGPT OAuth does not accept client-selected model IDs. Let the
-            # Codex service select the account's supported default instead of
-            # issuing `-m <unsupported-model>` and returning an empty turn.
-            requested_model = model
-            model = ""
-            self.update_session_field(n8n_session_id, "model", "default")
-            print(
-                f"[Codex] Ignoring requested model '{requested_model}' for ChatGPT-authenticated Codex; using account default.",
-                file=sys.stderr,
-            )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
@@ -9037,8 +9162,43 @@ User Request:
         # Resolve permission mode from session data (backward compat with yolo_mode)
         mode = self._resolve_permission_mode(session_data, mode)
 
+        codex_bin = getattr(self, "codex_bin", None) or find_executable("codex")
+        if not codex_bin:
+            return "Error: Codex executable not found. Install Codex or add it to PATH."
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        if model and self._codex_uses_chatgpt_account():
+            # A ChatGPT-authenticated Codex CLI rejects models the account does
+            # not carry, returning a structured 400 and an empty turn. Only
+            # override in that case (issue #448) — a model the account *does*
+            # support must be honored, otherwise selecting one silently does
+            # nothing. "default" already means "let the account decide".
+            account_models = self._codex_account_models()
+            if model != "default" and account_models is not None and model not in account_models:
+                requested_model = model
+                model = ""
+                self.update_session_field(n8n_session_id, "model", "default")
+                print(
+                    f"[Codex] Model '{requested_model}' is not available to this "
+                    f"ChatGPT account; using the account default instead.",
+                    file=sys.stderr,
+                )
+            elif model == "default":
+                # Sentinel, not a real model ID — omit -m entirely.
+                model = ""
+            elif account_models is None:
+                # Cache unreadable: fall back to the previous conservative
+                # behavior rather than risking a 400 on an unverifiable model.
+                requested_model = model
+                model = ""
+                self.update_session_field(n8n_session_id, "model", "default")
+                print(
+                    f"[Codex] Could not verify '{requested_model}' against this "
+                    f"ChatGPT account; using the account default instead.",
+                    file=sys.stderr,
+                )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
@@ -9084,7 +9244,7 @@ User Request:
 
         if resume and session_id:
             # Resume existing session — v0.125.0+ uses `codex exec resume` subcommand
-            cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "resume"]
+            cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -9099,7 +9259,7 @@ User Request:
         else:
             # Start new session — v0.125.0+: --full-auto for normal mode,
             # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
-            cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
+            cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -9548,6 +9708,17 @@ User Request:
                 stream_buffer.push("done", error_msg)
             return error_msg
 
+    @staticmethod
+    def _wee_response_promises_search(text: str) -> bool:
+        """Return true only for an explicit, unfinished promise to web-search."""
+        normalized = " ".join((text or "").lower().split())
+        return bool(
+            re.search(
+                r"\b(?:i(?:'|’)ll|i will|let me|i need to)\s+(?:web\s+)?search\b",
+                normalized,
+            )
+        )
+
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
     def _wee_load_messages(
@@ -9680,11 +9851,39 @@ User Request:
         """Resolve the context window size for a wee model."""
         return self._wee_get_context_limit_for_api(model, "")
 
+    @staticmethod
+    def _wee_ollama_context_window_for_api(api_base: str) -> Optional[int]:
+        """Return the configured context window when ``api_base`` is Ollama.
+
+        Ollama defaults to 4K unless each generation supplies ``num_ctx``.
+        The desktop Local API sets this value to 64K, while server deployments
+        remain unchanged unless they explicitly opt in through the same env var.
+        """
+        configured = os.environ.get("WEE_OLLAMA_CONTEXT_WINDOW", "").strip()
+        if not configured:
+            return None
+        try:
+            context_window = int(configured)
+        except ValueError:
+            return None
+        if context_window < 4_096:
+            return None
+
+        endpoint = (api_base or "").rstrip("/").lower()
+        ollama_host = os.environ.get(
+            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        ).rstrip("/").lower()
+        return context_window if endpoint.startswith(ollama_host) else None
+
     def _wee_get_context_limit_for_api(self, model: str, api_base: str) -> int:
         """Resolve the context window size for a wee model and endpoint."""
+        if configured_window := self._wee_ollama_context_window_for_api(api_base):
+            return configured_window
+
         normalized = (model or "").lower()
         known_windows = [
             ("gemma4", 128000),
+            ("gemma3", 131072),
             ("llama-4-scout", 131072),
             ("llama-3.1", 131072),
             ("64k", 65536),
@@ -10181,6 +10380,12 @@ User Request:
                 "runtime": runtime, "model": model, "timeout": 1800,
                 "origin_session_id": origin_session_id,
             }
+            caller_context = _wee_dispatch_context.get() or {}
+            origin_session_id = os.environ.get(
+                "WEE_ORIGIN_SESSION_ID", os.environ.get("WEE_SESSION_ID", "")
+            ) or caller_context.get("origin_session_id", "")
+            if origin_session_id:
+                task_data["origin_session_id"] = origin_session_id
         else:
             endpoint = "/api/v1/query"
             http_timeout = 120
@@ -10193,6 +10398,13 @@ User Request:
         req = urllib.request.Request(url, method="POST")
         req.add_header("Content-Type", "application/json")
         req.add_header("Authorization", f"Bearer {token}")
+        caller_context = _wee_dispatch_context.get() or {}
+        identity = os.environ.get("WEE_ORCHESTRATOR_USER_IDENTITY") or caller_context.get("identity")
+        channel = os.environ.get("WEE_ORCHESTRATOR_AUTH_CHANNEL") or caller_context.get("channel")
+        if identity:
+            req.add_header("X-User-Identity", identity)
+        if channel:
+            req.add_header("X-Auth-Channel", channel)
 
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -10664,16 +10876,27 @@ User Request:
                 render_type,
             )
         elif runtime == "wee":
-            result = self.run_wee_native(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            context_token = _wee_dispatch_context.set(
+                {
+                    "origin_session_id": n8n_session_id,
+                    "identity": session_data.get("identity"),
+                    "channel": session_data.get("channel"),
+                }
             )
+            try:
+                result = self.run_wee_native(
+                    prompt,
+                    model,
+                    agent,
+                    session_id if can_resume else None,
+                    can_resume,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
+                )
+            finally:
+                _wee_dispatch_context.reset(context_token)
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -13381,35 +13604,35 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         error=None,
         notify: bool = True,
         agent: Optional[str] = None,
+        is_critical: bool = False,
     ):
         """Emit a background task completion notification via notification_mgr.
 
         When ``is_critical`` is True the notification bypasses the global
         suppression toggle (used for heartbeat alerts and system crashes).
         """
-        if notification_mgr is None:
-            return
         try:
-            # Re-check per-identity mute preference at emit time
-            # (user may have muted after the task was created).
-            if notify and not is_critical:
-                if notification_mgr.is_muted(user_identity):
-                    notify = False
-                elif agent and notification_mgr.is_agent_muted(user_identity, agent):
-                    notify = False
+            if notification_mgr is not None:
+                # Re-check per-identity mute preference at emit time
+                # (user may have muted after the task was created).
+                if notify and not is_critical:
+                    if notification_mgr.is_muted(user_identity):
+                        notify = False
+                    elif agent and notification_mgr.is_agent_muted(user_identity, agent):
+                        notify = False
 
-            user_key = bg_task_mgr._user_key(channel, user_identity)
-            notification_mgr.create_notification(
-                task_id=task_id,
-                description=prompt[:200],
-                status=status,
-                channel=channel,
-                user_key=user_key,
-                output_preview=output_preview,
-                error=error,
-                skip_external=not notify,
-                agent=agent,
-            )
+                user_key = bg_task_mgr._user_key(channel, user_identity)
+                notification_mgr.create_notification(
+                    task_id=task_id,
+                    description=prompt[:200],
+                    status=status,
+                    channel=channel,
+                    user_key=user_key,
+                    output_preview=output_preview,
+                    error=error,
+                    skip_external=not notify,
+                    agent=agent,
+                )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
             origin_sid = task.get("origin_session_id") if task else None
@@ -13846,7 +14069,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
             elif rt == "codex":
-                _codex_bin = _which_bin("codex") or "codex"
+                _codex_bin = find_executable("codex") or "codex"
                 _cmd = [_codex_bin, "exec", "--json", "--skip-git-repo-check"]
                 if perm_mode == "elevated":
                     _cmd.extend([
@@ -13999,7 +14222,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
                     _cmd = [_oc_bin, "run", "--model", model, context_prompt]
                 elif runtime == "codex":
-                    _codex_bin = _which_bin("codex") or "codex"
+                    _codex_bin = find_executable("codex") or "codex"
                     _cmd = [
                         _codex_bin,
                         "exec",
@@ -14126,6 +14349,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "WEE_AGENT_DIR": agent_dir,
                 "WEE_SESSION_ID": session_id,
                 "WEE_TASK_ID": task_id,
+                "WEE_ORIGIN_SESSION_ID": (
+                    bg_task_mgr.get_task(task_id) or {}
+                ).get("origin_session_id", ""),
+                "WEE_ORCHESTRATOR_USER_IDENTITY": user_identity,
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": channel,
             }
 
             # Use Popen for incremental output capture
@@ -14561,6 +14789,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         channel = user["channel"]
         identity = user["identity"]
 
+        # Origin sessions are routing targets, so never accept an arbitrary
+        # session ID from another user/channel.  Omitting it remains valid for
+        # API-created tasks that only need normal per-user notifications.
+        if body.origin_session_id:
+            origin = session_mgr.load_session_data(body.origin_session_id)
+            if (
+                not isinstance(origin, dict)
+                or origin.get("identity") != identity
+                or origin.get("channel") != channel
+            ):
+                raise HTTPException(status_code=422, detail="Invalid origin session")
+
         # Check concurrent limit (used below after resolving params)
 
         # Resolve agent/runtime/model — default to user's current session config
@@ -14737,12 +14977,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/sessions/{session_id}/bg-events")
     async def get_session_bg_events(session_id: str, request: Request):
         """Return and clear pending BG task completion events."""
-        await authenticate(
+        user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        origin = session_mgr.load_session_data(session_id)
+        if (
+            not isinstance(origin, dict)
+            or origin.get("identity") != user["identity"]
+            or origin.get("channel") != user["channel"]
+        ):
+            raise HTTPException(status_code=404, detail="Session not found")
         events = bg_task_mgr.pop_bg_events(session_id)
         return {"events": events}
 
