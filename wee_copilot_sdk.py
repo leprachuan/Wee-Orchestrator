@@ -331,6 +331,58 @@ def describe_degenerate_ollama_turn(
     )
 
 
+def normalize_sdk_context_usage(payload: Any) -> Optional[dict]:
+    """Map the SDK's SESSION_USAGE_INFO event onto Wee's context-usage shape.
+
+    Issue #423. The clients read `wee_context_usage` with `context_window`,
+    `current_context_tokens` and `context_percent`. That dict used to be built by
+    `_wee_save_runtime_state`, whose caller #443 removed along with the
+    OpenAI-compatible loop — so nothing has populated it since, and both the
+    macOS ring and the WebUI had no data to render.
+
+    The SDK reports the same facts directly:
+
+        {"current_tokens": 14244, "token_limit": 128000, "system_tokens": 9715,
+         "tool_definitions_tokens": 4467, "conversation_tokens": 62}
+
+    Returns None when the payload cannot yield a usable window, so a caller
+    never persists a misleading 0%.
+    """
+    if payload is None:
+        return None
+    data = payload if isinstance(payload, dict) else getattr(payload, "__dict__", None)
+    if not isinstance(data, dict):
+        return None
+
+    def _int(name: str) -> Optional[int]:
+        value = data.get(name)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    window = _int("token_limit")
+    current = _int("current_tokens")
+    if not window or window <= 0 or current is None or current < 0:
+        return None
+
+    percent = min(100.0, max(0.0, (current / window) * 100.0))
+    usage = {
+        "runtime": "wee",
+        "context_window": window,
+        "current_context_tokens": current,
+        "context_percent": round(percent, 2),
+        "percent_used": round(percent, 2),
+        "source": "copilot-sdk",
+    }
+    # Useful for explaining *why* the window is full; omitted when absent.
+    for extra in ("system_tokens", "tool_definitions_tokens", "conversation_tokens"):
+        value = _int(extra)
+        if value is not None:
+            usage[extra] = value
+    return usage
+
+
 async def execute_wee_copilot_async(
     *,
     prompt: str,
@@ -384,6 +436,11 @@ async def execute_wee_copilot_async(
         ):
             if event_callback:
                 event_callback("tool_call", event)
+        elif event_type == getattr(SessionEventType, "SESSION_USAGE_INFO", None):
+            # Issue #423: surface context usage so callers can persist it.
+            usage = normalize_sdk_context_usage(getattr(event, "data", None))
+            if usage and event_callback:
+                event_callback("usage", usage)
         elif event_type in (
             SessionEventType.SESSION_ERROR,
             SessionEventType.MODEL_CALL_FAILURE,

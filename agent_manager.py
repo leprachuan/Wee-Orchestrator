@@ -9746,6 +9746,15 @@ User Request:
             def on_sdk_event(kind, payload):
                 if kind == "tool_call":
                     tool_calls_seen["count"] += 1
+                if kind == "usage":
+                    # Issue #423: persist context usage so /sessions/{id}/status
+                    # can report it to the macOS ring and the WebUI pill. Nothing
+                    # had populated this since #443 removed the loop that did.
+                    if isinstance(payload, dict) and payload:
+                        self.update_session_field(
+                            n8n_session_id, "wee_context_usage", payload
+                        )
+                    return
                 if not stream_buffer:
                     return
                 if kind == "chunk":

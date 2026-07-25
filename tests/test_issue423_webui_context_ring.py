@@ -92,5 +92,76 @@ class TestIssue423WebUIContextRing(unittest.TestCase):
         self.assertIn('"context_percent"', source)
 
 
+class TestContextUsageIsActuallyPopulated(unittest.TestCase):
+    """The ring is useless if nothing records usage.
+
+    `_wee_save_runtime_state` built `wee_context_usage`, but #443 removed its
+    caller with the OpenAI loop, so the field was never written on the SDK path —
+    the macOS ring and this WebUI pill both had no data. The SDK reports the same
+    facts via SESSION_USAGE_INFO, captured verbatim from a live turn:
+
+        {"current_tokens": 14244, "messages_length": 2, "token_limit": 128000,
+         "conversation_tokens": 62, "is_initial": true, "system_tokens": 9715,
+         "tool_definitions_tokens": 4467}
+    """
+
+    LIVE_PAYLOAD = {
+        "current_tokens": 14244,
+        "messages_length": 2,
+        "token_limit": 128000,
+        "conversation_tokens": 62,
+        "is_initial": True,
+        "system_tokens": 9715,
+        "tool_definitions_tokens": 4467,
+    }
+
+    def test_live_payload_maps_to_the_shape_clients_read(self):
+        from wee_copilot_sdk import normalize_sdk_context_usage
+
+        usage = normalize_sdk_context_usage(self.LIVE_PAYLOAD)
+
+        self.assertIsNotNone(usage)
+        self.assertEqual(usage["context_window"], 128000)
+        self.assertEqual(usage["current_context_tokens"], 14244)
+        self.assertAlmostEqual(usage["context_percent"], 11.13, places=1)
+        # Kept for explaining *why* a window is full.
+        self.assertEqual(usage["system_tokens"], 9715)
+        self.assertEqual(usage["tool_definitions_tokens"], 4467)
+
+    def test_unusable_payloads_yield_none_not_a_misleading_zero(self):
+        from wee_copilot_sdk import normalize_sdk_context_usage
+
+        for payload in (
+            None,
+            {},
+            {"current_tokens": 100},                    # no window
+            {"token_limit": 0, "current_tokens": 10},    # zero window
+            {"token_limit": 128000},                     # no current
+            "not a mapping",
+        ):
+            with self.subTest(payload=payload):
+                self.assertIsNone(normalize_sdk_context_usage(payload))
+
+    def test_percent_is_clamped(self):
+        from wee_copilot_sdk import normalize_sdk_context_usage
+
+        over = normalize_sdk_context_usage({"token_limit": 100, "current_tokens": 500})
+        self.assertEqual(over["context_percent"], 100.0)
+
+    def test_sdk_emits_usage_and_the_runtime_persists_it(self):
+        import inspect
+
+        import wee_copilot_sdk
+        from agent_manager import SessionManager
+
+        sdk_source = inspect.getsource(wee_copilot_sdk.execute_wee_copilot_async)
+        self.assertIn("SESSION_USAGE_INFO", sdk_source)
+        self.assertIn('event_callback("usage", usage)', sdk_source)
+
+        runtime_source = inspect.getsource(SessionManager.run_wee_native)
+        self.assertIn('kind == "usage"', runtime_source)
+        self.assertIn('"wee_context_usage"', runtime_source)
+
+
 if __name__ == "__main__":
     unittest.main()
