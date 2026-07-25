@@ -119,5 +119,62 @@ class TestShortRepliesAreNotDiscardedWhenTheContextIsFine(unittest.TestCase):
         self.assertFalse(degenerate(ADEQUATE_NUM_CTX))
 
 
+class TestPreflightAvoidsWastingATurn(unittest.TestCase):
+    """#421/#451: catch an unusable context before spending the turn."""
+
+    def setUp(self):
+        import wee_copilot_sdk
+
+        self.mod = wee_copilot_sdk
+        self.mod._NUM_CTX_CACHE.clear()
+
+    def test_probe_result_is_cached_per_model(self):
+        calls = []
+
+        def fake(base_url, model):
+            calls.append((base_url, model))
+            return 4096
+
+        original = self.mod._ollama_num_ctx
+        self.mod._ollama_num_ctx = fake
+        try:
+            for _ in range(3):
+                self.assertEqual(self.mod.ollama_num_ctx_cached("http://h/v1", "m"), 4096)
+            self.assertEqual(len(calls), 1, "must probe once per model, not per turn")
+            # A different model probes again.
+            self.mod.ollama_num_ctx_cached("http://h/v1", "other")
+            self.assertEqual(len(calls), 2)
+        finally:
+            self.mod._ollama_num_ctx = original
+
+    def test_unknown_num_ctx_is_cached_too_so_a_dead_host_is_probed_once(self):
+        calls = []
+
+        def fake(base_url, model):
+            calls.append(1)
+            return None
+
+        original = self.mod._ollama_num_ctx
+        self.mod._ollama_num_ctx = fake
+        try:
+            self.assertIsNone(self.mod.ollama_num_ctx_cached("http://dead/v1", "m"))
+            self.assertIsNone(self.mod.ollama_num_ctx_cached("http://dead/v1", "m"))
+            self.assertEqual(len(calls), 1)
+        finally:
+            self.mod._ollama_num_ctx = original
+
+    def test_preflight_is_wired_in_before_the_turn_and_fails_open(self):
+        import inspect
+
+        source = inspect.getsource(self.mod.execute_wee_copilot_async)
+        preflight_at = source.index("ollama_num_ctx_cached")
+        send_at = source.index("send_and_wait(prompt")
+        self.assertLess(
+            preflight_at, send_at, "the check must run before the turn is spent"
+        )
+        # Fails open: only a known-bad num_ctx raises.
+        self.assertIn("preflight_num_ctx is not None", source)
+
+
 if __name__ == "__main__":
     unittest.main()

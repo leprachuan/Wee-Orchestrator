@@ -214,6 +214,22 @@ def prefer_longer_text(final_text: Optional[str], streamed_text: Optional[str]) 
     return assembled if len(assembled) > len(final) else final
 
 
+_NUM_CTX_CACHE: dict[tuple[str, str], Optional[int]] = {}
+
+
+def ollama_num_ctx_cached(base_url: str, model: str) -> Optional[int]:
+    """Cached `_ollama_num_ctx`, so a pre-flight check is cheap.
+
+    A model's num_ctx is a property of its Modelfile, so it does not change
+    within a process lifetime. Caching a None as well avoids re-probing a host
+    that is unreachable on every turn.
+    """
+    key = (base_url or "", model or "")
+    if key not in _NUM_CTX_CACHE:
+        _NUM_CTX_CACHE[key] = _ollama_num_ctx(base_url, model)
+    return _NUM_CTX_CACHE[key]
+
+
 def _ollama_num_ctx(base_url: str, model: str) -> Optional[int]:
     """Return the effective num_ctx for an Ollama model, or None if unknown.
 
@@ -387,6 +403,21 @@ async def execute_wee_copilot_async(
             else:
                 session = await client.create_session(**session_kwargs)
             actual_session_id = getattr(session, "session_id", None)
+            # Issue #421/#451: a model whose allocated context cannot hold the
+            # agent prompt will burn the full turn and come back with roughly
+            # one token. Check first and fail with the actionable message
+            # instead. Fails open: an unknown num_ctx proceeds as before.
+            if route.provider == "ollama":
+                preflight_num_ctx = ollama_num_ctx_cached(route.base_url, route.model)
+                if preflight_num_ctx is not None and short_ollama_reply_is_degenerate(
+                    preflight_num_ctx
+                ):
+                    raise WeeCopilotSDKError(
+                        describe_degenerate_ollama_turn(
+                            route.model, len(prompt or ""), preflight_num_ctx
+                        )
+                    )
+
             result = await session.send_and_wait(prompt, timeout=float(timeout))
             result_text = _event_content(result) if result else ""
             if not result_text and collected:
