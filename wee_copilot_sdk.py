@@ -214,23 +214,31 @@ def prefer_longer_text(final_text: Optional[str], streamed_text: Optional[str]) 
     return assembled if len(assembled) > len(final) else final
 
 
-_NUM_CTX_CACHE: dict[tuple[str, str], Optional[int]] = {}
+_NUM_CTX_CACHE: dict[tuple[str, str], tuple[bool, Optional[int]]] = {}
 
 
-def ollama_num_ctx_cached(base_url: str, model: str) -> Optional[int]:
-    """Cached `_ollama_num_ctx`, so a pre-flight check is cheap.
+def ollama_context_probe(base_url: str, model: str) -> tuple[bool, Optional[int]]:
+    """Return (probe_succeeded, num_ctx) for an Ollama model, memoized.
 
-    A model's num_ctx is a property of its Modelfile, so it does not change
-    within a process lifetime. Caching a None as well avoids re-probing a host
-    that is unreachable on every turn.
+    The two failure shapes must not be conflated:
+
+      (True, None)   the model genuinely declares no num_ctx, so Ollama will use
+                     its own small default — that model cannot answer, and we
+                     can say so before spending a turn.
+      (False, None)  the host could not be asked. Nothing is known, so callers
+                     must fail open rather than refuse work.
+
+    Conflating them is what let a known-bad model through a pre-flight check.
+    Memoized per (base_url, model): num_ctx is a Modelfile property and does not
+    change within a process lifetime.
     """
     key = (base_url or "", model or "")
     if key not in _NUM_CTX_CACHE:
-        _NUM_CTX_CACHE[key] = _ollama_num_ctx(base_url, model)
+        _NUM_CTX_CACHE[key] = _ollama_num_ctx_probe(base_url, model)
     return _NUM_CTX_CACHE[key]
 
 
-def _ollama_num_ctx(base_url: str, model: str) -> Optional[int]:
+def _ollama_num_ctx_probe(base_url: str, model: str) -> tuple[bool, Optional[int]]:
     """Return the effective num_ctx for an Ollama model, or None if unknown.
 
     Ollama reports a model's *architecture* context (e.g. gemma4.context_length
@@ -243,7 +251,7 @@ def _ollama_num_ctx(base_url: str, model: str) -> Optional[int]:
     if root.endswith("/v1"):
         root = root[:-3].rstrip("/")
     if not root:
-        return None
+        return (False, None)
     try:
         request = urllib.request.Request(
             f"{root}/api/show",
@@ -254,16 +262,17 @@ def _ollama_num_ctx(base_url: str, model: str) -> Optional[int]:
         with urllib.request.urlopen(request, timeout=10) as response:
             document = json.loads(response.read().decode("utf-8", "replace"))
     except Exception:
-        return None
+        return (False, None)
 
     for line in str(document.get("parameters") or "").splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[0] == "num_ctx":
             try:
-                return int(parts[1])
+                return (True, int(parts[1]))
             except ValueError:
-                return None
-    return None
+                return (True, None)
+    # Asked successfully; this model simply declares no num_ctx.
+    return (True, None)
 
 
 ADEQUATE_NUM_CTX = 16_384
@@ -408,10 +417,10 @@ async def execute_wee_copilot_async(
             # one token. Check first and fail with the actionable message
             # instead. Fails open: an unknown num_ctx proceeds as before.
             if route.provider == "ollama":
-                preflight_num_ctx = ollama_num_ctx_cached(route.base_url, route.model)
-                if preflight_num_ctx is not None and short_ollama_reply_is_degenerate(
-                    preflight_num_ctx
-                ):
+                probed, preflight_num_ctx = ollama_context_probe(
+                    route.base_url, route.model
+                )
+                if probed and short_ollama_reply_is_degenerate(preflight_num_ctx):
                     raise WeeCopilotSDKError(
                         describe_degenerate_ollama_turn(
                             route.model, len(prompt or ""), preflight_num_ctx
@@ -431,7 +440,7 @@ async def execute_wee_copilot_async(
             if asyncio.iscoroutine(disconnect_result):
                 await disconnect_result
             if route.provider == "ollama" and len(result_text.strip()) < 4:
-                num_ctx = _ollama_num_ctx(route.base_url, route.model)
+                _, num_ctx = ollama_context_probe(route.base_url, route.model)
                 if short_ollama_reply_is_degenerate(num_ctx):
                     raise WeeCopilotSDKError(
                         describe_degenerate_ollama_turn(

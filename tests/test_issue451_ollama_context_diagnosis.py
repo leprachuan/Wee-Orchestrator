@@ -77,17 +77,19 @@ class TestIssue451OllamaContextDiagnosis(unittest.TestCase):
 class TestNumCtxProbeIsDefensive(unittest.TestCase):
     """The probe runs on an already-failing path; it must never raise."""
 
-    def test_unreachable_host_returns_none(self):
-        from wee_copilot_sdk import _ollama_num_ctx
+    def test_unreachable_host_reports_probe_failure_not_a_verdict(self):
+        from wee_copilot_sdk import _ollama_num_ctx_probe
 
         # Port 1 is reserved and never listening.
-        self.assertIsNone(_ollama_num_ctx("http://127.0.0.1:1/v1", "any-model"))
+        self.assertEqual(
+            _ollama_num_ctx_probe("http://127.0.0.1:1/v1", "any-model"), (False, None)
+        )
 
-    def test_blank_base_url_returns_none(self):
-        from wee_copilot_sdk import _ollama_num_ctx
+    def test_blank_base_url_reports_probe_failure(self):
+        from wee_copilot_sdk import _ollama_num_ctx_probe
 
-        self.assertIsNone(_ollama_num_ctx("", "any-model"))
-        self.assertIsNone(_ollama_num_ctx("/v1", "any-model"))
+        self.assertEqual(_ollama_num_ctx_probe("", "any-model"), (False, None))
+        self.assertEqual(_ollama_num_ctx_probe("/v1", "any-model"), (False, None))
 
 
 class TestShortRepliesAreNotDiscardedWhenTheContextIsFine(unittest.TestCase):
@@ -133,47 +135,66 @@ class TestPreflightAvoidsWastingATurn(unittest.TestCase):
 
         def fake(base_url, model):
             calls.append((base_url, model))
-            return 4096
+            return (True, 4096)
 
-        original = self.mod._ollama_num_ctx
-        self.mod._ollama_num_ctx = fake
+        original = self.mod._ollama_num_ctx_probe
+        self.mod._ollama_num_ctx_probe = fake
         try:
             for _ in range(3):
-                self.assertEqual(self.mod.ollama_num_ctx_cached("http://h/v1", "m"), 4096)
+                self.assertEqual(
+                    self.mod.ollama_context_probe("http://h/v1", "m"), (True, 4096)
+                )
             self.assertEqual(len(calls), 1, "must probe once per model, not per turn")
-            # A different model probes again.
-            self.mod.ollama_num_ctx_cached("http://h/v1", "other")
+            self.mod.ollama_context_probe("http://h/v1", "other")
             self.assertEqual(len(calls), 2)
         finally:
-            self.mod._ollama_num_ctx = original
+            self.mod._ollama_num_ctx_probe = original
 
-    def test_unknown_num_ctx_is_cached_too_so_a_dead_host_is_probed_once(self):
+    def test_failed_probe_is_cached_so_a_dead_host_is_probed_once(self):
         calls = []
 
         def fake(base_url, model):
             calls.append(1)
-            return None
+            return (False, None)
 
-        original = self.mod._ollama_num_ctx
-        self.mod._ollama_num_ctx = fake
+        original = self.mod._ollama_num_ctx_probe
+        self.mod._ollama_num_ctx_probe = fake
         try:
-            self.assertIsNone(self.mod.ollama_num_ctx_cached("http://dead/v1", "m"))
-            self.assertIsNone(self.mod.ollama_num_ctx_cached("http://dead/v1", "m"))
+            self.assertEqual(
+                self.mod.ollama_context_probe("http://dead/v1", "m"), (False, None)
+            )
+            self.mod.ollama_context_probe("http://dead/v1", "m")
             self.assertEqual(len(calls), 1)
         finally:
-            self.mod._ollama_num_ctx = original
+            self.mod._ollama_num_ctx_probe = original
+
+    def test_model_declaring_no_num_ctx_is_refused_not_waved_through(self):
+        """The regression this tri-state exists to prevent.
+
+        gemma4:e4b declares no num_ctx, so Ollama uses its small default and the
+        turn degenerates. A probe that merely returned None made that
+        indistinguishable from "host unreachable", so pre-flight failed open and
+        the user received assembled fragments ("AIAs") instead of a diagnosis.
+        """
+        from wee_copilot_sdk import short_ollama_reply_is_degenerate as degenerate
+
+        probed, num_ctx = (True, None)  # asked successfully; no num_ctx declared
+        self.assertTrue(probed and degenerate(num_ctx))
+
+        probed, num_ctx = (False, None)  # could not ask -> must fail open
+        self.assertFalse(probed and degenerate(num_ctx))
 
     def test_preflight_is_wired_in_before_the_turn_and_fails_open(self):
         import inspect
 
         source = inspect.getsource(self.mod.execute_wee_copilot_async)
-        preflight_at = source.index("ollama_num_ctx_cached")
+        preflight_at = source.index("ollama_context_probe")
         send_at = source.index("send_and_wait(prompt")
         self.assertLess(
             preflight_at, send_at, "the check must run before the turn is spent"
         )
         # Fails open: only a known-bad num_ctx raises.
-        self.assertIn("preflight_num_ctx is not None", source)
+        self.assertIn("probed and short_ollama_reply_is_degenerate", source)
 
 
 if __name__ == "__main__":
