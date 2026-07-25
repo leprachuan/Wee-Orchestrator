@@ -250,6 +250,27 @@ def _ollama_num_ctx(base_url: str, model: str) -> Optional[int]:
     return None
 
 
+ADEQUATE_NUM_CTX = 16_384
+
+
+def short_ollama_reply_is_degenerate(num_ctx: Optional[int]) -> bool:
+    """Decide whether a very short Ollama reply is breakage or a real answer.
+
+    Length alone cannot tell those apart. "391", "OK", "42" and "Yes" are
+    correct answers to questions that ask for brevity, and the previous
+    `len < 4` rule discarded all of them. What actually distinguishes the
+    failure is *why* the reply is short: a request that does not fit the model's
+    allocated context leaves no room to generate, so the turn dies after roughly
+    one token.
+
+    So treat a short reply as broken only when the context is missing or too
+    small to have produced a real one. When the context is adequate, return the
+    model's answer — surfacing a genuinely odd reply beats throwing away a
+    correct terse one.
+    """
+    return num_ctx is None or num_ctx < ADEQUATE_NUM_CTX
+
+
 def describe_degenerate_ollama_turn(
     model: str, prompt_chars: int, num_ctx: Optional[int]
 ) -> str:
@@ -277,6 +298,8 @@ def describe_degenerate_ollama_turn(
             "is too small for the agent prompt, leaving no room to generate. "
             "Use a larger-context variant of this model."
         )
+    # Reachable only if a caller asks for a description despite an adequate
+    # context; the guard itself no longer rejects those turns.
     return (
         detail + f" and num_ctx={num_ctx} looks adequate, so the cause is "
         "elsewhere — check the Ollama host logs for this request."
@@ -377,13 +400,13 @@ async def execute_wee_copilot_async(
             if asyncio.iscoroutine(disconnect_result):
                 await disconnect_result
             if route.provider == "ollama" and len(result_text.strip()) < 4:
-                raise WeeCopilotSDKError(
-                    describe_degenerate_ollama_turn(
-                        route.model,
-                        len(prompt or ""),
-                        _ollama_num_ctx(route.base_url, route.model),
+                num_ctx = _ollama_num_ctx(route.base_url, route.model)
+                if short_ollama_reply_is_degenerate(num_ctx):
+                    raise WeeCopilotSDKError(
+                        describe_degenerate_ollama_turn(
+                            route.model, len(prompt or ""), num_ctx
+                        )
                     )
-                )
             return result_text, str(actual_session_id) if actual_session_id else None
         except Exception as exc:
             if isinstance(exc, WeeCopilotSDKError):

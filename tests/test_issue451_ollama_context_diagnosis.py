@@ -90,5 +90,34 @@ class TestNumCtxProbeIsDefensive(unittest.TestCase):
         self.assertIsNone(_ollama_num_ctx("/v1", "any-model"))
 
 
+class TestShortRepliesAreNotDiscardedWhenTheContextIsFine(unittest.TestCase):
+    """The `len < 4` rule discarded correct answers: "391", "OK", "42", "Yes".
+
+    Observed on dev: with gpt-oss:64k (num_ctx=65536, i.e. ample) the question
+    "What is 17 times 23? Reply with only the number." produced the correct
+    "391" and was rejected as unusable.
+    """
+
+    def test_short_reply_is_degenerate_only_when_context_explains_it(self):
+        from wee_copilot_sdk import short_ollama_reply_is_degenerate as degenerate
+
+        # No num_ctx / too small -> the reply is breakage.
+        self.assertTrue(degenerate(None))
+        self.assertTrue(degenerate(2048))
+        self.assertTrue(degenerate(4096))
+        # Ample context -> a terse reply is plausibly the real answer.
+        self.assertFalse(degenerate(65_536))
+        self.assertFalse(degenerate(131_072))
+
+    def test_boundary_matches_the_documented_threshold(self):
+        from wee_copilot_sdk import (
+            ADEQUATE_NUM_CTX,
+            short_ollama_reply_is_degenerate as degenerate,
+        )
+
+        self.assertTrue(degenerate(ADEQUATE_NUM_CTX - 1))
+        self.assertFalse(degenerate(ADEQUATE_NUM_CTX))
+
+
 if __name__ == "__main__":
     unittest.main()
