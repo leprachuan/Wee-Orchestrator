@@ -60,7 +60,8 @@ relaunch future app updates from inside the client.
 Telegram ─┐
 WebEx ────┼──► FastAPI API ──► SessionManager ──► Runtimes
 Web UI ───┤         │                            ├─ CLI / SDK providers
-macOS ────┘         ├──► TaskScheduler           └─ Wee native (Ollama/OpenRouter)
+macOS ────┘         ├──► TaskScheduler           └─ Wee native ──► Copilot SDK (BYOK)
+                      │                                              └─ Ollama / OpenRouter
                       └──► History, Kanban, agents, auth, files, and settings
 ```
 
@@ -124,6 +125,41 @@ Use **File → New Window** to open another workspace window.
 Use **Check for Updates** or the in-app update notice to install later macOS
 releases with one click; each update is verified against its published SHA-256
 checksum before replacement.
+
+## Running local models with the Wee runtime
+
+The `wee` runtime executes through the GitHub Copilot SDK in BYOK mode against an
+OpenAI-compatible endpoint. Two prerequisites are easy to miss and both fail in
+confusing ways:
+
+**Model context.** The agent prompt is roughly 14 KB before you type anything. A
+model whose allocated context cannot hold it has no room left to generate, and
+the turn ends after about one token. What decides this is the `num_ctx` baked
+into the model's Modelfile — *not* the architecture's context length, which
+Ollama reports as large even for models that will not work:
+
+```bash
+curl -s http://<ollama-host>:11434/api/show -d '{"model":"<model>"}'   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("parameters"))'
+```
+
+If `num_ctx` is absent, Ollama uses its own small default and the model cannot be
+used — pick a large-context variant, or set `OLLAMA_CONTEXT_LENGTH` on the Ollama
+host. The runtime checks this before spending a turn and names the model and its
+`num_ctx` in the error.
+
+**Web search.** The SDK provides `web_fetch` (retrieve a known URL) but no search,
+so wee registers a `search` tool backed by SearXNG. Point it at an instance with
+`WEE_SEARXNG_URL` (default `http://127.0.0.1:8888`), and make sure that instance
+serves JSON — SearXNG enables only `html` by default and answers `403` otherwise,
+which silently degrades every search to a public-search fallback:
+
+```yaml
+# searxng settings.yml
+search:
+  formats:
+    - html
+    - json
+```
 
 ## Essential configuration
 

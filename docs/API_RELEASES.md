@@ -68,3 +68,27 @@ network.
 
 Do not attach a working tree archive or include host configuration, credentials,
 or runtime data in a release.
+
+## Publishing a release
+
+`scripts/publish-api-release.sh MAJOR.MINOR.PATCH [ref]` packages from a
+committed ref and creates the `api-vMAJOR.MINOR.PATCH` release with both the
+archive and its `.sha256`. It refuses to publish an archive that fails its own
+checksum, so a release can never be published in a state the installer would
+reject.
+
+## Updating an existing install
+
+`/update` (or `update_orchestrator.sh`) runs `git pull` when the install is a
+checkout. A release install has no `.git`, so it hands off to
+`scripts/update-api-package.sh`, which resolves the newest `api-v*` release,
+verifies the published SHA-256 **before** touching anything, backs up the current
+install, swaps in the new tree, and restarts the services.
+
+`.env`, `.task-scheduler` and `.canvas-sessions` are preserved. The previous
+install is kept as `<install-dir>.backup-<timestamp>`. Set
+`WEE_UPDATE_SERVICES=""` to skip the restarts, or `WEE_UPDATE_FORCE=1` to
+reinstall the current version.
+
+An unverifiable download is refused rather than installed — a missing checksum is
+treated as a failure, not as permission to skip the check.

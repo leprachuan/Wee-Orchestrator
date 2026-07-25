@@ -22,12 +22,19 @@
 
 - `ollama/...` models honor `WEE_OLLAMA_HOST`, so a local API uses the Ollama
   runner on the same Mac instead of the server deployment's default host.
-- The runtime exposes `bash`, `python`, `call_agent`, and `search` as actual
-  tool definitions. Search uses a configured SearXNG endpoint when available
-  and a public-search fallback otherwise.
-- A completed search ends the tool turn with sourced results. This prevents
-  smaller local models from repeatedly requesting search or ending with an
-  empty response after announcing a search.
+- The runtime registers `search`, `call_agent` and `browser` on top of the
+  Copilot SDK's own tools (`bash`, `rg`, `view`, `web_fetch`, and others). It no
+  longer defines `bash`/`python` itself — the SDK owns shell and file execution
+  since #443. Search uses a configured SearXNG endpoint when available and a
+  public-search fallback otherwise; note SearXNG must have `json` in
+  `search.formats` or it answers 403.
+- A turn that only *announces* an action without calling any tool is re-prompted
+  once with an explicit completion instruction, so a small local model does not
+  leave the user with "I'll search for that…" as the final answer (#398). A turn
+  that did use a tool is never re-prompted, to avoid repeating a side effect.
+- Local models need a `num_ctx` large enough for the ~14 KB agent prompt or the
+  turn degenerates to about one token; see the Wee Native Runtime section of
+  `OPERATIONS_GUIDE.md` for how to check and which models work.
 - The compact system prompt is now the default for every runtime to preserve
   usable context for local models.
 

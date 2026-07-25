@@ -575,8 +575,9 @@ All AI runtimes in this system are configured with **full tool access** to enabl
 - **Issues:** [#76](../../issues/76), [#87](../../issues/87), [#91](../../issues/91)
 
 #### Wee Native Runtime
-- **Also Known As:** `wee` — OpenAI-compatible API backend runtime
-- **Description:** Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter, LM Studio, etc.) without depending on external CLI tools like GitHub Copilot CLI, Claude Code, or OpenCode.
+- **Also Known As:** `wee` — the built-in runtime for local and BYOK providers
+- **Description:** Runs a turn through the **GitHub Copilot SDK** in BYOK mode against an OpenAI-compatible endpoint (Ollama, OpenRouter, LM Studio). The SDK owns the agentic loop and its own tools; wee supplies the provider route and a few extra tools on top.
+- **Architecture note (issue #443):** wee previously drove its own tool-calling loop (`_run_wee_openai_fallback`) against the provider directly. That loop was removed. If you are reading older notes that describe wee assembling `tool_calls` rounds itself, or a `wee_runtime.execute_tool` dispatcher, that is no longer how it works.
 - **Supported Backends:**
   - **Ollama** at `http://192.168.1.101:11434/v1` — local, free (Kubuntu)
   - **OpenRouter** at `https://openrouter.ai/api/v1` — cloud fallback, 100+ models
@@ -596,19 +597,47 @@ All AI runtimes in this system are configured with **full tool access** to enabl
   - `WEE_API_BASE` — Override API base URL (e.g., `http://192.168.1.101:11434/v1`)
   - `WEE_API_KEY` — API key for authenticated endpoints (OpenRouter, etc.)
   - `WEE_DEFAULT_MODEL` — Default model when model not specified in config
-  - `WEE_SEARXNG_URL` — SearXNG base URL for the `search` tool (default: `http://192.168.1.100:8888`)
-- **Native Tools (available in agentic `--tools` mode):**
-  - `bash` — Execute shell commands and return output
-  - `python` — Execute Python 3 code and return output
+  - `WEE_SEARXNG_URL` — SearXNG base URL for the `search` tool (default: `http://127.0.0.1:8888`). **The instance must serve `format=json`**; SearXNG ships with only `html` enabled and answers `403` otherwise, which silently pushes every search onto the fallback. Add to its `settings.yml`:
+    ```yaml
+    search:
+      formats:
+        - html
+        - json
+    ```
+- **Tools wee registers on top of the SDK:**
+  - `search` — Web search via SearXNG, with a public-search fallback (`q`, `count` up to 20, `format` json/text). The SDK has **no** web search of its own — its `web_fetch` only retrieves a URL you already know — which is why this is registered (issue #397).
   - `call_agent` — Delegate to a Wee Orchestrator sub-agent (quick or background mode)
-  - `search` — Web search via self-hosted SearXNG (`q`, `count` up to 20, `format` json/text); requires `WEE_SEARXNG_URL` or defaults to `http://192.168.1.100:8888` (Issue #255)
+  - `browser` — Drive the browser attached to this chat session
+- **Tools the SDK provides itself** (do not redeclare these; the list can drift):
+  `apply_patch`, `bash`, `glob`, `list_agents`, `list_bash`, `read_agent`,
+  `read_bash`, `rg`, `skill`, `sql`, `stop_bash`, `task`, `view`, `web_fetch`
 - **Features:**
-  - In-process execution using OpenAI Python SDK
-  - Real-time SSE streaming to WebUI
-  - Provider presets auto-resolve API base URLs and API keys
-  - Graceful error handling with informative messages
-  - Background task subprocess execution via `wee_runtime.py`
-- **Implementation:** `run_wee_native()` in `agent_manager.py`; `wee_runtime.py` standalone CLI for background tasks
+  - Real-time streaming to the WebUI and macOS client
+  - Provider routes auto-resolve base URLs and API keys from the model prefix
+  - Context usage reported per turn and surfaced in both clients (issue #423)
+  - Recovers a turn that only *announced* an action without calling a tool, by
+    re-prompting once with an explicit completion instruction (issue #398)
+- **Implementation:** `run_wee_native()` in `agent_manager.py`, executing through
+  `wee_copilot_sdk.execute_wee_copilot`; `wee_runtime.py` still provides
+  `_execute_search` and the standalone CLI path
+- **Choosing a local Ollama model (important):** the agent prompt is roughly
+  14 KB before you type anything, so a model whose allocated context cannot hold
+  it has no room left to generate and the turn dies after about one token. The
+  deciding factor is the **`num_ctx` baked into the model's Modelfile**, not the
+  architecture's context length — Ollama reports `context_length = 131072` for
+  models that will and will not work.
+
+  Check with `curl -s http://<host>:11434/api/show -d '{"model":"<model>"}'` and
+  look for `num_ctx` under `parameters`. A model with no `num_ctx` falls back to
+  Ollama's small default and cannot be used. Either pick a variant with a large
+  `num_ctx` baked in, or set `OLLAMA_CONTEXT_LENGTH` on the Ollama host.
+
+  Known-good on the current host: `gpt-oss:64k`, `gemma4-e2b-128k:latest`,
+  `nemotron-3-nano:128k`. Known-bad: `gemma4:e4b` (no `num_ctx`).
+
+  The runtime checks this before spending a turn and returns an actionable error
+  naming the model and its `num_ctx` (issues #421 / #451). There is no way to set
+  `num_ctx` per request through the SDK, so model selection is the lever.
 - **Usage:** `/runtime set wee`
 
 - **Features & Improvements:**
@@ -1626,7 +1655,7 @@ The test suite includes **231 tests** across multiple test files:
 **`tests/test_issue_255_search.py`** (22 tests) — SearXNG search tool (Issue #255):
 - **Search Tool Definition** (7 tests) - Tool schema, parameter validation, registration
 - **Search Execution** (13 tests) - Text/JSON format, count limit, env var override, graceful error on unavailable SearXNG
-- **execute_tool dispatch** (1 test) - Routes `search` calls to `_execute_search`
+- **Tool dispatch** (1 test) - `_wee_execute_tool` routes `search` to `wee_runtime._execute_search`
 - **Capability prompt** (1 test) - Help text mentions `search`
 
 ### Test Results
