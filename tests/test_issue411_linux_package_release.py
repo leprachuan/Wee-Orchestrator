@@ -171,7 +171,7 @@ class TestShellIntegration(unittest.TestCase):
         return path.read_text(encoding="utf-8")
 
     def test_scripts_are_executable(self):
-        for name in ("update-api-package.sh", "publish-api-release.sh", "install-linux.sh"):
+        for name in ("update-api-package.sh", "publish-api-release.sh", "install-api.sh"):
             path = REPO_ROOT / "scripts" / name
             self.assertTrue(
                 path.stat().st_mode & stat.S_IXUSR, f"{name} is not executable"
@@ -208,13 +208,18 @@ class TestShellIntegration(unittest.TestCase):
         self.assertIn('if [ ! -d "$REPO_DIR/.git" ]', body)
         self.assertIn("update-api-package.sh", body)
 
-    def test_installer_defaults_to_package_and_writes_a_version(self):
-        body = self._script("install-linux.sh")
-        self.assertIn('INSTALL_METHOD="${WEE_INSTALL_METHOD:-package}"', body)
-        self.assertIn("install_from_package", body)
-        self.assertIn('> "$INSTALL_DIR/VERSION"', body)
-        # Verification is what makes an unattended curl|bash install safe.
-        self.assertIn("verify", body)
+    def test_the_canonical_installer_verifies_its_download(self):
+        """install-api.sh is the release installer; install-linux.sh is source.
+
+        install-api.sh predates this work and already resolved api-v* releases
+        and checked SHA-256. It is deliberately self-contained, because it is
+        curl|bash'd before any install exists and so cannot import wee_release.
+        This pins the property that matters rather than the implementation.
+        """
+        body = self._script("install-api.sh")
+        self.assertIn("api-v", body)
+        self.assertRegex(body, r"sha256|shasum|sha256sum")
+        self.assertIn("draft", body, "must skip drafts/prereleases")
 
     def test_publisher_refuses_an_archive_that_fails_its_own_checksum(self):
         body = self._script("publish-api-release.sh")
