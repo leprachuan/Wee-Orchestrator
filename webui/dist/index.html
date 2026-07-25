@@ -133,6 +133,15 @@
           <span id="meta-runtime" class="meta-pill meta-runtime" title="Runtime">—</span>
           <span id="meta-model"   class="meta-pill meta-model"   title="Model">—</span>
           <span id="meta-permissions" class="meta-pill meta-permissions" title="Permissions">🔒 restricted</span>
+          <!-- Issue #423: session context usage. Hidden until the runtime
+               reports it, since only the wee runtime tracks context today. -->
+          <span id="meta-context" class="meta-pill meta-context" hidden title="Context usage">
+            <svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true">
+              <circle class="ctx-ring-track" cx="10" cy="10" r="8"></circle>
+              <circle id="ctx-ring-fill" class="ctx-ring-fill" cx="10" cy="10" r="8"></circle>
+            </svg>
+            <span id="meta-context-label">—</span>
+          </span>
 <button id="btn-verbose-toggle" class="meta-pill meta-verbose" title="Tool calls visible — click to hide" aria-pressed="false">⚙️</button>
 <button id="btn-nav-notifications" class="meta-pill meta-alerts" title="Alerts">🔔<span id="notif-badge" class="nav-badge notif-badge-red hidden">0</span></button>
         </div>

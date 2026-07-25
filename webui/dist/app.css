@@ -7791,3 +7791,26 @@ html, body {
   outline: none;
   border-color: var(--accent);
 }
+
+
+/* ── Issue #423: session context usage ring ─────────────────────────────── */
+.meta-context { display: inline-flex; align-items: center; gap: 5px; }
+.meta-context .ctx-ring { width: 14px; height: 14px; flex: 0 0 auto; transform: rotate(-90deg); }
+.meta-context .ctx-ring-track,
+.meta-context .ctx-ring-fill {
+  fill: none;
+  stroke-width: 3;
+  /* r=8 -> circumference 2*pi*8 ~= 50.27; the dash array is that length so
+     stroke-dashoffset maps linearly to percent used. */
+  stroke-dasharray: 50.27;
+}
+.meta-context .ctx-ring-track { stroke: currentColor; opacity: 0.22; }
+.meta-context .ctx-ring-fill {
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-dashoffset: 50.27;               /* empty until populated */
+  transition: stroke-dashoffset 0.3s ease;
+}
+/* Escalate as the window fills; thresholds mirror the macOS client. */
+.meta-context[data-level="warn"]   { color: var(--wee-gold, #ffc247); }
+.meta-context[data-level="danger"] { color: var(--wee-danger, #ff636e); }

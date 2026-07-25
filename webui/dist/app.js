@@ -321,6 +321,54 @@ function _updateVerboseToggleUI(silent) {
   }
 }
 
+// ─── Issue #423: session context usage ring ──────────────────────────────────
+// r=8 -> circumference 2*pi*8. Kept in sync with app.css stroke-dasharray.
+const CTX_RING_CIRCUMFERENCE = 50.27;
+
+function contextRingPercent(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  // Prefer the percentage the API already computed; fall back to the token
+  // counts so a partially populated payload still renders something truthful.
+  const reported = Number(usage.context_percent ?? usage.percent_used);
+  if (Number.isFinite(reported)) return Math.min(100, Math.max(0, reported));
+
+  const used = Number(usage.current_context_tokens);
+  const window = Number(usage.context_window);
+  if (!Number.isFinite(used) || !Number.isFinite(window) || window <= 0) return null;
+  return Math.min(100, Math.max(0, (used / window) * 100));
+}
+
+function updateContextRing(usage) {
+  const pill = $('meta-context');
+  if (!pill) return;
+
+  const percent = contextRingPercent(usage);
+  if (percent === null) {
+    pill.hidden = true;
+    return;
+  }
+
+  const fill = $('ctx-ring-fill');
+  if (fill) {
+    // Offset shrinks as usage grows, so the arc sweeps clockwise from empty.
+    const offset = CTX_RING_CIRCUMFERENCE * (1 - percent / 100);
+    fill.setAttribute('stroke-dashoffset', String(offset));
+  }
+
+  const label = $('meta-context-label');
+  if (label) label.textContent = `${Math.round(percent)}%`;
+
+  pill.dataset.level = percent >= 90 ? 'danger' : percent >= 75 ? 'warn' : 'ok';
+
+  const used = Number(usage.current_context_tokens);
+  const window = Number(usage.context_window);
+  pill.title = Number.isFinite(used) && Number.isFinite(window) && window > 0
+    ? `Context: ${used.toLocaleString()} / ${window.toLocaleString()} tokens (${Math.round(percent)}%)`
+    : `Context usage: ${Math.round(percent)}%`;
+
+  pill.hidden = false;
+}
+
 function updateSessionMeta(data) {
   const set = (id, text, extra = '') => {
     const el = $(id);
@@ -343,6 +391,11 @@ function updateSessionMeta(data) {
 
   set('meta-agent',   data?.agent);
   set('meta-runtime', data?.runtime);
+
+  // Issue #423: session context usage. The API reports this only for runtimes
+  // that track it (wee today), so the pill stays hidden rather than showing a
+  // misleading 0% for runtimes that never populate it.
+  updateContextRing(data?.wee_context_usage);
 
   // Shorten model names for display
   const model = data?.model ? data.model.replace(/^claude-/, '').replace(/^gpt-/, '') : null;
