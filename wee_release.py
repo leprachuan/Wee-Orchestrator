@@ -147,7 +147,18 @@ def fetch_latest(repository: str = DEFAULT_REPOSITORY, timeout: float = 20.0):
     """Query GitHub for the newest api-v release. Returns None on any failure."""
     url = f"https://api.github.com/repos/{repository}/releases?per_page=50"
     request = urllib.request.Request(
-        url, headers={"Accept": "application/vnd.github+json", "User-Agent": "wee-release"}
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "wee-release",
+            # GitHub serves this listing with `max-age=60, s-maxage=60`, so a
+            # check within a minute of publishing can return the *previous*
+            # release. Observed: publishing api-v1.1.0 then resolving
+            # immediately returned 1.0.0. Ask for a fresh listing so an install
+            # run right after a release does not fetch stale data.
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:

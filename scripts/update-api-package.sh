@@ -12,7 +12,10 @@ set -Eeuo pipefail
 
 INSTALL_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REPOSITORY="${WEE_RELEASE_REPOSITORY:-leprachuan/Wee-Orchestrator}"
-SERVICES="${WEE_UPDATE_SERVICES:-agent-manager-api task-scheduler-executor webex-connector telegram-bot-listener}"
+# Note ${VAR-default}, not ${VAR:-default}: an explicitly empty
+# WEE_UPDATE_SERVICES must mean "restart nothing", which is what makes it safe
+# to exercise this script against a throwaway directory on a live host.
+SERVICES="${WEE_UPDATE_SERVICES-agent-manager-api task-scheduler-executor webex-connector telegram-bot-listener}"
 PYTHON="${WEE_PYTHON:-python3}"
 HELPER="$INSTALL_DIR/wee_release.py"
 

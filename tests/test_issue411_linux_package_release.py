@@ -187,6 +187,17 @@ class TestShellIntegration(unittest.TestCase):
         )
         self.assertIn("refusing to install", body)
 
+    def test_empty_services_disables_restarts(self):
+        """${VAR-default}, not ${VAR:-default}.
+
+        With `:-`, an explicitly empty WEE_UPDATE_SERVICES falls back to the
+        default list — so a rehearsal against a throwaway directory restarts real
+        services. That happened while validating this on the dev host.
+        """
+        body = self._script("update-api-package.sh")
+        self.assertIn("${WEE_UPDATE_SERVICES-", body)
+        self.assertNotIn("${WEE_UPDATE_SERVICES:-", body)
+
     def test_updater_preserves_deployment_state(self):
         body = self._script("update-api-package.sh")
         for keep in (".env", ".task-scheduler", ".canvas-sessions"):
@@ -210,6 +221,23 @@ class TestShellIntegration(unittest.TestCase):
         self.assertIn("wee_release.py\" verify", body)
         self.assertIn("does not match its own checksum", body)
         self.assertIn("api-v", body)
+
+
+class TestStaleListingDefence(unittest.TestCase):
+    """GitHub caches the releases listing for 60s.
+
+    Observed while validating end to end: publishing api-v1.1.0 and resolving
+    immediately returned 1.0.0, because the CDN served the previous listing
+    (`cache-control: public, max-age=60, s-maxage=60`). An install run straight
+    after a release would have fetched the wrong version.
+    """
+
+    def test_fetch_requests_an_uncached_listing(self):
+        import inspect
+
+        source = inspect.getsource(wee_release.fetch_latest)
+        self.assertIn("Cache-Control", source)
+        self.assertIn("no-cache", source)
 
 
 class TestCliSurface(unittest.TestCase):
