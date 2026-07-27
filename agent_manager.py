@@ -668,7 +668,12 @@ class AuthManager:
             "sessions.json",
         )
         self.pairing_codes: Dict[str, dict] = {}
+        # Keyed by token_id (uuid4), NOT the raw token. Only a SHA-256 hash
+        # of the raw token is persisted — the raw token is handed to the
+        # client exactly once (at pairing/refresh time) and never stored.
         self.session_tokens: Dict[str, dict] = {}
+        # token_hash -> token_id, rebuilt from self.session_tokens on load.
+        self._hash_index: Dict[str, str] = {}
         self._lock = threading.Lock()
         self._load_sessions()
 
@@ -678,36 +683,75 @@ class AuthManager:
             return False
         return token[7:] == self.shared_key
 
+    @staticmethod
+    def _hash_token(token: str) -> str:
+        return hashlib.sha256(token.encode()).hexdigest()
+
     def _load_sessions(self):
-        """Load persisted sessions from file on startup."""
+        """Load persisted device sessions from file on startup.
+
+        Transparently migrates the legacy format (raw token as the dict
+        key, stored in plaintext) to the per-device, hash-at-rest format
+        the first time it's loaded, then rewrites the file so raw tokens
+        never touch disk again.
+        """
         if not os.path.exists(self.sessions_file):
             return
         try:
             with open(self.sessions_file) as f:
                 data = json.load(f)
-                now = time.time()
-                with self._lock:
-                    for token, entry in data.items():
-                        created_at = entry.get("created_at", now)
-                        absolute_expires_at = entry.get(
-                            "absolute_expires_at",
-                            created_at + self.session_token_absolute_ttl,
-                        )
-                        entry["absolute_expires_at"] = absolute_expires_at
-                        if (
-                            entry.get("expires_at", 0) > now
-                            and absolute_expires_at > now
-                        ):
-                            self.session_tokens[token] = entry
         except Exception:
-            pass
+            return
+
+        now = time.time()
+        migrated = False
+        with self._lock:
+            for key, entry in data.items():
+                created_at = entry.get("created_at", now)
+                absolute_expires_at = entry.get(
+                    "absolute_expires_at",
+                    created_at + self.session_token_absolute_ttl,
+                )
+                if entry.get("expires_at", 0) <= now or absolute_expires_at <= now:
+                    continue
+
+                if "token_hash" in entry and "token_id" in entry:
+                    token_id = entry["token_id"]
+                    entry["absolute_expires_at"] = absolute_expires_at
+                    self.session_tokens[token_id] = entry
+                    self._hash_index[entry["token_hash"]] = token_id
+                else:
+                    # Legacy format: `key` IS the raw plaintext token.
+                    migrated = True
+                    token_id = str(uuid4())
+                    token_hash = self._hash_token(key)
+                    new_entry = {
+                        "token_id": token_id,
+                        "token_hash": token_hash,
+                        "identity": entry.get("identity"),
+                        "channel": entry.get("channel"),
+                        "device_name": entry.get("device_name") or "Legacy device",
+                        "platform": entry.get("platform") or "unknown",
+                        "created_at": created_at,
+                        "last_used": entry.get("last_used", created_at),
+                        "expires_at": entry["expires_at"],
+                        "absolute_expires_at": absolute_expires_at,
+                    }
+                    self.session_tokens[token_id] = new_entry
+                    self._hash_index[token_hash] = token_id
+
+        if migrated:
+            self._save_sessions()
 
     def _save_sessions(self):
-        """Persist sessions to file."""
+        """Persist device sessions to file, keyed by token_id. Raw tokens
+        are never written — only the SHA-256 hash used to look them up."""
         try:
             os.makedirs(os.path.dirname(self.sessions_file), exist_ok=True)
-            with open(self.sessions_file, "w") as f:
+            tmp_path = f"{self.sessions_file}.tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(self.session_tokens, f)
+            os.replace(tmp_path, self.sessions_file)
         except Exception:
             pass
 
@@ -726,8 +770,19 @@ class AuthManager:
             }
         return code
 
-    def verify_pairing_code(self, code: str, identity: str) -> Optional[str]:
-        """Verify pairing code. Returns session token on success, None on failure."""
+    def verify_pairing_code(
+        self,
+        code: str,
+        identity: str,
+        device_name: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Verify pairing code and issue a new per-device token.
+
+        Returns {"token", "token_id", "channel"} on success, None on
+        failure. The raw token is generated here and returned exactly
+        once to the caller — only its hash is retained afterwards.
+        """
         with self._lock:
             entry = self.pairing_codes.get(code)
             if not entry:
@@ -738,24 +793,41 @@ class AuthManager:
                 del self.pairing_codes[code]
                 return None
             del self.pairing_codes[code]
+
         token = f"session_{_secrets.token_urlsafe(32)}"
+        token_id = str(uuid4())
+        token_hash = self._hash_token(token)
         now = time.time()
         with self._lock:
-            self.session_tokens[token] = {
+            self.session_tokens[token_id] = {
+                "token_id": token_id,
+                "token_hash": token_hash,
                 "identity": identity,
                 "channel": entry["channel"],
+                "device_name": (device_name or "Unknown device")[:100],
+                "platform": (platform or "unknown")[:50],
                 "created_at": now,
                 "last_used": now,
                 "expires_at": now + self.session_token_ttl,
                 "absolute_expires_at": now + self.session_token_absolute_ttl,
             }
+            self._hash_index[token_hash] = token_id
         self._save_sessions()
-        return token
+        return {"token": token, "token_id": token_id, "channel": entry["channel"]}
 
     def validate_session_token(self, token: str) -> Optional[dict]:
-        """Validate session token. Returns identity info or None."""
+        """Validate a raw session token against the stored hash.
+
+        Returns identity info on success (also refreshing the sliding
+        expiration window, capped by the absolute TTL), or None. This
+        sliding refresh is what lets a device stay signed in indefinitely
+        as long as it's used at least once per window, without needing a
+        separate explicit refresh call.
+        """
+        token_hash = self._hash_token(token)
         with self._lock:
-            entry = self.session_tokens.get(token)
+            token_id = self._hash_index.get(token_hash)
+            entry = self.session_tokens.get(token_id) if token_id else None
             if not entry:
                 return None
             now = time.time()
@@ -765,14 +837,76 @@ class AuthManager:
             )
             entry["absolute_expires_at"] = absolute_expires_at
             if now > entry["expires_at"] or now > absolute_expires_at:
-                del self.session_tokens[token]
+                del self.session_tokens[token_id]
+                self._hash_index.pop(token_hash, None)
                 self._save_sessions()
                 return None
             entry["last_used"] = now
             # Sliding expiration still applies, but it cannot pass the hard cap.
             entry["expires_at"] = min(now + self.session_token_ttl, absolute_expires_at)
             self._save_sessions()
-            return {"identity": entry["identity"], "channel": entry["channel"]}
+            return {
+                "identity": entry["identity"],
+                "channel": entry["channel"],
+                "token_id": token_id,
+                "expires_at": entry["expires_at"],
+            }
+
+    def list_device_tokens(self, identity: str) -> List[dict]:
+        """List the caller's own long-lived device tokens.
+
+        Returns safe metadata only — never the raw token or its hash —
+        sorted most-recently-used first.
+        """
+        with self._lock:
+            entries = [
+                {
+                    "token_id": e["token_id"],
+                    "device_name": e.get("device_name", "Unknown device"),
+                    "platform": e.get("platform", "unknown"),
+                    "channel": e.get("channel"),
+                    "created_at": e.get("created_at"),
+                    "last_used": e.get("last_used"),
+                    "expires_at": e.get("expires_at"),
+                    "absolute_expires_at": e.get("absolute_expires_at"),
+                }
+                for e in self.session_tokens.values()
+                if e.get("identity") == identity
+            ]
+        entries.sort(key=lambda e: e.get("last_used") or 0, reverse=True)
+        return entries
+
+    def revoke_device_token(self, identity: str, token_id: str) -> bool:
+        """Revoke one of the CALLER's own device tokens.
+
+        Returns False, without distinguishing "not found" from "belongs
+        to someone else", if the token isn't owned by `identity` — this
+        is the authorization boundary that stops one user from revoking
+        (or probing the existence of) another user's device tokens.
+        """
+        with self._lock:
+            entry = self.session_tokens.get(token_id)
+            if not entry or entry.get("identity") != identity:
+                return False
+            del self.session_tokens[token_id]
+            self._hash_index.pop(entry.get("token_hash"), None)
+        self._save_sessions()
+        return True
+
+    def revoke_all_device_tokens(self, identity: str) -> int:
+        """Revoke every device token belonging to `identity`. Returns the
+        number of tokens revoked."""
+        with self._lock:
+            to_remove = [
+                tid
+                for tid, e in self.session_tokens.items()
+                if e.get("identity") == identity
+            ]
+            for tid in to_remove:
+                entry = self.session_tokens.pop(tid)
+                self._hash_index.pop(entry.get("token_hash"), None)
+        self._save_sessions()
+        return len(to_remove)
 
     def cleanup_expired(self):
         """Remove expired pairing codes and session tokens."""
@@ -781,15 +915,16 @@ class AuthManager:
             for code in list(self.pairing_codes):
                 if now > self.pairing_codes[code]["expires_at"]:
                     del self.pairing_codes[code]
-            for token in list(self.session_tokens):
-                entry = self.session_tokens[token]
+            for token_id in list(self.session_tokens):
+                entry = self.session_tokens[token_id]
                 created_at = entry.get("created_at", now)
                 absolute_expires_at = entry.get(
                     "absolute_expires_at", created_at + self.session_token_absolute_ttl
                 )
                 entry["absolute_expires_at"] = absolute_expires_at
                 if now > entry["expires_at"] or now > absolute_expires_at:
-                    del self.session_tokens[token]
+                    del self.session_tokens[token_id]
+                    self._hash_index.pop(entry.get("token_hash"), None)
         self._save_sessions()
 
 
@@ -11904,6 +12039,10 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     class PairingVerification(BaseModel):
         code: str
         identity: str
+        # Optional per-device metadata (iOS/macOS clients) shown back to the
+        # user in the device-token management UI. Never security-sensitive.
+        device_name: Optional[str] = None
+        platform: Optional[str] = None
 
     class SessionCreate(BaseModel):
         session_id: Optional[str] = (
@@ -11982,6 +12121,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "identity": token_data["identity"],
                 "channel": token_data["channel"],
                 "auth_type": "session_token",
+                "token_id": token_data["token_id"],
             }
 
         raise HTTPException(status_code=401, detail="Unrecognized token type")
@@ -12510,24 +12650,101 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.post("/api/v1/auth/verify-pairing")
     async def verify_pairing(body: PairingVerification):
-        token = auth_mgr.verify_pairing_code(body.code, body.identity)
-        if not token:
+        issued = auth_mgr.verify_pairing_code(
+            body.code, body.identity, body.device_name, body.platform
+        )
+        if not issued:
             raise HTTPException(
                 status_code=400, detail="Invalid or expired pairing code"
             )
-        token_data = auth_mgr.validate_session_token(token)
-        channel = token_data["channel"] if token_data else "unknown"
+        channel = issued["channel"]
         username = None
         if channel == "telegram":
             username = _get_telegram_username(body.identity)
         return {
-            "token": token,
+            "token": issued["token"],
+            "token_id": issued["token_id"],
             "expires_in": SESSION_TOKEN_TTL,
             "absolute_expires_in": SESSION_TOKEN_ABSOLUTE_TTL,
             "identity": body.identity,
             "channel": channel,
             "username": username,
         }
+
+    @app.post("/api/v1/auth/refresh")
+    async def refresh_session_token(
+        authorization: Optional[str] = Header(None),
+    ):
+        """Explicitly refresh the sliding expiration window for the
+        caller's own device token. Re-validating any session token already
+        refreshes it as a side effect, so this is a convenience endpoint
+        for clients that want to proactively extend their session (e.g. on
+        app foreground) without making an unrelated API call."""
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401, detail="Missing or invalid authorization header"
+            )
+        token = authorization[7:]
+        if not token.startswith("session_"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only per-device session tokens can be refreshed",
+            )
+        token_data = auth_mgr.validate_session_token(token)
+        if not token_data:
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired session token"
+            )
+        return {
+            "token_id": token_data["token_id"],
+            "identity": token_data["identity"],
+            "channel": token_data["channel"],
+            "expires_at": token_data["expires_at"],
+        }
+
+    @app.get("/api/v1/auth/devices")
+    async def list_device_tokens(request: Request):
+        """List the caller's own long-lived device tokens/sessions. Never
+        returns raw tokens — metadata only."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        devices = auth_mgr.list_device_tokens(user["identity"])
+        current_token_id = user.get("token_id")
+        for d in devices:
+            d["current"] = current_token_id is not None and d["token_id"] == current_token_id
+        return {"devices": devices}
+
+    @app.delete("/api/v1/auth/devices/{token_id}")
+    async def revoke_device_token(token_id: str, request: Request):
+        """Revoke one of the caller's own device tokens. Cannot be used to
+        revoke another user's tokens — ownership is enforced server-side."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        ok = auth_mgr.revoke_device_token(user["identity"], token_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Device token not found")
+        return {"revoked": token_id}
+
+    @app.post("/api/v1/auth/devices/revoke-all")
+    async def revoke_all_device_tokens(request: Request):
+        """Sign the caller out of every device, including the one making
+        this request."""
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        count = auth_mgr.revoke_all_device_tokens(user["identity"])
+        return {"revoked_count": count}
 
     @app.post("/api/v1/sessions/create")
     async def create_session(
