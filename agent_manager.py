@@ -9694,6 +9694,39 @@ User Request:
                 handler=search_handler,
             )
 
+            async def python_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "python",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            # Issue #453: the SDK provides a shell built-in but nothing for
+            # Python, so models improvised "<python>...</python>" in prose and
+            # no computation ever ran. Registering it explicitly gives that
+            # intent a real target.
+            python_tool = Tool(
+                name="python",
+                description=(
+                    "Execute a Python 3 snippet and return its stdout and stderr. "
+                    "Use this for calculation, parsing and data work rather than "
+                    "answering from memory."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "The Python source to run.",
+                        }
+                    },
+                    "required": ["code"],
+                },
+                handler=python_handler,
+            )
+
             async def browser_handler(invocation):
                 return await asyncio.to_thread(
                     self._wee_execute_tool,
@@ -9775,7 +9808,7 @@ User Request:
                 timeout=float(effective_timeout),
                 session_id=saved_sdk_session,
                 resume=bool(resume and saved_sdk_session),
-                tools=[search_tool, call_agent_tool, browser_tool],
+                tools=[search_tool, python_tool, call_agent_tool, browser_tool],
                 enable_tools=True,
                 event_callback=on_sdk_event,
             )
@@ -9804,7 +9837,7 @@ User Request:
                         timeout=float(effective_timeout),
                         session_id=retry_session,
                         resume=bool(retry_session),
-                        tools=[search_tool, call_agent_tool, browser_tool],
+                        tools=[search_tool, python_tool, call_agent_tool, browser_tool],
                         enable_tools=True,
                         event_callback=on_sdk_event,
                     )
@@ -9860,7 +9893,17 @@ User Request:
         r"(?:now\s+|just\s+|quickly\s+|first\s+)*"
         r"(?:web\s+)?"
         r"(?:search|look\s+(?:up|at|into)|check|read|open|fetch|browse|run|execute|"
-        r"inspect|grep|find|list|delegate|ask\s+\w+|call\s+\w+)\b"
+        r"inspect|grep|find|list|delegate|ask\s+\w+|call\s+\w+|"
+        # Issue #453: "compute"/"calculate" cover a python-tool request
+        # ("I'll compute that multiplication using Python:") the way
+        # "search" already covers a search-tool one.
+        r"compute|calculate|"
+        # Issue #453: the reported failure said "I will use the `search` tool
+        # now" — a promise whose verb is "use", which every branch above
+        # missed. Requiring the word "tool" keeps "I will use a different
+        # approach" from matching. Intervening tokens absorb the backticks
+        # models put around the tool name.
+        r"use\s+(?:the\s+|my\s+|a\s+|its\s+)?(?:\S+\s+){0,2}tools?)\b"
     )
 
     # Phrases that mean the work already happened, or that the model is
@@ -9876,6 +9919,41 @@ User Request:
         r"(?:\s+\w+){0,3}\s+(?:search|browse|access|read|run))\b"
     )
 
+    # Issue #453: a local model that cannot reach a tool often writes the
+    # command it *would* have run instead of invoking it — as a fenced block,
+    # a pseudo-XML tag, or an inline pseudo-call mimicking the tool's own
+    # signature. All three were observed live against local Ollama models:
+    #   ```bash\necho -n TOKEN > /tmp/f```
+    #   <python>print(2+2)</python>
+    #   `python(code="print(7919 * 104729)")`
+    # Each is the same incomplete turn #398 describes, but the promise regex
+    # cannot catch any of them — there is no promise sentence to match.
+    _WEE_UNEXECUTED_CALL_RE = re.compile(
+        r"```(?:bash|sh|shell|zsh|python|py)\b.*?```"
+        r"|<(python|bash|shell|tool_call)\b[^>]*>.*?</\1>"
+        r"|`?\b(?:python|search|bash|shell|call_agent|browser)\("
+        r"\s*\w+\s*=\s*[\"'].*?[\"'](?:\s*,\s*\w+\s*=\s*[\"'].*?[\"'])*\s*\)`?",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    @classmethod
+    def _wee_shows_unexecuted_call(cls, text: str) -> bool:
+        """Whether a turn displays a command it never actually ran.
+
+        Deliberately conservative: the block has to dominate the reply. A
+        genuine "here is a script you could use", with real explanation around
+        it, stays a legitimate answer — only a response that is mostly raw
+        command text reads as an invocation the model failed to make.
+        """
+        raw = text or ""
+        blocks = [m.group(0) for m in cls._WEE_UNEXECUTED_CALL_RE.finditer(raw)]
+        if not blocks:
+            return False
+        stripped = len(raw.strip())
+        if not stripped:
+            return False
+        return sum(len(b) for b in blocks) / stripped >= 0.30
+
     @classmethod
     def _wee_turn_is_incomplete(cls, text: str, tool_calls_made: int) -> bool:
         """Return whether a finished turn only *promised* to act.
@@ -9883,7 +9961,9 @@ User Request:
         Issue #398. Two conditions must hold:
 
         * the model performed no tool call at all during the turn, and
-        * its final text announces an action it was equipped to take.
+        * its final text announces an action it was equipped to take — either
+          in prose ("I'll search for that"), or by printing the command itself
+          rather than invoking it (issue #453).
 
         A turn that used any tool is left alone even if its prose still reads
         like a promise — the model did work, and re-prompting it risks
@@ -9896,7 +9976,9 @@ User Request:
             return False
         if cls._WEE_COMPLETED_OR_REFUSED_RE.search(normalized):
             return False
-        return bool(cls._WEE_PROMISED_ACTION_RE.search(normalized))
+        if cls._WEE_PROMISED_ACTION_RE.search(normalized):
+            return True
+        return cls._wee_shows_unexecuted_call(text)
 
     # Appended verbatim to the retry so the instruction is auditable and the
     # model is told to act rather than narrate.
@@ -10017,6 +10099,11 @@ User Request:
             '  Call: search tool with {"q": "your query", "count": 5}\n'
             "  Use for: current information you do not already have a URL for. "
             "Prefer this over web_fetch unless you already know the exact URL.\n"
+            "\n"
+            "**python** -- Run a Python 3 snippet and get its output.\n"
+            '  Call: python tool with {"code": "print(2 + 2)"}\n'
+            "  Use for: arithmetic, parsing and data work, rather than "
+            "answering from memory.\n"
             "\n"
             "**call_agent** -- Delegate tasks to other specialized Wee agents (PREFERRED for background tasks).\n"
             '  Call: call_agent tool with {"agent": "agent_name", "prompt": "task", "mode": "background", ...}\n'
@@ -10505,6 +10592,11 @@ User Request:
                 from wee_runtime import _execute_search
 
                 return _execute_search(func_args)
+            elif func_name == "python":
+                # Issue #453: the SDK ships a shell built-in but no Python
+                # one, so a local model asked to compute something emitted
+                # "<python>print(...)</python>" as prose and nothing ran.
+                return self._wee_run_python(func_args)
             elif func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
                 # Issue #444: propagate the originating chat session so the
@@ -10523,10 +10615,49 @@ User Request:
             else:
                 return (
                     f"Error: Unknown tool '{func_name}'. "
-                    "Available: search, call_agent, browser"
+                    "Available: search, python, call_agent, browser"
                 )
         except Exception as e:
             return f"Error executing {func_name}: {e}"
+
+    def _wee_run_python(self, func_args: dict) -> str:
+        """Run a Python snippet for the wee runtime and return its output.
+
+        Issue #443 removed the previous implementation because it passed the
+        model's code to `python3 -c`, where one mis-escaped quote surfaced as an
+        opaque SyntaxError. Writing to a temp file instead keeps the source
+        exactly as the model wrote it, so a traceback points at a real line.
+        """
+        code = (func_args.get("code") or func_args.get("raw") or "").strip()
+        if not code:
+            return "Error: python tool requires 'code'"
+
+        import tempfile
+        import textwrap
+
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".py", delete=False, encoding="utf-8"
+            ) as handle:
+                handle.write(textwrap.dedent(code))
+                path = handle.name
+            proc = subprocess.run(
+                [sys.executable, path],
+                capture_output=True,
+                text=True,
+                timeout=min(float(self.command_timeout), 120.0),
+            )
+            output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+            return output or "(no output)"
+        except subprocess.TimeoutExpired:
+            return "Error: python execution timed out"
+        finally:
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
     def _wee_call_agent(
         self, func_args: dict, origin_session_id: Optional[str] = None
