@@ -15678,18 +15678,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        from kanban import load_kanban_board
+        try:
+            from kanban import load_kanban_board
 
-        return load_kanban_board(
-            todo_path=_resolve_todo_file(agent),
-            repo=repo,
-            limit=limit,
-            agent=agent,
-            urgency=urgency,
-            date_from=date_from,
-            date_to=date_to,
-            source=source,
-        )
+            return load_kanban_board(
+                todo_path=_resolve_todo_file(agent),
+                repo=repo,
+                limit=limit,
+                agent=agent,
+                urgency=urgency,
+                date_from=date_from,
+                date_to=date_to,
+                source=source,
+            )
+        except Exception as exc:
+            # Every sibling kanban route funnels through _kanban_http_error;
+            # this one did not, so anything raised below it reached the client
+            # as a bare 500 with no detail to act on.
+            _kanban_http_error(exc)
 
     @app.get("/api/v1/kanban/items/{item_id}")
     async def get_kanban_item(request: Request, item_id: str, repo: Optional[str] = None):
