@@ -8225,6 +8225,12 @@ User Request:
             f"@{mcp_config_path}",
         ]
 
+        # Issue: browser control was wee-runtime only. --additional-mcp-config
+        # may be repeated, so this augments the agent's own MCP servers rather
+        # than replacing them.
+        if _browser_mcp := self._wee_browser_mcp_config_file(n8n_session_id):
+            cmd += ["--additional-mcp-config", f"@{_browser_mcp}"]
+
         # Add elevated flags for full access
         if mode == "elevated":
             cmd.insert(2, "--allow-all-paths")
@@ -8344,6 +8350,11 @@ User Request:
                 f"@{mcp_config_path}",
                 f"--name={_recovery_copilot_name}",
             ]
+            # The recovery path builds its own command, so it needs the browser
+            # server too -- otherwise a session that recovers silently loses
+            # browser control for the rest of its life.
+            if _recovery_browser_mcp := self._wee_browser_mcp_config_file(n8n_session_id):
+                _recovery_cmd += ["--additional-mcp-config", f"@{_recovery_browser_mcp}"]
             if mode == "elevated":
                 _recovery_cmd.insert(2, "--allow-all-paths")
                 _recovery_cmd.append("--yolo")
