@@ -5671,6 +5671,100 @@ You can mention an agent in your prompt and it will auto-delegate:
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         return text.strip()
 
+    # --- Session browser control for subprocess runtimes -------------------
+    #
+    # The `wee` runtime registers an in-process `browser` Tool. Subprocess
+    # runtimes cannot use it -- the broker's registrations live in the API
+    # process's memory -- so browser control was reachable from exactly one
+    # runtime. These helpers hand those runtimes the `wee-browser` MCP server
+    # instead, which reaches the same browser over HTTP.
+
+    WEE_BROWSER_MCP_NAME = "wee-browser"
+
+    def _wee_browser_mcp_env(self, n8n_session_id: str) -> Optional[Dict[str, str]]:
+        """Environment for the browser MCP server, or None when unavailable.
+
+        Returns None rather than a broken config when there is no shared key to
+        authenticate with: a server that cannot call the API would advertise
+        browser tools that always fail, which is worse than not offering them.
+        """
+        shared_key = os.environ.get("API_SHARED_KEY", "")
+        if not shared_key or not n8n_session_id:
+            return None
+
+        scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        port = os.environ.get("API_PORT", "8001")
+        session_data = self.get_or_create_session_data(n8n_session_id) or {}
+
+        env = {
+            "WEE_BROWSER_SESSION_ID": n8n_session_id,
+            "WEE_API_BASE": f"{scheme}://127.0.0.1:{port}",
+            "WEE_API_TOKEN": f"shared_{shared_key}",
+        }
+        # The API only trusts these headers from loopback, which is where this
+        # server runs; they carry the session's real owner so the ownership
+        # check passes for the right user rather than the shared-key identity.
+        if identity := session_data.get("identity"):
+            env["WEE_API_IDENTITY"] = str(identity)
+        if channel := session_data.get("channel"):
+            env["WEE_API_CHANNEL"] = str(channel)
+        if scheme == "https":
+            # Prod terminates TLS with a self-signed cert; this is a loopback
+            # call to ourselves, so trusting it adds no exposure.
+            env["WEE_API_INSECURE_TLS"] = "1"
+        return env
+
+    def _wee_browser_mcp_server_spec(self, n8n_session_id: str) -> Optional[dict]:
+        """The `wee-browser` MCP server as command/args/env, or None."""
+        env = self._wee_browser_mcp_env(n8n_session_id)
+        if env is None:
+            return None
+        return {
+            "command": sys.executable or "python3",
+            "args": [os.path.join(SCRIPT_BASE_DIR, "wee_browser_mcp.py")],
+            "env": env,
+        }
+
+    def _wee_browser_mcp_config_file(self, n8n_session_id: str) -> Optional[str]:
+        """Write an `mcpServers` JSON config and return its path, or None.
+
+        Used by CLIs that take a config file (claude's --mcp-config). Written
+        per session under the session state directory so concurrent sessions
+        never share one file and point at each other's browsers.
+        """
+        spec = self._wee_browser_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return None
+        try:
+            directory = os.path.join(SCRIPT_BASE_DIR, ".mcp-configs")
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, f"browser-{n8n_session_id}.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"mcpServers": {self.WEE_BROWSER_MCP_NAME: spec}}, handle)
+            return path
+        except OSError as exc:
+            print(f"[Browser] Could not write MCP config: {exc}", file=sys.stderr)
+            return None
+
+    def _wee_browser_codex_config_args(self, n8n_session_id: str) -> list:
+        """`-c` overrides registering the browser MCP server with codex."""
+        spec = self._wee_browser_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return []
+        prefix = f"mcp_servers.{self.WEE_BROWSER_MCP_NAME}"
+        args = [
+            "-c",
+            f"{prefix}.command={json.dumps(spec['command'])}",
+            "-c",
+            f"{prefix}.args={json.dumps(spec['args'])}",
+        ]
+        for key, value in spec["env"].items():
+            # Codex parses the value as TOML, so each entry is quoted
+            # individually rather than passing one inline table -- a token
+            # containing '=' or '#' would otherwise break the parse.
+            args += ["-c", f"{prefix}.env.{key}={json.dumps(value)}"]
+        return args
+
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
 
@@ -8984,6 +9078,11 @@ User Request:
             "--verbose",
         ]
 
+        if browser_mcp_config := self._wee_browser_mcp_config_file(n8n_session_id):
+            # Additive: no --strict-mcp-config, so the agent's own MCP servers
+            # keep working alongside this one.
+            cmd.extend(["--mcp-config", browser_mcp_config])
+
         if resume and session_id:
             cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
@@ -9283,6 +9382,7 @@ User Request:
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
             if model:
                 cmd += ["-m", model]
+            cmd += self._wee_browser_codex_config_args(n8n_session_id)
             cmd += [session_id, context_prompt]
             print(
                 f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode",
@@ -9302,6 +9402,7 @@ User Request:
                 cmd.append("--full-auto")
             if model:
                 cmd += ["-m", model]
+            cmd += self._wee_browser_codex_config_args(n8n_session_id)
             cmd.append(context_prompt)
             print(
                 f"[Session] Starting new CODEX session with model {model} in {mode} mode",
@@ -12312,6 +12413,62 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         return {"accepted": True}
+
+    @app.post("/api/v1/browser/sessions/{session_id}/execute")
+    async def execute_native_browser_command(session_id: str, request: Request):
+        """Drive this session's browser from outside the API process.
+
+        The `wee` runtime calls `execute_browser_command` in-process, which the
+        subprocess runtimes (codex, claude, gemini, ...) cannot do -- the
+        broker's registrations live in this process's memory. Without an HTTP
+        seam, browser control was reachable from exactly one runtime. The
+        `wee-browser` MCP server calls this endpoint on their behalf.
+        """
+        from browser_bridge import execute_browser_command
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+        action = str(body.get("action") or "").strip()
+        if not action:
+            raise HTTPException(status_code=400, detail="'action' is required")
+
+        command = {k: v for k, v in body.items() if k != "timeout" and v is not None}
+        raw_timeout = body.get("timeout")
+        try:
+            timeout = float(raw_timeout) if raw_timeout is not None else 45.0
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="'timeout' must be a number")
+
+        loop = asyncio.get_running_loop()
+        try:
+            # execute_browser_command blocks waiting on the browser client, so
+            # keep it off the event loop -- otherwise one slow page would stall
+            # every other request this API is serving.
+            output = await loop.run_in_executor(
+                None, lambda: execute_browser_command(session_id, command, timeout=timeout)
+            )
+        except RuntimeError as exc:
+            # Raised when no browser client is attached to this session.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Browser command failed: {exc}") from exc
+
+        return {"result": output}
 
     @app.get("/api/v1/service-status")
     async def get_service_status():
