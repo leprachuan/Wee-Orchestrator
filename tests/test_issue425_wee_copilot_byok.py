@@ -226,8 +226,11 @@ def test_api_wee_runtime_uses_shared_sdk_executor(monkeypatch):
     mgr._stream_buffers = {}
     mgr.get_or_create_session_data = MagicMock(return_value={"channel": "webui"})
     mgr.build_agent_context_prompt = MagicMock(return_value="context")
+    # Signature-agnostic: this test asserts the wee runtime uses the shared SDK
+    # executor, not the arity of the prompt augmenter. Pinning the exact
+    # signature made an unrelated change to that helper fail here.
     mgr._wee_augment_system_prompt_with_tools = MagicMock(
-        side_effect=lambda prompt: prompt
+        side_effect=lambda prompt, *args, **kwargs: prompt
     )
     mgr._wee_execute_tool = MagicMock(return_value="ok")
     mgr.update_session_field = MagicMock()
