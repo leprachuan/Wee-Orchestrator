@@ -624,25 +624,44 @@ def load_github_cards(repo: str | None, limit: int = 100) -> list[dict[str, Any]
     if not repo:
         return []
 
-    result = subprocess.run(
-        [
-            "gh",
-            "issue",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "all",
-            "--limit",
-            str(limit),
-            "--json",
-            "number,title,url,body,state,labels,createdAt,updatedAt",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,url,body,state,labels,createdAt,updatedAt",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        # `gh` is not installed, or -- far more commonly -- not on this
+        # process's PATH. A GUI-launched client starts its API subprocess with
+        # launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which omits
+        # Homebrew, so the binary is unreachable even though a shell can find
+        # it. Previously this propagated as a bare 500 with no hint of a
+        # missing tool.
+        raise KanbanError(
+            "The GitHub CLI (gh) was not found on the API's PATH, so GitHub-backed "
+            "Kanban cards cannot be loaded.",
+            status_code=503,
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise KanbanError(
+            "Timed out waiting for the GitHub CLI (gh) to list issues.",
+            status_code=504,
+        ) from exc
+
     if result.returncode != 0:
         return []
 
