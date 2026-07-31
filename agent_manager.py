@@ -9623,7 +9623,10 @@ User Request:
                 model=route.qualified_model,
                 channel=channel,
             )
-            context_prompt = self._wee_augment_system_prompt_with_tools(context_prompt)
+            context_prompt = self._wee_augment_system_prompt_with_tools(
+                context_prompt,
+                native_tools_registered=self._wee_provider_needs_native_tools(route.provider),
+            )
             context_prompt += _wee_anti_hallucination_prompt()
             stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
             sdk_tool_ids: Dict[str, str] = {}
@@ -9737,6 +9740,76 @@ User Request:
                 handler=browser_handler,
             )
 
+            # Issue #453: #443 stopped redeclaring shell/file tools on the theory
+            # that "the Copilot SDK session already knows about and describes its
+            # own built-in tools". That holds for Copilot-native models but not
+            # for a BYOK route: on Ollama the registered set really is just
+            # search/call_agent/browser, so the model has no way to run a command
+            # or touch a file. It improvises instead -- markdown code fences,
+            # pseudo-XML, invented function names -- and the turn ends with
+            # nothing having run. Register real bash/python tools whenever the
+            # provider is not Copilot-native.
+            native_tools: list = []
+            if self._wee_provider_needs_native_tools(route.provider):
+
+                async def bash_handler(invocation):
+                    return self._wee_execute_tool(
+                        "bash",
+                        dict(invocation.arguments or {}),
+                        agent,
+                        n8n_session_id,
+                    )
+
+                async def python_handler(invocation):
+                    return self._wee_execute_tool(
+                        "python",
+                        dict(invocation.arguments or {}),
+                        agent,
+                        n8n_session_id,
+                    )
+
+                native_tools = [
+                    Tool(
+                        name="bash",
+                        description=(
+                            "Execute a bash shell command on this machine and return its "
+                            "output. Use this to read or write files, inspect the system, "
+                            "and run commands. For delegating whole tasks to another Wee "
+                            "agent, use call_agent instead."
+                        ),
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "command": {
+                                    "type": "string",
+                                    "description": "The bash command to execute",
+                                }
+                            },
+                            "required": ["command"],
+                        },
+                        handler=bash_handler,
+                    ),
+                    Tool(
+                        name="python",
+                        description=(
+                            "Execute Python 3 code on this machine and return its stdout. "
+                            "Use this for computation and data handling. For delegating "
+                            "whole tasks to another Wee agent, use call_agent instead."
+                        ),
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "The Python code to execute",
+                                }
+                            },
+                            "required": ["code"],
+                        },
+                        handler=python_handler,
+                    ),
+                ]
+
             # Issue #398: track whether the model actually invoked anything, so a
             # turn that only *promised* to act can be detected afterwards. The
             # counter must be updated even when nothing is streaming, so it sits
@@ -9775,7 +9848,7 @@ User Request:
                 timeout=float(effective_timeout),
                 session_id=saved_sdk_session,
                 resume=bool(resume and saved_sdk_session),
-                tools=[search_tool, call_agent_tool, browser_tool],
+                tools=[search_tool, call_agent_tool, browser_tool] + native_tools,
                 enable_tools=True,
                 event_callback=on_sdk_event,
             )
@@ -9999,7 +10072,18 @@ User Request:
                 session_map[n8n_session_id]["wee_messages"] = clean
                 self.save_session_map(session_map)
 
-    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
+    # Providers whose sessions genuinely ship built-in shell/file/python tools.
+    # Everything else is a BYOK OpenAI-compatible route where the registered
+    # tool list is the complete set (issue #453).
+    _WEE_COPILOT_NATIVE_PROVIDERS = frozenset({"copilot", "github", "githubcopilot"})
+
+    @classmethod
+    def _wee_provider_needs_native_tools(cls, provider: str) -> bool:
+        return (provider or "").strip().lower() not in cls._WEE_COPILOT_NATIVE_PROVIDERS
+
+    def _wee_augment_system_prompt_with_tools(
+        self, system_prompt: str, native_tools_registered: bool = False
+    ) -> str:
         """Issue #111 / #443 / #397: Describe only the custom tools wee registers
         on top of the Copilot SDK session (search, call_agent, browser).
 
@@ -10030,6 +10114,23 @@ User Request:
             "2. For delegating work to other agents: use call_agent\n"
             "3. NEVER refuse or claim you lack capability. Your tools are active and functional."
         )
+        if native_tools_registered:
+            # Only described when actually registered, so the prompt can never
+            # advertise a tool that is not wired to anything -- the drift #443
+            # was guarding against.
+            tool_section += (
+                "\n\n**bash** -- Run a shell command on this machine and get its output.\n"
+                '  Call: bash tool with {"command": "ls -la /tmp"}\n'
+                "  Use for: reading and writing files, inspecting the system, running commands.\n"
+                "\n"
+                "**python** -- Run Python 3 code and get its stdout.\n"
+                '  Call: python tool with {"code": "print(6 * 7)"}\n'
+                "  Use for: computation and data handling.\n"
+                "\n"
+                "4. To run a command or touch a file, CALL the bash or python tool. "
+                "Do NOT write the command in a markdown code block, in XML tags, or as "
+                "prose describing what you would run -- none of those execute."
+            )
         return system_prompt + tool_section
 
 
@@ -10496,7 +10597,17 @@ User Request:
         (issue #397).
         """
         try:
-            if func_name == "search":
+            if func_name == "bash":
+                # Issue #453: only registered for non-Copilot-native providers,
+                # which have no built-in shell tool of their own.
+                from wee_runtime import execute_bash
+
+                return execute_bash(func_args)
+            elif func_name == "python":
+                from wee_runtime import execute_python
+
+                return execute_python(func_args)
+            elif func_name == "search":
                 # Issue #397: the Copilot SDK ships web_fetch (retrieve a known
                 # URL) but no web *search*, so a local agent had no way to
                 # discover pages for a query. _execute_search survived #443 —
