@@ -83,6 +83,11 @@ telegram_downloads/
 *.env
 *.env.local
 *.env.*.local
+# Catch .env variants that don't END in .env — backups (.env.bak-*),
+# .env.save, .env.old. `*.env` alone misses these, which is how
+# plaintext secret copies end up untracked-but-committable.
+.env.*
+!.env.example
 webex_config.json
 telegram_config.json
 .env.prod

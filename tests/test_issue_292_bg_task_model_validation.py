@@ -143,16 +143,14 @@ class TestIssue292BgTaskModelValidation(unittest.TestCase):
         }
         mock_create.return_value = mock_task
 
-        with patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value = MagicMock()
-            resp = self._post_bg_task(
-                {
-                    "prompt": "Say hello",
-                    "agent": "fosterbot",
-                    "runtime": "copilot",
-                    # no "model" field
-                }
-            )
+        resp = self._post_bg_task(
+            {
+                "prompt": "Say hello",
+                "agent": "fosterbot",
+                "runtime": "copilot",
+                # no "model" field
+            }
+        )
 
         self.assertNotEqual(
             resp.status_code,
@@ -187,16 +185,14 @@ class TestIssue292BgTaskModelValidation(unittest.TestCase):
         }
         mock_create.return_value = mock_task
 
-        with patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value = MagicMock()
-            resp = self._post_bg_task(
-                {
-                    "prompt": "Say hello",
-                    "agent": "fosterbot",
-                    "runtime": "claude",
-                    "model": "claude-sonnet-4.6",
-                }
-            )
+        resp = self._post_bg_task(
+            {
+                "prompt": "Say hello",
+                "agent": "fosterbot",
+                "runtime": "claude",
+                "model": "claude-sonnet-4.6",
+            }
+        )
 
         self.assertNotEqual(
             resp.status_code,
