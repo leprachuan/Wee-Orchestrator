@@ -514,6 +514,77 @@ def _execute_brave_search(
     return _format_search_results(query, results, output_format)
 
 
+_SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
+
+# Matches the SDK's own tool budget closely enough that a slow command fails
+# with a tool error rather than stalling the whole turn.
+WEE_BYOK_TOOL_TIMEOUT = int(os.environ.get("WEE_TOOL_TIMEOUT", "120"))
+
+
+def sanitize_bash_command(command: str) -> str:
+    """Auto-inject SSH flags to prevent host key verification failures.
+
+    Injects ``-o StrictHostKeyChecking=accept-new`` after ssh/scp/sftp when the
+    flag is not already present. ``accept-new`` is preferred over ``no``
+    because it still rejects CHANGED keys (potential MITM).
+    """
+    if not command or not _SSH_BIN_RE.search(command):
+        return command
+    if "StrictHostKeyChecking" in command:
+        return command
+
+    def _inject(match):
+        return match.group(0) + " -o StrictHostKeyChecking=accept-new"
+
+    return _SSH_BIN_RE.sub(_inject, command, count=0)
+
+
+def _format_process_result(result: "subprocess.CompletedProcess[str]") -> str:
+    output = result.stdout or ""
+    if result.returncode != 0 and result.stderr:
+        output += f"\nSTDERR: {result.stderr}"
+    return output.strip() or "(no output)"
+
+
+def execute_bash(func_args: dict) -> str:
+    """Run a bash command for BYOK providers that have no built-in shell tool."""
+    command = (func_args or {}).get("command", "")
+    if not command:
+        return "Error: No command provided"
+    command = sanitize_bash_command(command)
+    try:
+        result = subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=WEE_BYOK_TOOL_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: bash timed out after {WEE_BYOK_TOOL_TIMEOUT}s"
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"Error executing bash: {exc}"
+    return _format_process_result(result)
+
+
+def execute_python(func_args: dict) -> str:
+    """Run Python for BYOK providers that have no built-in python tool."""
+    code = (func_args or {}).get("code", "")
+    if not code:
+        return "Error: No code provided"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=WEE_BYOK_TOOL_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: python timed out after {WEE_BYOK_TOOL_TIMEOUT}s"
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"Error executing python: {exc}"
+    return _format_process_result(result)
+
+
 def _execute_search(func_args: dict) -> str:
     """Handle search tool calls via SearXNG (Issue #255).
 
