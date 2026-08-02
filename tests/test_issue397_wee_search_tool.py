@@ -83,7 +83,7 @@ class TestIssue397SearchToolIsWired(unittest.TestCase):
 
         self.assertIn('name="search"', source, "search must be a registered SDK Tool")
         self.assertIn(
-            "tools=[search_tool, call_agent_tool, browser_tool]",
+            "tools=[search_tool, call_agent_tool, browser_tool, shell_tool]",
             source,
             "the search tool must be passed to the SDK session",
         )
@@ -91,7 +91,7 @@ class TestIssue397SearchToolIsWired(unittest.TestCase):
         # same tools, otherwise a retry would be less capable than the turn it
         # is retrying.
         self.assertEqual(
-            source.count("tools=[search_tool, call_agent_tool, browser_tool]"),
+            source.count("tools=[search_tool, call_agent_tool, browser_tool, shell_tool]"),
             2,
             "both the initial turn and the #398 retry must register search",
         )

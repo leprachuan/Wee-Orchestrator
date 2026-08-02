@@ -5811,6 +5811,113 @@ You can mention an agent in your prompt and it will auto-delegate:
             args += ["-c", f"{prefix}.env.{key}={json.dumps(value)}"]
         return args
 
+    # Same shape as the browser helpers above, for the session shell (#477).
+    # The `wee` runtime registers an in-process `shell` Tool; subprocess
+    # runtimes get the `wee-shell` MCP server instead, for the same reason.
+
+    WEE_SHELL_MCP_NAME = "wee-shell"
+    WEE_SHELL_MCP_RUNTIMES = frozenset({"codex", "claude", "copilot"})
+
+    def _wee_shell_prompt_note(self, n8n_session_id: str) -> str:
+        """Point the agent at this session's shell, or "" when there is none.
+
+        Unlike the browser, codex/claude/copilot each already ship a working
+        native shell tool, so there is no "reports nothing available" failure
+        to redirect around. The problem here is different: without an explicit
+        nudge, the agent has no reason to prefer the one shell the user can
+        actually see and type into over its own private one.
+        """
+        if self._wee_shell_mcp_server_spec(n8n_session_id) is None:
+            return ""
+        return (
+            "\n\n[Session Shell]\n"
+            "This chat has its own shell attached, and the user can see it and "
+            "may type commands into it themselves. "
+            f"Control it with the `{self.WEE_SHELL_MCP_NAME}` MCP tools: "
+            "shell_run (run a command line), shell_write (type raw text, no "
+            "Enter -- for answering an interactive prompt), shell_key (send "
+            "ctrl-c/tab/arrows/etc.), shell_read (see recent output without "
+            "sending input, including anything the user typed).\n"
+            "Use these -- not your own built-in shell/bash/terminal tool -- for "
+            "anything the user might want to see or that responds to what the "
+            "user typed in \"the shell\", \"the terminal\", or \"this session\". "
+            "It is a shared terminal: check shell_read before assuming a "
+            "command failed or that nothing happened."
+        )
+
+    def _wee_shell_mcp_env(self, n8n_session_id: str) -> Optional[Dict[str, str]]:
+        shared_key = os.environ.get("API_SHARED_KEY", "")
+        if not shared_key or not n8n_session_id:
+            return None
+
+        scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        port = os.environ.get("API_PORT", "8001")
+        session_data = self.get_or_create_session_data(n8n_session_id) or {}
+
+        env = {
+            "WEE_SHELL_SESSION_ID": n8n_session_id,
+            "WEE_API_BASE": f"{scheme}://127.0.0.1:{port}",
+            "WEE_API_TOKEN": f"shared_{shared_key}",
+        }
+        if identity := session_data.get("identity"):
+            env["WEE_API_IDENTITY"] = str(identity)
+        if channel := session_data.get("channel"):
+            env["WEE_API_CHANNEL"] = str(channel)
+        if scheme == "https":
+            env["WEE_API_INSECURE_TLS"] = "1"
+        return env
+
+    def _wee_shell_mcp_server_spec(self, n8n_session_id: str) -> Optional[dict]:
+        """The `wee-shell` MCP server as command/args/env, or None."""
+        env = self._wee_shell_mcp_env(n8n_session_id)
+        if env is None:
+            return None
+        return {
+            "command": sys.executable or "python3",
+            "args": [os.path.join(SCRIPT_BASE_DIR, "wee_shell_mcp.py")],
+            "env": env,
+        }
+
+    def _wee_shell_mcp_config_file(self, n8n_session_id: str) -> Optional[str]:
+        """Write an `mcpServers` JSON config and return its path, or None.
+
+        Same secret-hygiene requirements as the browser config: the file
+        embeds the API shared key, so it is owner-only from creation and the
+        containing directory is gitignored.
+        """
+        spec = self._wee_shell_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return None
+        try:
+            directory = os.path.join(SCRIPT_BASE_DIR, ".mcp-configs")
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(directory, 0o700)
+            path = os.path.join(directory, f"shell-{n8n_session_id}.json")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"mcpServers": {self.WEE_SHELL_MCP_NAME: spec}}, handle)
+            os.chmod(path, 0o600)
+            return path
+        except OSError as exc:
+            print(f"[Shell] Could not write MCP config: {exc}", file=sys.stderr)
+            return None
+
+    def _wee_shell_codex_config_args(self, n8n_session_id: str) -> list:
+        """`-c` overrides registering the shell MCP server with codex."""
+        spec = self._wee_shell_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return []
+        prefix = f"mcp_servers.{self.WEE_SHELL_MCP_NAME}"
+        args = [
+            "-c",
+            f"{prefix}.command={json.dumps(spec['command'])}",
+            "-c",
+            f"{prefix}.args={json.dumps(spec['args'])}",
+        ]
+        for key, value in spec["env"].items():
+            args += ["-c", f"{prefix}.env.{key}={json.dumps(value)}"]
+        return args
+
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
 
@@ -7285,11 +7392,16 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
             if runtime in self.WEE_BROWSER_MCP_RUNTIMES
             else ""
         )
+        shell_instruction = (
+            self._wee_shell_prompt_note(n8n_session_id)
+            if runtime in self.WEE_SHELL_MCP_RUNTIMES
+            else ""
+        )
 
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
 {runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}
 
-{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}{browser_instruction}
+{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}{browser_instruction}{shell_instruction}
 
 User Request:
 {prompt}"""
@@ -8282,6 +8394,8 @@ User Request:
         # than replacing them.
         if _browser_mcp := self._wee_browser_mcp_config_file(n8n_session_id):
             cmd += ["--additional-mcp-config", f"@{_browser_mcp}"]
+        if _shell_mcp := self._wee_shell_mcp_config_file(n8n_session_id):
+            cmd += ["--additional-mcp-config", f"@{_shell_mcp}"]
 
         # Add elevated flags for full access
         if mode == "elevated":
@@ -8407,6 +8521,8 @@ User Request:
             # browser control for the rest of its life.
             if _recovery_browser_mcp := self._wee_browser_mcp_config_file(n8n_session_id):
                 _recovery_cmd += ["--additional-mcp-config", f"@{_recovery_browser_mcp}"]
+            if _recovery_shell_mcp := self._wee_shell_mcp_config_file(n8n_session_id):
+                _recovery_cmd += ["--additional-mcp-config", f"@{_recovery_shell_mcp}"]
             if mode == "elevated":
                 _recovery_cmd.insert(2, "--allow-all-paths")
                 _recovery_cmd.append("--yolo")
@@ -9145,6 +9261,8 @@ User Request:
             # Additive: no --strict-mcp-config, so the agent's own MCP servers
             # keep working alongside this one.
             cmd.extend(["--mcp-config", browser_mcp_config])
+        if shell_mcp_config := self._wee_shell_mcp_config_file(n8n_session_id):
+            cmd.extend(["--mcp-config", shell_mcp_config])
 
         if resume and session_id:
             cmd.append(f"--resume={session_id}")
@@ -9446,6 +9564,7 @@ User Request:
             if model:
                 cmd += ["-m", model]
             cmd += self._wee_browser_codex_config_args(n8n_session_id)
+            cmd += self._wee_shell_codex_config_args(n8n_session_id)
             cmd += [session_id, context_prompt]
             print(
                 f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode",
@@ -9466,6 +9585,7 @@ User Request:
             if model:
                 cmd += ["-m", model]
             cmd += self._wee_browser_codex_config_args(n8n_session_id)
+            cmd += self._wee_shell_codex_config_args(n8n_session_id)
             cmd.append(context_prompt)
             print(
                 f"[Session] Starting new CODEX session with model {model} in {mode} mode",
@@ -9904,6 +10024,47 @@ User Request:
                 handler=browser_handler,
             )
 
+            async def shell_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "session_shell",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            shell_tool = Tool(
+                name="session_shell",
+                description=(
+                    "Control the shell attached to this chat session, which the "
+                    "user can see and may type into themselves. Use shell_read "
+                    "before assuming a command failed -- it may still be running "
+                    "or the user may have already handled it. This is NOT your "
+                    "own private shell/bash tool; it is a shared terminal."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["run", "write", "key", "read"],
+                        },
+                        "command": {"type": "string", "description": "For action=run"},
+                        "text": {"type": "string", "description": "For action=write"},
+                        "key": {
+                            "type": "string",
+                            "description": "For action=key",
+                            "enum": [
+                                "ctrl-c", "ctrl-d", "tab", "up", "down", "left",
+                                "right", "enter", "escape", "backspace",
+                            ],
+                        },
+                    },
+                    "required": ["action"],
+                },
+                handler=shell_handler,
+            )
+
             # Issue #453: #443 stopped redeclaring shell/file tools on the theory
             # that "the Copilot SDK session already knows about and describes its
             # own built-in tools". That holds for Copilot-native models but not
@@ -10012,7 +10173,7 @@ User Request:
                 timeout=float(effective_timeout),
                 session_id=saved_sdk_session,
                 resume=bool(resume and saved_sdk_session),
-                tools=[search_tool, call_agent_tool, browser_tool] + native_tools,
+                tools=[search_tool, call_agent_tool, browser_tool, shell_tool] + native_tools,
                 enable_tools=True,
                 event_callback=on_sdk_event,
             )
@@ -10041,7 +10202,7 @@ User Request:
                         timeout=float(effective_timeout),
                         session_id=retry_session,
                         resume=bool(retry_session),
-                        tools=[search_tool, call_agent_tool, browser_tool],
+                        tools=[search_tool, call_agent_tool, browser_tool, shell_tool],
                         enable_tools=True,
                         event_callback=on_sdk_event,
                     )
@@ -10795,10 +10956,20 @@ User Request:
                     func_args,
                     timeout=min(float(self.command_timeout), 90.0),
                 )
+            elif func_name == "session_shell":
+                if not n8n_session_id:
+                    return "Error: Shell tool requires a chat session"
+                from shell_bridge import execute_shell_command
+
+                return execute_shell_command(
+                    n8n_session_id,
+                    func_args,
+                    timeout=min(float(self.command_timeout), 90.0),
+                )
             else:
                 return (
                     f"Error: Unknown tool '{func_name}'. "
-                    "Available: search, call_agent, browser"
+                    "Available: search, call_agent, browser, session_shell"
                 )
         except Exception as e:
             return f"Error executing {func_name}: {e}"
@@ -12641,6 +12812,159 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Browser command failed: {exc}") from exc
+
+        return {"result": output}
+
+    def _assert_shell_session_owner(session_id: str, user: dict) -> None:
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        owner = data.get("identity")
+        channel = data.get("channel")
+        if owner and owner != user["identity"]:
+            raise HTTPException(
+                status_code=403, detail="Shell session belongs to another user"
+            )
+        if channel and channel != user["channel"]:
+            raise HTTPException(
+                status_code=403, detail="Shell session belongs to another channel"
+            )
+
+    @app.post("/api/v1/shell/sessions/{session_id}/register")
+    async def register_native_shell(session_id: str, request: Request):
+        """Attach a native shell controller to one authenticated chat session."""
+        from shell_bridge import native_shell_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id is required")
+        try:
+            native_shell_broker.register(
+                session_id, user["identity"], user["channel"], client_id
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"registered": True, "session_id": session_id}
+
+    @app.get("/api/v1/shell/sessions/{session_id}/commands")
+    async def poll_native_shell_commands(
+        session_id: str, request: Request, client_id: str, timeout: float = 25.0
+    ):
+        """Long-poll the next command for a native session shell."""
+        from shell_bridge import native_shell_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+        try:
+            command = await asyncio.to_thread(
+                native_shell_broker.poll,
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                timeout,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"command": command}
+
+    @app.post("/api/v1/shell/sessions/{session_id}/results")
+    async def submit_native_shell_result(session_id: str, request: Request):
+        """Return a native PTY command result to the waiting Wee tool."""
+        from shell_bridge import native_shell_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        command_id = str(body.get("command_id") or "").strip()
+        if not client_id or not command_id:
+            raise HTTPException(
+                status_code=400, detail="client_id and command_id are required"
+            )
+        try:
+            native_shell_broker.submit_result(
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                command_id,
+                output=body.get("output"),
+                error=body.get("error"),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"accepted": True}
+
+    @app.post("/api/v1/shell/sessions/{session_id}/execute")
+    async def execute_native_shell_command(session_id: str, request: Request):
+        """Drive this session's shell from outside the API process.
+
+        Same seam as `/api/v1/browser/sessions/{id}/execute`: the `wee-shell`
+        MCP server calls this on behalf of the subprocess runtimes, since the
+        broker's registrations live in this process's memory.
+        """
+        from shell_bridge import execute_shell_command
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+        action = str(body.get("action") or "").strip()
+        if not action:
+            raise HTTPException(status_code=400, detail="'action' is required")
+
+        command = {k: v for k, v in body.items() if k != "timeout" and v is not None}
+        raw_timeout = body.get("timeout")
+        try:
+            timeout = float(raw_timeout) if raw_timeout is not None else 45.0
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="'timeout' must be a number")
+
+        loop = asyncio.get_running_loop()
+        try:
+            # execute_shell_command blocks waiting on the shell client, so keep
+            # it off the event loop -- otherwise one slow command would stall
+            # every other request this API is serving.
+            output = await loop.run_in_executor(
+                None, lambda: execute_shell_command(session_id, command, timeout=timeout)
+            )
+        except RuntimeError as exc:
+            # Raised when no shell client is attached to this session.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Shell command failed: {exc}") from exc
 
         return {"result": output}
 
