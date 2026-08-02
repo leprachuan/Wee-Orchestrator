@@ -5774,10 +5774,19 @@ You can mention an agent in your prompt and it will auto-delegate:
             return None
         try:
             directory = os.path.join(SCRIPT_BASE_DIR, ".mcp-configs")
-            os.makedirs(directory, exist_ok=True)
+            # The file embeds the API shared key so the MCP server can
+            # authenticate, so keep it owner-only rather than inheriting the
+            # umask. .gitignore covers the other half of the exposure.
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(directory, 0o700)
             path = os.path.join(directory, f"browser-{n8n_session_id}.json")
-            with open(path, "w", encoding="utf-8") as handle:
+            # Create with 0600 before anything is written, rather than
+            # chmod-ing after: a world-readable window, however brief, is still
+            # a window where the key is readable.
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump({"mcpServers": {self.WEE_BROWSER_MCP_NAME: spec}}, handle)
+            os.chmod(path, 0o600)
             return path
         except OSError as exc:
             print(f"[Browser] Could not write MCP config: {exc}", file=sys.stderr)
