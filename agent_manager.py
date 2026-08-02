@@ -5680,6 +5680,43 @@ You can mention an agent in your prompt and it will auto-delegate:
     # instead, which reaches the same browser over HTTP.
 
     WEE_BROWSER_MCP_NAME = "wee-browser"
+    # Runtimes that reach the session browser through the MCP server. The
+    # others (wee, copilot-sdk, claude-sdk) register an in-process `browser`
+    # tool instead, so pointing them at MCP tool names would be wrong.
+    WEE_BROWSER_MCP_RUNTIMES = frozenset({"codex", "claude", "copilot"})
+
+    def _wee_browser_prompt_note(self, n8n_session_id: str) -> str:
+        """Point the agent at this session's browser, or "" when there is none.
+
+        Registering the tools is not enough. Codex ships a bundled browser
+        plugin (`control-in-app-browser`, driven through node_repl) and reaches
+        for it first; when that finds no browser of its own it reports "no
+        browser session is available" and stops, without ever trying the
+        wee-browser tools sitting right next to it. Observed directly: the
+        plugin's skill file is read, two node_repl "Connect to browser" calls
+        fail, and the turn ends -- while a prompt that names browser_snapshot
+        drives the real panel on the first attempt.
+
+        Naming the tools is enough to redirect it, and is preferable to
+        disabling the bundled plugin, which would take away a capability the
+        user may want in other work.
+        """
+        if self._wee_browser_mcp_server_spec(n8n_session_id) is None:
+            return ""
+        return (
+            "\n\n[Session Browser]\n"
+            "This chat has its own browser attached, and the user can see it. "
+            f"Control it with the `{self.WEE_BROWSER_MCP_NAME}` MCP tools: "
+            "browser_snapshot (read the current page), browser_navigate, "
+            "browser_click, browser_type, browser_evaluate, browser_back, "
+            "browser_forward, browser_reload.\n"
+            "Use these for anything about \"the browser\", \"this page\", or "
+            "\"the attached/connected browser\". Do NOT use any other browser "
+            "tool or plugin for that -- they drive a different browser the user "
+            "cannot see, and will report that no browser is available. If one "
+            "of those reports no browser, call browser_snapshot instead of "
+            "concluding there is none."
+        )
 
     def _wee_browser_mcp_env(self, n8n_session_id: str) -> Optional[Dict[str, str]]:
         """Environment for the browser MCP server, or None when unavailable.
@@ -7234,10 +7271,16 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                 flush=True,
             )
 
+        browser_instruction = (
+            self._wee_browser_prompt_note(n8n_session_id)
+            if runtime in self.WEE_BROWSER_MCP_RUNTIMES
+            else ""
+        )
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
 {runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}
 
-{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}{browser_instruction}
 
 User Request:
 {prompt}"""
