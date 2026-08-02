@@ -116,6 +116,6 @@ logs/wee_executor.log
 # Transcript storage (contains sensitive session data)
 logs/transcripts/
 
-# Per-session browser MCP configs. These embed the API shared key so the MCP
-# server can authenticate, and are regenerated on every run.
+# Per-session browser/shell MCP configs. These embed the API shared key so
+# the MCP server can authenticate, and are regenerated on every run.
 .mcp-configs/
