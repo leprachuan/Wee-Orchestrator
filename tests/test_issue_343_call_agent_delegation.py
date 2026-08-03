@@ -3,11 +3,13 @@
 
 Bug: wee runtime completes with 0 chars when final tool call is call_agent delegation.
 
-Validates:
-- call_agent is included in _WEE_TOOLS schema
+Issue #443 removed the hand-rolled OpenAI-compatible fallback loop that the
+original 0-char regression lived in — the Copilot SDK is now the only
+execution path, and call_agent is passed to it as a Copilot SDK Tool rather
+than a `_WEE_TOOLS` schema entry. What's still directly testable without
+mocking the Copilot SDK's own internals:
+
 - _wee_execute_tool dispatches call_agent to _wee_call_agent
-- Empty synthesis after call_agent surfaces the task dispatch result (not 0 chars)
-- Successful call_agent dispatch returns non-empty task confirmation
 - _wee_call_agent handles HTTP errors gracefully
 """
 import json
@@ -16,7 +18,7 @@ import sys
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("API_SHARED_KEY", "test_key_343")
 
@@ -51,168 +53,8 @@ def _make_mgr():
     return mgr
 
 
-def _run_wee(mgr, session_id, prompt="test", model="ollama/gemma4:e4b", **kwargs):
-    """Helper to call run_wee_native with mocked session infrastructure."""
-    defaults = dict(
-        prompt=prompt,
-        model=model,
-        agent="orchestrator",
-        session_id=None,
-        resume=False,
-        n8n_session_id=session_id,
-        timeout=30,
-        render_type="text",
-    )
-    defaults.update(kwargs)
-    session_data = mgr.session_map.get(
-        session_id, {"runtime": "wee", "model": model, "channel": "api"}
-    )
-    with patch.object(mgr, "get_or_create_session_data", return_value=session_data):
-        with patch.object(
-            mgr, "build_agent_context_prompt", return_value="You are helpful."
-        ):
-            return mgr.run_wee_native(**defaults)
-
-
-def _make_text_chunk(text):
-    chunk = MagicMock()
-    chunk.choices = [MagicMock()]
-    chunk.choices[0].delta.content = text
-    chunk.choices[0].delta.tool_calls = None
-    return chunk
-
-
-def _make_empty_chunk():
-    chunk = MagicMock()
-    chunk.choices = [MagicMock()]
-    chunk.choices[0].delta.content = None
-    chunk.choices[0].delta.tool_calls = None
-    return chunk
-
-
-def _make_tool_call_chunk(tool_id, func_name, arguments_json):
-    """Return two chunks simulating a streaming tool call for func_name."""
-    chunks = []
-
-    c1 = MagicMock()
-    c1.choices = [MagicMock()]
-    c1.choices[0].delta.content = None
-    tc1 = MagicMock()
-    tc1.index = 0
-    tc1.id = tool_id
-    tc1.function = MagicMock()
-    tc1.function.name = func_name
-    tc1.function.arguments = ""
-    c1.choices[0].delta.tool_calls = [tc1]
-    chunks.append(c1)
-
-    c2 = MagicMock()
-    c2.choices = [MagicMock()]
-    c2.choices[0].delta.content = None
-    tc2 = MagicMock()
-    tc2.index = 0
-    tc2.id = None
-    tc2.function = MagicMock()
-    tc2.function.name = None
-    tc2.function.arguments = arguments_json
-    c2.choices[0].delta.tool_calls = [tc2]
-    chunks.append(c2)
-
-    return chunks
-
-
 # ===========================================================================
-# Test 1: call_agent in _WEE_TOOLS
-# ===========================================================================
-class TestCallAgentInToolsSchema(unittest.TestCase):
-    """call_agent must be registered in _WEE_TOOLS schema."""
-
-    @patch("openai.OpenAI")
-    def test_call_agent_in_wee_tools_schema(self, mock_openai_cls):
-        """run_wee_native should pass call_agent in the tools parameter."""
-        mgr = _make_mgr()
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-        # Return a single text response so the loop exits cleanly
-        mock_client.chat.completions.create.return_value = iter(
-            [_make_text_chunk("OK")]
-        )
-        _run_wee(mgr, "sess_343_schema", prompt="test")
-
-        # Inspect the tools= kwarg passed to the API
-        create_kwargs = mock_client.chat.completions.create.call_args[1]
-        tools = create_kwargs.get("tools", [])
-        tool_names = [t["function"]["name"] for t in tools]
-        self.assertIn(
-            "call_agent", tool_names,
-            "call_agent must be included in _WEE_TOOLS so models can use it as a structured tool call",
-        )
-
-
-# ===========================================================================
-# Test 2: 0-char output regression — call_agent + empty synthesis
-# ===========================================================================
-class TestCallAgentEmptySynthesisFallback(unittest.TestCase):
-    """After call_agent tool execution, if model returns 0 chars, surface task result."""
-
-    @patch("openai.OpenAI")
-    def test_no_zero_char_output_after_call_agent(self, mock_openai_cls):
-        """Output must not be 0 chars when call_agent is the final tool call."""
-        mgr = _make_mgr()
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-
-        call_agent_args = json.dumps({"agent": "research", "prompt": "Find info", "mode": "background"})
-        task_result = "Task dispatched to research agent.\nTask ID: bg_abc12345\nCheck status: /background status bg_abc12345"
-
-        # Round 1: model calls call_agent
-        round1 = _make_tool_call_chunk("tc_ca_1", "call_agent", call_agent_args)
-        # Round 2: model produces 0 chars (the bug scenario)
-        round2 = [_make_empty_chunk()]
-
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1),
-            iter(round2),
-        ]
-
-        with patch.object(mgr, "_wee_call_agent", return_value=task_result):
-            with patch.object(mgr, "_wee_save_messages"):
-                result = _run_wee(mgr, "sess_343_empty", prompt="Research local LLMs")
-
-        self.assertGreater(
-            len(result), 0,
-            "Output must not be 0 chars after call_agent delegation",
-        )
-        self.assertIn("bg_abc12345", result, "Task ID should be surfaced in response")
-
-    @patch("openai.OpenAI")
-    def test_normal_text_synthesis_not_overridden(self, mock_openai_cls):
-        """When model produces normal text after call_agent, keep it unchanged."""
-        mgr = _make_mgr()
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-
-        call_agent_args = json.dumps({"agent": "research", "prompt": "Find info"})
-        task_result = "Task dispatched to research agent.\nTask ID: bg_xyz99"
-        synthesis = "I've dispatched the research task. Check /background status bg_xyz99."
-
-        round1 = _make_tool_call_chunk("tc_ca_2", "call_agent", call_agent_args)
-        round2 = [_make_text_chunk(synthesis)]
-
-        mock_client.chat.completions.create.side_effect = [
-            iter(round1),
-            iter(round2),
-        ]
-
-        with patch.object(mgr, "_wee_call_agent", return_value=task_result):
-            with patch.object(mgr, "_wee_save_messages"):
-                result = _run_wee(mgr, "sess_343_text", prompt="Research LLMs")
-
-        self.assertEqual(result, synthesis, "Model-generated synthesis should be preserved as-is")
-
-
-# ===========================================================================
-# Test 3: _wee_execute_tool routes call_agent
+# Test: _wee_execute_tool routes call_agent
 # ===========================================================================
 class TestWeeExecuteToolCallAgent(unittest.TestCase):
     """_wee_execute_tool must route call_agent to _wee_call_agent."""
@@ -229,8 +71,11 @@ class TestWeeExecuteToolCallAgent(unittest.TestCase):
             )
 
         self.assertEqual(result, expected)
+        # Issue #444: n8n_session_id is forwarded as origin_session_id so
+        # background-task result routing survives delegation.
         mock_ca.assert_called_once_with(
-            {"agent": "research", "prompt": "Find LLM info", "mode": "background"}
+            {"agent": "research", "prompt": "Find LLM info", "mode": "background"},
+            origin_session_id=None,
         )
 
     def test_unknown_tool_error_includes_call_agent(self):
@@ -241,7 +86,7 @@ class TestWeeExecuteToolCallAgent(unittest.TestCase):
 
 
 # ===========================================================================
-# Test 4: _wee_call_agent dispatches correctly
+# Test: _wee_call_agent dispatches correctly
 # ===========================================================================
 class TestWeeCallAgentMethod(unittest.TestCase):
     """_wee_call_agent should call the background-tasks API and return task ID."""
@@ -306,4 +151,4 @@ class TestWeeCallAgentMethod(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

@@ -500,6 +500,38 @@ class TaskSchedulerExecutor:
                 return True
         return False
 
+    # --- Masked-failure signatures (Issue #418) ---
+    # Some runtime CLIs (observed with Devin) print a validation error to
+    # stdout/stderr but still exit 0, which previously caused these jobs to
+    # be logged as `success: true` even though nothing actually ran.
+    _MASKED_FAILURE_PATTERNS = [
+        re.compile(p, re.IGNORECASE)
+        for p in [
+            r"^\s*error:",
+            r"unknown model",
+            r"unknown runtime",
+            r"unknown agent",
+        ]
+    ]
+
+    @staticmethod
+    def _detect_masked_failure(output: str) -> Optional[str]:
+        """Detect a known error signature in output that exited 0.
+
+        Returns the matching line (used as the error message) or None if the
+        output does not look like a masked failure.
+        """
+        if not output:
+            return None
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            for pattern in TaskSchedulerExecutor._MASKED_FAILURE_PATTERNS:
+                if pattern.search(stripped):
+                    return stripped
+        return None
+
     def _resolve_fallback(self, job: Dict):
         """Resolve fallback runtime/model. Per-job > global env > None.
 
@@ -668,6 +700,20 @@ class TaskSchedulerExecutor:
 
             if result.returncode == 0:
                 output = result.stdout.strip()
+                masked_error = self._detect_masked_failure(output)
+                if masked_error is not None:
+                    # Issue #418: runtime exited 0 but printed a validation
+                    # error (e.g. Devin rejecting a deprecated model) -- do
+                    # not record this as a successful run.
+                    self._log_job(
+                        job_id,
+                        f"Execution reported success (exit 0) but output contains "
+                        f"an error signature: {masked_error[:200]}",
+                    )
+                    logger.error(
+                        f"Job {job_id} masked failure detected: {masked_error[:200]}"
+                    )
+                    return None, masked_error
                 self._log_job(job_id, "Execution succeeded")
                 self._save_result(job_id, job["name"], success=True, output=output)
                 logger.info(f"Job {job_id} completed successfully")

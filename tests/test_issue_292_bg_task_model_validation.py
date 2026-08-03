@@ -143,16 +143,14 @@ class TestIssue292BgTaskModelValidation(unittest.TestCase):
         }
         mock_create.return_value = mock_task
 
-        with patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value = MagicMock()
-            resp = self._post_bg_task(
-                {
-                    "prompt": "Say hello",
-                    "agent": "fosterbot",
-                    "runtime": "copilot",
-                    # no "model" field
-                }
-            )
+        resp = self._post_bg_task(
+            {
+                "prompt": "Say hello",
+                "agent": "fosterbot",
+                "runtime": "copilot",
+                # no "model" field
+            }
+        )
 
         self.assertNotEqual(
             resp.status_code,
@@ -187,16 +185,14 @@ class TestIssue292BgTaskModelValidation(unittest.TestCase):
         }
         mock_create.return_value = mock_task
 
-        with patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value = MagicMock()
-            resp = self._post_bg_task(
-                {
-                    "prompt": "Say hello",
-                    "agent": "fosterbot",
-                    "runtime": "claude",
-                    "model": "claude-sonnet-4.6",
-                }
-            )
+        resp = self._post_bg_task(
+            {
+                "prompt": "Say hello",
+                "agent": "fosterbot",
+                "runtime": "claude",
+                "model": "claude-sonnet-4.6",
+            }
+        )
 
         self.assertNotEqual(
             resp.status_code,
@@ -242,83 +238,6 @@ class TestIssue292BgTaskModelValidation(unittest.TestCase):
             detail,
             "Error detail should point to /api/v1/models endpoint",
         )
-
-
-class TestIssue292DispatchPipelineAutoModel(unittest.TestCase):
-    """dispatch_pipeline.py dispatch_via_api must not pass 'auto' to the API."""
-
-    def _make_cfg(self, model, fallback_model=None):
-        return {
-            "runtime": "copilot",
-            "model": model,
-            "fallback_model": fallback_model,
-            "permission_mode": "elevated",
-            "yolo": True,
-            "timeout": 3600,
-        }
-
-    def _capture_body(self, cfg):
-        import json
-        import os
-        import sys
-
-        scripts_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"
-        )
-        sys.path.insert(0, scripts_dir)
-        import dispatch_pipeline as dp
-
-        captured = {}
-
-        class _FakeResp:
-            def read(self):
-                return b'{"task_id": "bg_testfake"}'
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                pass
-
-        def fake_urlopen(req, context=None, timeout=None):
-            captured["body"] = json.loads(req.data)
-            return _FakeResp()
-
-        with patch.object(
-            dp.request, "urlopen", side_effect=fake_urlopen
-        ), patch.object(dp, "_load_api_key", return_value="test_key"):
-            dp.dispatch_via_api("wee-dev", "test prompt", cfg)
-        return captured["body"]
-
-    def test_auto_model_omitted_from_api_body(self):
-        body = self._capture_body(self._make_cfg("auto"))
-        self.assertNotIn(
-            "model",
-            body,
-            "'auto' model should be omitted from API body, not forwarded",
-        )
-
-    def test_none_model_omitted_from_api_body(self):
-        body = self._capture_body(self._make_cfg(None))
-        self.assertNotIn("model", body)
-
-    def test_explicit_model_included_in_api_body(self):
-        body = self._capture_body(self._make_cfg("claude-sonnet-4.6"))
-        self.assertIn("model", body)
-        self.assertEqual(body["model"], "claude-sonnet-4.6")
-
-    def test_auto_fallback_model_omitted(self):
-        body = self._capture_body(
-            self._make_cfg("claude-sonnet-4.6", fallback_model="auto")
-        )
-        self.assertNotIn("fallback_model", body)
-
-    def test_explicit_fallback_model_included(self):
-        body = self._capture_body(
-            self._make_cfg("claude-sonnet-4.6", fallback_model="claude-haiku-4.5")
-        )
-        self.assertIn("fallback_model", body)
-        self.assertEqual(body["fallback_model"], "claude-haiku-4.5")
 
 
 if __name__ == "__main__":

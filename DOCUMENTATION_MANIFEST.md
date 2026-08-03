@@ -92,7 +92,7 @@ Contains exactly what to add to each file:
 
 ---
 
-### 3. **README_CANVAS_IMPLEMENTATION.md**
+### 3. **docs/history/README_CANVAS_IMPLEMENTATION.md**
 **Size**: ~650 lines | **Purpose**: Strategic Implementation Guide
 
 Contains:
@@ -130,14 +130,14 @@ This file you're reading now — explains what's in each document and where to s
 Read: **CANVAS_QUICK_REFERENCE.md** Section "Files to Modify" only
 
 ### If you have 30 minutes:
-1. Read: **README_CANVAS_IMPLEMENTATION.md** sections 1-3 (Architecture, Patterns, Integration)
+1. Read: **docs/history/README_CANVAS_IMPLEMENTATION.md** sections 1-3 (Architecture, Patterns, Integration)
 2. Skim: **CANVAS_QUICK_REFERENCE.md** to see what you need to add
 
 ### If you have 2+ hours:
-1. Read: **README_CANVAS_IMPLEMENTATION.md** (complete)
+1. Read: **docs/history/README_CANVAS_IMPLEMENTATION.md** (complete)
 2. Reference: **WEE_STRUCTURE_PATTERNS.md** for deep dives
 3. Implement: Using **CANVAS_QUICK_REFERENCE.md** as copy-paste guide
-4. Test: Follow testing strategy in README_CANVAS_IMPLEMENTATION.md
+4. Test: Follow testing strategy in docs/history/README_CANVAS_IMPLEMENTATION.md
 
 ---
 
@@ -147,14 +147,14 @@ Read: **CANVAS_QUICK_REFERENCE.md** Section "Files to Modify" only
 |----------|----------|
 | Where should I add HTML? | QUICK_REFERENCE.md Line 9-35 |
 | What CSS patterns exist? | WEE_STRUCTURE_PATTERNS.md Section 2 |
-| How do panels toggle? | README_CANVAS_IMPLEMENTATION.md "Key Patterns" |
+| How do panels toggle? | docs/history/README_CANVAS_IMPLEMENTATION.md "Key Patterns" |
 | What's the exact line in app.js to edit? | QUICK_REFERENCE.md (all locations marked) |
 | How does the API authentication work? | WEE_STRUCTURE_PATTERNS.md Section 4 (lines 5125-5160) |
-| What are the CSS variables I can use? | README_CANVAS_IMPLEMENTATION.md "CSS Variables Available" |
+| What are the CSS variables I can use? | docs/history/README_CANVAS_IMPLEMENTATION.md "CSS Variables Available" |
 | How do I add a new API endpoint? | QUICK_REFERENCE.md Section "agent_manager.py" |
-| What is the mobile responsive strategy? | README_CANVAS_IMPLEMENTATION.md "Design Decisions" |
-| What common mistakes should I avoid? | README_CANVAS_IMPLEMENTATION.md "Common Pitfalls" |
-| How do I test my implementation? | README_CANVAS_IMPLEMENTATION.md "Testing Strategy" |
+| What is the mobile responsive strategy? | docs/history/README_CANVAS_IMPLEMENTATION.md "Design Decisions" |
+| What common mistakes should I avoid? | docs/history/README_CANVAS_IMPLEMENTATION.md "Common Pitfalls" |
+| How do I test my implementation? | docs/history/README_CANVAS_IMPLEMENTATION.md "Testing Strategy" |
 
 ---
 
@@ -244,7 +244,7 @@ All documentation files are in the repository root:
 /opt/n8n-copilot-shim-dev/
 ├── WEE_STRUCTURE_PATTERNS.md           ← Deep technical reference
 ├── CANVAS_QUICK_REFERENCE.md           ← Copy-paste implementation guide
-├── README_CANVAS_IMPLEMENTATION.md     ← Strategic overview & patterns
+├── docs/history/README_CANVAS_IMPLEMENTATION.md     ← Strategic overview & patterns
 ├── DOCUMENTATION_MANIFEST.md           ← This file
 └── [other repo files...]
 ```
@@ -259,7 +259,7 @@ All documentation files are in the repository root:
 - Test with browser DevTools
 
 **Level 2: Intermediate**
-- Read README_CANVAS_IMPLEMENTATION.md for understanding
+- Read docs/history/README_CANVAS_IMPLEMENTATION.md for understanding
 - Modify code for your specific needs
 - Follow testing strategy
 
@@ -325,21 +325,21 @@ Quick jumps to key information:
 **CSS Styling**
 → WEE_STRUCTURE_PATTERNS.md: Section 2 (lines 165-405)
 → QUICK_REFERENCE.md: Section "webui/dist/app.css"
-→ README_CANVAS_IMPLEMENTATION.md: "CSS Styling Pattern"
+→ docs/history/README_CANVAS_IMPLEMENTATION.md: "CSS Styling Pattern"
 
 **JavaScript Implementation**
 → WEE_STRUCTURE_PATTERNS.md: Section 3 (lines 406-845)
 → QUICK_REFERENCE.md: Section "webui/dist/app.js"
-→ README_CANVAS_IMPLEMENTATION.md: "Key Patterns" 1-5
+→ docs/history/README_CANVAS_IMPLEMENTATION.md: "Key Patterns" 1-5
 
 **API Implementation**
 → WEE_STRUCTURE_PATTERNS.md: Section 4 (lines 846-1099)
 → QUICK_REFERENCE.md: Section "agent_manager.py"
-→ README_CANVAS_IMPLEMENTATION.md: "API Endpoint Pattern"
+→ docs/history/README_CANVAS_IMPLEMENTATION.md: "API Endpoint Pattern"
 
 **Design Principles**
 → WEE_STRUCTURE_PATTERNS.md: Bottom (Key Design Principles)
-→ README_CANVAS_IMPLEMENTATION.md: "Design Decisions"
+→ docs/history/README_CANVAS_IMPLEMENTATION.md: "Design Decisions"
 
 ---
 

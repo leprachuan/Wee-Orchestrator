@@ -1,5 +1,10 @@
 # Wee Orchestrator Release Documentation
 
+## Current API installation and releases
+
+- [API releases](API_RELEASES.md) — versioned API packages, checksum-verified
+  macOS/Linux installer, upgrades, and maintainer release procedure.
+
 This directory contains comprehensive documentation for the Wee Orchestrator release workflow implemented on May 2, 2026.
 
 ## Documentation Files

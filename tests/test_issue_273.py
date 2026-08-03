@@ -4,7 +4,17 @@ import sys
 import unittest
 from unittest.mock import MagicMock
 
-sys.path.insert(0, "/opt/n8n-copilot-shim-dev")
+
+import pytest
+
+# These tests import wee_runtime.execute_tool, removed by #443 when the Wee runtime moved to the Copilot SDK's own agentic loop.
+# Left in place rather than deleted so the coverage gap stays visible, but
+# skipped at module level: an ImportError here aborted collection of the ENTIRE
+# suite (~3500 tests), so nothing could run at all.
+pytest.importorskip("_wee_removed_api_placeholder_", reason=(
+    "wee_runtime.execute_tool no longer exists; this module needs rewriting against the "
+    "current API before it can run again"
+))
 
 from wee_cli import TokenTracker  # noqa: E402
 from wee_runtime import (  # noqa: E402

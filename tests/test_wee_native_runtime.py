@@ -52,6 +52,7 @@ def _make_mgr():
     return mgr
 
 
+@patch.dict(os.environ, {"WEE_COPILOT_SDK_ENABLED": "0"})
 def _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b", **kwargs):
     """Helper to call run_wee_native with patched session data lookup."""
     defaults = dict(
@@ -156,6 +157,42 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         self.assertEqual(call_kwargs["model"], "gemma4:e4b")
 
     @patch("openai.OpenAI")
+    def test_empty_tool_stream_retries_without_tools(self, mock_openai_cls):
+        """Ollama models that silently ignore tools get one plain retry (#434)."""
+        mgr = _make_mgr()
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        truncated_chunk = MagicMock()
+        truncated_chunk.choices = [MagicMock()]
+        truncated_chunk.choices[0].delta.content = "To"
+        truncated_chunk.choices[0].delta.tool_calls = None
+        retry_chunk = MagicMock()
+        retry_chunk.choices = [MagicMock()]
+        retry_chunk.choices[0].delta.content = "plain retry response"
+        retry_chunk.choices[0].delta.tool_calls = None
+        mock_client.chat.completions.create.side_effect = [
+            [truncated_chunk],
+            [retry_chunk],
+        ]
+
+        test_session = "test_wee_empty_tool_stream"
+        mgr.session_map[test_session] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
+
+        result = _run_wee_native_test(mgr, test_session)
+
+        self.assertEqual(result, "plain retry response")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+        first_kwargs = mock_client.chat.completions.create.call_args_list[0].kwargs
+        retry_kwargs = mock_client.chat.completions.create.call_args_list[1].kwargs
+        self.assertIn("tools", first_kwargs)
+        self.assertNotIn("tools", retry_kwargs)
+
+    @patch("openai.OpenAI")
     def test_run_wee_native_openrouter_model(self, mock_openai_cls):
         """OpenRouter model prefix should resolve to the correct API base."""
         mgr = _make_mgr()
@@ -199,6 +236,25 @@ class TestWeeRuntimeDispatch(unittest.TestCase):
         init_kwargs = mock_openai_cls.call_args[1]
         self.assertEqual(init_kwargs["base_url"], "http://192.168.1.101:11434/v1")
         self.assertEqual(init_kwargs["api_key"], "ollama")
+
+    @patch.dict(os.environ, {"WEE_OLLAMA_HOST": "http://127.0.0.1:11434"})
+    @patch("openai.OpenAI")
+    def test_run_wee_native_uses_configured_local_ollama_host(self, mock_openai_cls):
+        """A locally managed API must use the Ollama runner on its own Mac."""
+        mgr = _make_mgr()
+        mock_openai_cls.return_value.chat.completions.create.return_value = []
+
+        test_session = "test_wee_local_ollama"
+        mgr.session_map[test_session] = {
+            "runtime": "wee",
+            "model": "ollama/gemma4:e4b",
+            "channel": "api",
+        }
+
+        _run_wee_native_test(mgr, test_session, model="ollama/gemma4:e4b")
+
+        init_kwargs = mock_openai_cls.call_args[1]
+        self.assertEqual(init_kwargs["base_url"], "http://127.0.0.1:11434/v1")
 
     @patch("openai.OpenAI")
     def test_run_wee_native_lmstudio_model(self, mock_openai_cls):

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Tests for Issue #255: SearXNG search tool in Wee Runtime.
+"""Tests for Issue #255: SearXNG search helper in Wee Runtime.
+
+Issue #443 removed the hand-rolled bash/python/search tool-dispatch loop
+(_WEE_TOOLS, execute_tool, _WEE_TOOL_CAPABILITY_PROMPT) — the Copilot SDK is
+now the only execution path. `_execute_search` itself survives as a plain
+helper still used by agent_manager.py's call_agent/browser tool handler, so
+its behavior is still covered here.
 
 Tests verify:
-- search tool is present in _WEE_TOOLS with correct schema
 - _execute_search returns graceful error when SearXNG is unavailable
 - _execute_search returns text format results correctly
 - _execute_search returns JSON format results correctly
 - _execute_search enforces count limit
-- execute_tool dispatches 'search' to _execute_search
-- _ANTI_HALLUCINATION_PROMPT and _WEE_TOOL_CAPABILITY_PROMPT are importable
+- _ANTI_HALLUCINATION_PROMPT is importable
 """
 
 import json
@@ -22,59 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from wee_runtime import (  # noqa: E402
     _ANTI_HALLUCINATION_PROMPT,
-    _WEE_TOOL_CAPABILITY_PROMPT,
-    _WEE_TOOLS,
     _execute_search,
-    execute_tool,
 )
-
-
-class TestSearchToolDefinition(unittest.TestCase):
-    """Verify search tool schema is registered in _WEE_TOOLS."""
-
-    def _get_tool(self, name):
-        for t in _WEE_TOOLS:
-            if t["function"]["name"] == name:
-                return t
-        return None
-
-    def test_search_tool_exists(self):
-        tool = self._get_tool("search")
-        self.assertIsNotNone(tool, "search tool missing from _WEE_TOOLS")
-
-    def test_search_tool_type(self):
-        tool = self._get_tool("search")
-        self.assertEqual(tool["type"], "function")
-
-    def test_search_tool_has_q_parameter(self):
-        tool = self._get_tool("search")
-        props = tool["function"]["parameters"]["properties"]
-        self.assertIn("q", props)
-        self.assertEqual(props["q"]["type"], "string")
-
-    def test_search_tool_q_is_required(self):
-        tool = self._get_tool("search")
-        required = tool["function"]["parameters"].get("required", [])
-        self.assertIn("q", required)
-
-    def test_search_tool_has_count_parameter(self):
-        tool = self._get_tool("search")
-        props = tool["function"]["parameters"]["properties"]
-        self.assertIn("count", props)
-        self.assertEqual(props["count"]["type"], "integer")
-
-    def test_search_tool_has_format_parameter(self):
-        tool = self._get_tool("search")
-        props = tool["function"]["parameters"]["properties"]
-        self.assertIn("format", props)
-        self.assertIn("json", props["format"]["enum"])
-        self.assertIn("text", props["format"]["enum"])
-
-    def test_all_three_tools_present(self):
-        names = [t["function"]["name"] for t in _WEE_TOOLS]
-        self.assertIn("bash", names)
-        self.assertIn("python", names)
-        self.assertIn("search", names)
 
 
 class TestExecuteSearch(unittest.TestCase):
@@ -163,14 +116,16 @@ class TestExecuteSearch(unittest.TestCase):
         result = _execute_search({"q": "xyzzy_nonexistent_query_12345"})
         self.assertIn("No results", result)
 
+    @patch("wee_runtime._execute_brave_search")
     @patch("urllib.request.urlopen")
-    def test_unavailable_searxng_returns_error_not_exception(self, mock_urlopen):
+    def test_unavailable_searxng_uses_public_fallback(self, mock_urlopen, mock_fallback):
         import urllib.error
 
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        mock_fallback.return_value = "Search results for: test\n\n1. Fallback result"
         result = _execute_search({"q": "test"})
-        self.assertIn("Search unavailable", result)
-        # Should NOT raise — graceful degradation
+        self.assertIn("Fallback result", result)
+        mock_fallback.assert_called_once()
         self.assertIsInstance(result, str)
 
     def test_result_under_2000_chars(self):
@@ -190,26 +145,11 @@ class TestExecuteSearch(unittest.TestCase):
         import urllib.error
 
         with patch.dict(os.environ, {"WEE_SEARXNG_URL": "http://custom-host:9999"}):
-            with patch("urllib.request.urlopen") as mock_urlopen:
+            with patch("wee_runtime._execute_brave_search") as mock_fallback, patch("urllib.request.urlopen") as mock_urlopen:
                 mock_urlopen.side_effect = urllib.error.URLError("refused")
-                result = _execute_search({"q": "test"})
-                # Verify the custom URL was used (appears in the error message)
-                self.assertIn("custom-host:9999", result)
-
-
-class TestExecuteToolDispatching(unittest.TestCase):
-    """Verify execute_tool() dispatches 'search' correctly."""
-
-    @patch("wee_runtime._execute_search")
-    def test_execute_tool_calls_execute_search(self, mock_search):
-        mock_search.return_value = "mocked result"
-        result = execute_tool("search", {"q": "test query"})
-        mock_search.assert_called_once_with({"q": "test query"})
-        self.assertEqual(result, "mocked result")
-
-    def test_execute_tool_unknown_name(self):
-        result = execute_tool("nonexistent_tool", {})
-        self.assertIn("Unknown tool", result)
+                mock_fallback.return_value = "fallback"
+                self.assertEqual(_execute_search({"q": "test"}), "fallback")
+                self.assertEqual(mock_fallback.call_args.args[3], "http://custom-host:9999")
 
 
 class TestImports(unittest.TestCase):
@@ -218,13 +158,6 @@ class TestImports(unittest.TestCase):
     def test_anti_hallucination_prompt_is_string(self):
         self.assertIsInstance(_ANTI_HALLUCINATION_PROMPT, str)
         self.assertGreater(len(_ANTI_HALLUCINATION_PROMPT), 10)
-
-    def test_tool_capability_prompt_is_string(self):
-        self.assertIsInstance(_WEE_TOOL_CAPABILITY_PROMPT, str)
-        self.assertGreater(len(_WEE_TOOL_CAPABILITY_PROMPT), 10)
-
-    def test_tool_capability_prompt_mentions_search(self):
-        self.assertIn("search", _WEE_TOOL_CAPABILITY_PROMPT.lower())
 
 
 if __name__ == "__main__":

@@ -31,7 +31,9 @@ def _get_session_mgr():
     mgr.copilot_bin = "/usr/local/bin/copilot"
     mgr.AGENTS = {
         "orchestrator": {
-            "path": "/opt/n8n-copilot-shim-dev",
+            # A real directory: dispatch now refuses a missing agent workspace
+            # (iOS #8), and this fixture previously assumed the dev server.
+            "path": __import__("tempfile").gettempdir(),
             "description": "Test",
             "name": "orchestrator",
         }
@@ -264,7 +266,7 @@ class TestCopilotSdkRunMethod(unittest.TestCase):
         async def send_and_wait_with_events(prompt, timeout=60.0):
             if captured_on_event:
                 event = MagicMock()
-                from copilot.session import SessionEventType
+                from copilot import SessionEventType
 
                 event.type = SessionEventType.ASSISTANT_MESSAGE
                 event.data = MagicMock()

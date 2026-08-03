@@ -217,6 +217,39 @@ def _metadata_label_updates(
     return sorted(set(remove)), sorted(set(add))
 
 
+def _user_label_updates(
+    current_labels: list[str], labels: list[str] | None
+) -> tuple[list[str], list[str]]:
+    """Return label changes without allowing clients to replace Kanban metadata."""
+    if labels is None:
+        return [], []
+
+    managed_prefixes = ("status:", "agent:", "due:", "priority:", "urgency:")
+
+    def is_managed(label: str) -> bool:
+        lower = label.lower()
+        return lower == "urgent" or lower.startswith(managed_prefixes)
+
+    desired: dict[str, str] = {}
+    for raw_label in labels:
+        label = raw_label.strip()
+        if not label:
+            continue
+        if len(label) > 50:
+            raise KanbanError("Labels must be 50 characters or fewer.", status_code=400)
+        if is_managed(label):
+            raise KanbanError(
+                f"'{label}' is a managed Kanban label and cannot be edited directly.",
+                status_code=400,
+            )
+        desired.setdefault(label.lower(), label)
+
+    current_user = {label.lower(): label for label in current_labels if not is_managed(label)}
+    remove = [label for key, label in current_user.items() if key not in desired]
+    add = [label for key, label in desired.items() if key not in current_user]
+    return sorted(remove), sorted(add)
+
+
 def _edit_issue(
     repo: str,
     number: int,
@@ -262,18 +295,23 @@ def update_github_item(
     due: str | None = None,
     priority: str | None = None,
     urgency: str | None = None,
+    labels: list[str] | None = None,
 ) -> dict[str, Any]:
     resolved = _ensure_repo(repo)
     number = _github_issue_number(item_id)
     issue = _load_github_issue(resolved, number)
+    current_labels = _current_label_names(issue)
     remove, add = _metadata_label_updates(
-        _current_label_names(issue),
+        current_labels,
         status=status,
         agent=agent,
         due=due,
         priority=priority,
         urgency=urgency,
     )
+    user_remove, user_add = _user_label_updates(current_labels, labels)
+    remove = sorted(set(remove + user_remove))
+    add = sorted(set(add + user_add))
     _edit_issue(
         resolved,
         number,
@@ -370,11 +408,13 @@ def due_bucket(due: str | None, now: datetime | None = None) -> str:
     if now_dt.tzinfo is None:
         now_dt = now_dt.replace(tzinfo=timezone.utc)
 
-    if due_dt < now_dt:
+    due_date = due_dt.date()
+    now_date = now_dt.date()
+    if due_date < now_date:
         return "overdue"
-    if due_dt.date() == now_dt.date():
+    if due_date == now_date:
         return "today"
-    if due_dt <= now_dt + timedelta(days=3):
+    if due_date <= now_date + timedelta(days=3):
         return "soon"
     return "future"
 
@@ -584,25 +624,44 @@ def load_github_cards(repo: str | None, limit: int = 100) -> list[dict[str, Any]
     if not repo:
         return []
 
-    result = subprocess.run(
-        [
-            "gh",
-            "issue",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "all",
-            "--limit",
-            str(limit),
-            "--json",
-            "number,title,url,body,state,labels,createdAt,updatedAt",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,url,body,state,labels,createdAt,updatedAt",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        # `gh` is not installed, or -- far more commonly -- not on this
+        # process's PATH. A GUI-launched client starts its API subprocess with
+        # launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which omits
+        # Homebrew, so the binary is unreachable even though a shell can find
+        # it. Previously this propagated as a bare 500 with no hint of a
+        # missing tool.
+        raise KanbanError(
+            "The GitHub CLI (gh) was not found on the API's PATH, so GitHub-backed "
+            "Kanban cards cannot be loaded.",
+            status_code=503,
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise KanbanError(
+            "Timed out waiting for the GitHub CLI (gh) to list issues.",
+            status_code=504,
+        ) from exc
+
     if result.returncode != 0:
         return []
 

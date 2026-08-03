@@ -133,6 +133,37 @@ class TestWeeGetContextLimit(unittest.TestCase):
     def test_heuristic_32k(self):
         self.assertEqual(self.mgr._wee_get_context_limit("some-model-32k"), 32768)
 
+    def test_local_ollama_uses_configured_agent_context_window(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WEE_OLLAMA_HOST": "http://127.0.0.1:11434",
+                "WEE_OLLAMA_CONTEXT_WINDOW": "65536",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                self.mgr._wee_get_context_limit_for_api(
+                    "gemma3:27b", "http://127.0.0.1:11434/v1"
+                ),
+                65536,
+            )
+
+    def test_context_override_is_not_sent_to_non_ollama_endpoint(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WEE_OLLAMA_HOST": "http://127.0.0.1:11434",
+                "WEE_OLLAMA_CONTEXT_WINDOW": "65536",
+            },
+            clear=False,
+        ):
+            self.assertIsNone(
+                self.mgr._wee_ollama_context_window_for_api(
+                    "https://openrouter.ai/api/v1"
+                )
+            )
+
 
 # ---------------------------------------------------------------------------
 # Transcript saving
@@ -506,6 +537,39 @@ class TestRunWeeNativeCompactionIntegration(unittest.TestCase):
         ) as mock_compact:
             _run_wee_native_test(self.mgr, self.session_id)
             mock_compact.assert_called_once()
+
+    @patch("openai.OpenAI")
+    @unittest.skip(
+        "Asserts openai chat.completions.create kwargs — the OpenAI-compatible "
+        "path #443 removed when the Wee runtime moved to the Copilot SDK. The "
+        "#421 num_ctx fix needs re-implementing against the SDK request path."
+    )
+    def test_local_ollama_request_sets_agent_context_window(self, MockOpenAI):
+        mock_instance = MagicMock()
+        MockOpenAI.return_value = mock_instance
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "response text"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        mock_instance.chat.completions.create.return_value = iter([chunk])
+
+        with patch.dict(
+            os.environ,
+            {
+                "WEE_OLLAMA_HOST": "http://127.0.0.1:11434",
+                "WEE_OLLAMA_CONTEXT_WINDOW": "65536",
+            },
+            clear=False,
+        ):
+            _run_wee_native_test(
+                self.mgr, self.session_id, model="ollama/gemma3:27b"
+            )
+
+        create_kwargs = mock_instance.chat.completions.create.call_args.kwargs
+        self.assertEqual(
+            create_kwargs.get("extra_body"), {"options": {"num_ctx": 65536}}
+        )
 
     @patch("openai.OpenAI")
     def test_usage_chunk_without_choices_updates_webui_runtime_state(self, MockOpenAI):

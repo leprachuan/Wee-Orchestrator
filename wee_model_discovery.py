@@ -17,14 +17,33 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 # Default discovery hosts (override via WEE_DISCOVERY_HOSTS env var as JSON)
-_DEFAULT_HOSTS = [
-    {
-        "name": "kubuntu",
-        "type": "ollama",
-        "url": "http://192.168.1.101:11434",
-        "prefix": "ollama",
-    },
-]
+def _default_hosts() -> List[Dict[str, str]]:
+    ollama_url = (
+        os.environ.get("WEE_OLLAMA_BASE_URL")
+        or os.environ.get("WEE_OLLAMA_HOST")
+        or os.environ.get("OLLAMA_HOST")
+        or "http://192.168.1.101:11434"
+    ).rstrip("/")
+    if ollama_url.endswith("/v1"):
+        ollama_url = ollama_url[:-3]
+    if not ollama_url.startswith(("http://", "https://")):
+        ollama_url = f"http://{ollama_url}"
+    return [
+        {
+            "name": os.environ.get("WEE_OLLAMA_NAME", "Ollama"),
+            "type": "ollama",
+            "url": ollama_url,
+            "prefix": "ollama",
+        },
+        {
+            "name": "OpenRouter",
+            "type": "openai-compat",
+            "url": os.environ.get(
+                "WEE_OPENROUTER_BASE_URL", "https://openrouter.ai/api"
+            ).removesuffix("/v1").rstrip("/"),
+            "prefix": "openrouter",
+        },
+    ]
 
 
 def _load_hosts() -> List[Dict[str, str]]:
@@ -34,13 +53,19 @@ def _load_hosts() -> List[Dict[str, str]]:
         try:
             hosts = json.loads(env)
             if isinstance(hosts, list):
+                if os.environ.get(
+                    "WEE_INCLUDE_OPENROUTER_MODELS", "1"
+                ).lower() not in {"0", "false", "no", "off"} and not any(
+                    host.get("prefix") == "openrouter" for host in hosts
+                ):
+                    hosts.append(_default_hosts()[1])
                 return hosts
         except (json.JSONDecodeError, TypeError):
             print(
                 f"[WeeModelDiscovery] Invalid WEE_DISCOVERY_HOSTS JSON, using defaults",
                 file=sys.stderr,
             )
-    return _DEFAULT_HOSTS
+    return _default_hosts()
 
 
 class WeeModelDiscovery:

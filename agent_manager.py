@@ -6,7 +6,9 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import contextvars
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -16,11 +18,17 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
+
+
+# Native Wee tool calls run in-process, so they cannot rely on subprocess
+# environment variables to retain the originating authenticated session.
+_wee_dispatch_context = contextvars.ContextVar("wee_dispatch_context", default=None)
 
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -205,6 +213,82 @@ def _sanitize_tool_call_for_display(data: dict) -> dict:
     return sanitized
 
 
+def _sdk_event_mapping(value) -> dict:
+    """Convert a Copilot SDK payload to a mapping when its transport permits."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    for method_name in ("model_dump", "to_dict", "dict"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                converted = method()
+            except Exception:
+                continue
+            if isinstance(converted, dict):
+                return converted
+    try:
+        return vars(value)
+    except TypeError:
+        return {}
+
+
+def _sdk_event_field(payload, *names):
+    """Read a field from either an SDK event object or its data payload."""
+    event_data = getattr(payload, "data", None)
+    for candidate in (payload, event_data):
+        mapping = _sdk_event_mapping(candidate)
+        for name in names:
+            value = mapping.get(name) if mapping else getattr(candidate, name, None)
+            if value is not None and value != "":
+                return value
+    return None
+
+
+def _sdk_tool_display_value(value) -> str:
+    """Serialize structured SDK fields without turning None into visible text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _normalize_wee_sdk_tool_event(payload, tool_ids: dict) -> dict:
+    """Return the stable, detail-preserving tool event sent to SSE clients."""
+    event_type = str(getattr(payload, "type", "tool")).lower()
+    is_command = "command" in event_type
+    raw_name = _sdk_event_field(
+        payload, "tool_name", "toolName", "name", "function_name", "functionName"
+    )
+    tool_name = "shell" if is_command else str(raw_name or "tool")
+    call_id = _sdk_event_field(payload, "tool_call_id", "toolCallId", "id")
+    call_id = str(call_id or tool_ids.get(tool_name) or f"tc_wee_sdk_{int(time.time() * 1000)}")
+    tool_ids[tool_name] = call_id
+    input_fields = (
+        ("command", "command_line", "commandLine", "text", "input", "arguments")
+        if is_command
+        else ("arguments", "input", "parameters", "params", "command", "text")
+    )
+    return {
+        "id": call_id,
+        "name": tool_name,
+        "input": _sdk_tool_display_value(_sdk_event_field(payload, *input_fields)),
+        "output": _sdk_tool_display_value(
+            _sdk_event_field(payload, "output", "result", "content", "stdout", "stderr", "message", "error")
+        )[:500],
+        "status": "complete" if "complete" in event_type else "running",
+    }
+
+
 def _codex_item_name(item: dict) -> str:
     """Return a UI-friendly tool/event name for a Codex transport item."""
     if not isinstance(item, dict):
@@ -355,30 +439,6 @@ def _parse_codex_transport_line(
         )
 
     return tool_events
-
-
-# ---------------------------------------------------------------------------
-# SSH command sanitization (Issue #113)
-# ---------------------------------------------------------------------------
-
-_SSH_BIN_RE = re.compile(r"\b(ssh|scp|sftp)\b")
-
-
-def _wee_sanitize_bash_command(command: str) -> str:
-    """Inject ``-o StrictHostKeyChecking=accept-new`` into ssh/scp/sftp commands.
-
-    Prevents interactive known_hosts prompts that block non-interactive runs.
-    Idempotent: already-flagged commands are returned unchanged.
-    """
-    if not command:
-        return command
-    if "StrictHostKeyChecking" in command:
-        return command
-
-    def _inject(m: re.Match) -> str:
-        return m.group(0) + " -o StrictHostKeyChecking=accept-new"
-
-    return _SSH_BIN_RE.sub(_inject, command, count=0)
 
 
 def _wee_anti_hallucination_prompt() -> str:
@@ -585,8 +645,16 @@ class AuthManager:
         shared_key: str,
         pairing_code_length: int = 6,
         pairing_code_ttl: int = 300,
-        session_token_ttl: int = 3600,
-        session_token_absolute_ttl: int = 86400,
+        # Sliding window, refreshed on every authenticated request — as long
+        # as a client (iOS app, WebUI, etc.) is used at least this often it
+        # never has to re-pair. Personal single-tenant deployment, and the
+        # iOS client now gates re-entry locally with Face ID, so a long
+        # sliding window doesn't weaken on-device security.
+        session_token_ttl: int = 2592000,  # 30 days
+        # Hard cap from creation regardless of activity — bounds how long a
+        # token stays valid if a device is lost, without forcing re-pairing
+        # during normal day-to-day use.
+        session_token_absolute_ttl: int = 15552000,  # 180 days
         sessions_file: Optional[str] = None,
     ):
         self.shared_key = shared_key
@@ -1233,7 +1301,7 @@ def check_runtime_available(runtime: str) -> bool:
         "devin": "devin",
         "cursor": "agent",  # Cursor uses 'agent' binary
         "opencode": "opencode",
-        "wee": "openai",  # OpenAI-compatible API (no binary needed),
+        "wee": "copilot",  # Copilot SDK BYOK (OpenAI fallback during migration),
     }
 
     executable_name = runtime_map.get(runtime)
@@ -1246,6 +1314,11 @@ def check_runtime_available(runtime: str) -> bool:
             if runtime == "claude-sdk":
                 # Package is installed as claude_agent_sdk
                 __import__("claude_agent_sdk")
+            elif runtime == "wee":
+                try:
+                    __import__("copilot")
+                except ImportError:
+                    __import__("openai")
             else:
                 module_name = executable_name.replace("-", "_")
                 __import__(module_name)
@@ -1882,6 +1955,16 @@ class SessionManager:
                 "Claude Opus (Latest)",
                 ["claude-opus", "claude-opus-4-6", "claude-opus-4.6", "opus-4.6"],
             ),
+            (
+                "claude-sonnet-5",
+                "Claude Sonnet 5",
+                ["sonnet-5", "claude-sonnet5"],
+            ),
+            (
+                "claude-fable-5",
+                "Claude Fable 5",
+                ["fable-5", "claude-fable5"],
+            ),
         ],
         "US Frontier Models (Comparison)": [
             (
@@ -1965,6 +2048,10 @@ class SessionManager:
     # CODEX models configuration (from copilot CLI --model choices)
     CODEX_MODELS = {
         "OpenAI Models": [
+            ("gpt-5.6", "GPT-5.6", ["gpt-5.6"]),
+            ("gpt-5.6-luna", "GPT-5.6 Luna", ["luna"]),
+            ("gpt-5.6-terral", "GPT-5.6 Terral", ["terral"]),
+            ("gpt-5.6-sol", "GPT-5.6 Sol", ["sol"]),
             ("gpt-5.5", "GPT-5.5", ["gpt-5.5"]),
             ("gpt-5.4", "GPT-5.4", ["gpt-5.4", "gpt-5.4-pro"]),
             ("gpt-5.4-mini", "GPT-5.4 Mini", ["gpt-5.4-mini"]),
@@ -1988,6 +2075,10 @@ class SessionManager:
     }
 
     # DEVIN models configuration
+    # NOTE (issue #418): Devin dropped every haiku variant from its valid model
+    # set. Do not re-add any "claude-haiku-*" entry here -- Devin's CLI will
+    # reject it and, on some builds, exit 0 while printing an error, which
+    # silently corrupts scheduled job results.
     DEVIN_MODELS = {
         "Anthropic Models": [
             ("claude-sonnet-4", "Claude Sonnet 4", ["sonnet-4", "sonnet"]),
@@ -1998,10 +2089,11 @@ class SessionManager:
                 ["sonnet-thinking"],
             ),
             ("claude-sonnet-4.6", "Claude Sonnet 4.6", ["sonnet-4.6"]),
-            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
+            ("claude-sonnet-5", "Claude Sonnet 5", ["sonnet-5"]),
             ("claude-opus-4.5", "Claude Opus 4.5", ["opus-4.5"]),
             ("claude-opus-4.6", "Claude Opus 4.6", ["opus-4.6", "opus"]),
-            ("claude-haiku-4.5", "Claude Haiku 4.5", ["haiku-4.5", "haiku"]),
+            ("claude-opus-4.7", "Claude Opus 4.7", ["opus-4.7"]),
+            ("claude-opus-4.8", "Claude Opus 4.8", ["opus-4.8"]),
         ],
         "Google Models": [
             ("gemini-3-flash", "Gemini 3 Flash", ["gemini-flash"]),
@@ -2012,11 +2104,14 @@ class SessionManager:
             ("gpt-5.2", "GPT-5.2", []),
             ("gpt-5.3-codex", "GPT-5.3 Codex", ["codex"]),
             ("gpt-5.4", "GPT-5.4", []),
+            ("gpt-5.5", "GPT-5.5", []),
+            ("gpt-5.6", "GPT-5.6", []),
         ],
         "Other Models": [
             ("phoenix-alpha", "Phoenix Alpha", ["phoenix"]),
             ("swe-1.5", "SWE-1.5", ["swe"]),
             ("swe-1.5-fast", "SWE-1.5 Fast", ["swe-fast"]),
+            ("swe-1.6", "SWE-1.6", ["swe-1.6"]),
         ],
     }
 
@@ -2109,6 +2204,7 @@ class SessionManager:
         # Executable paths (resolved dynamically)
         self.copilot_bin = find_executable("copilot")
         self.claude_bin = find_executable("claude")
+        self.codex_bin = find_executable("codex")
         self.devin_bin = find_executable("devin")
         self.cursor_bin = find_executable("agent")
 
@@ -2624,6 +2720,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             # Generate the new session ID up front so the handoff can reference it
             new_session_id = str(uuid4())
 
+            handoff_prepared = False
+
             # Prepare session handoff if the runtime is actually changing and
             # there is prior history to hand off
             if prev_runtime != new_runtime and prev_session_id:
@@ -2647,6 +2745,7 @@ You can mention an agent in your prompt and it will auto-delegate:
                         prev_runtime,
                         new_runtime,
                     )
+                    handoff_prepared = True
                     print(
                         f"[Handoff] Prepared handoff: {prev_runtime} → {new_runtime} "
                         f"(prev_session={prev_session_id}, new_session={new_session_id})",
@@ -2669,8 +2768,11 @@ You can mention an agent in your prompt and it will auto-delegate:
 
             self.update_session_field(n8n_session_id, "runtime", new_runtime)
 
-            # When switching runtime, reset the session ID to a new UUID since session formats are incompatible
-            # (e.g., OpenCode uses "ses_*" format, Claude uses UUID format, CODEX uses UUID format, etc.)
+            # Runtime CLIs use incompatible backend session identifiers (e.g.
+            # OpenCode uses "ses_*" while Claude/Codex use UUIDs), so create a
+            # new backend ID. This is not a conversation reset: when prepared
+            # above, SessionHandoff injects the prior transcript and summary on
+            # the first message in the new runtime.
             self.update_session_field(n8n_session_id, "session_id", new_session_id)
 
             # When switching runtime, also reset the model to a default for that runtime
@@ -2697,7 +2799,17 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
 
             self.update_session_field(n8n_session_id, "model", default_model)
-            return f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. Session reset."
+            if prev_runtime != new_runtime and handoff_prepared:
+                return (
+                    f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. "
+                    "Conversation context will be handed off to the new runtime."
+                )
+            if prev_runtime != new_runtime:
+                return (
+                    f"✓ Switched runtime to **{new_runtime}**. Model set to `{default_model}`. "
+                    "A new runtime session was created; no earlier context was available to hand off."
+                )
+            return f"✓ Runtime remains **{new_runtime}**. Model set to `{default_model}`."
 
     def _slash_agent(self, argument, session_data, n8n_session_id):
         """Handle /agent slash command."""
@@ -3851,10 +3963,11 @@ You can mention an agent in your prompt and it will auto-delegate:
             print(f"[Error] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
-    def _copilot_static_fallback(self) -> dict:
-        # model-manifest.json (runtimes.copilot) is the source of truth; this
-        # static list is only used if the manifest is missing/empty.
-        manifest_models = self._manifest_models_to_dict("copilot")
+    def _copilot_static_fallback(self, runtime: str = "copilot") -> dict:
+        # model-manifest.json (runtimes.copilot / runtimes.copilot-sdk) is the
+        # source of truth; this static list is only used if the manifest is
+        # missing/empty for both the runtime and its alias.
+        manifest_models = self._manifest_models_to_dict(runtime)
         if manifest_models:
             return manifest_models
         return {
@@ -3889,15 +4002,21 @@ You can mention an agent in your prompt and it will auto-delegate:
             ],
         }
 
-    def fetch_copilot_models(self) -> Dict:
-        """Fetch available models from model-manifest.json, falling back to copilot CLI help text."""
-        manifest_models = self._manifest_models_to_dict("copilot")
+    def fetch_copilot_models(self, runtime: str = "copilot") -> Dict:
+        """Fetch available models from model-manifest.json, falling back to copilot CLI help text.
+
+        `runtime` is "copilot" or "copilot-sdk" — each may define its own
+        dedicated entry in model-manifest.json (issue #417); when neither CLI
+        discovery nor manifest lookup name a dedicated model list is present
+        for "copilot-sdk", `_model_manifest_models` falls back to "copilot".
+        """
+        manifest_models = self._manifest_models_to_dict(runtime)
         if manifest_models:
             return manifest_models
 
         if not self.copilot_bin:
             print("Copilot executable not found in any search paths", file=sys.stderr)
-            return self._copilot_static_fallback()
+            return self._copilot_static_fallback(runtime)
 
         try:
             # Use --no-color to ensure clean text
@@ -4018,7 +4137,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             return categorized
         except Exception as e:
             print(f"Error fetching copilot models: {e}", file=sys.stderr)
-            return self._copilot_static_fallback()
+            return self._copilot_static_fallback(runtime)
 
     def fetch_opencode_models(self) -> Dict:
         """Fetch available models from opencode CLI, falling back to manifest/static list on failure."""
@@ -4149,7 +4268,8 @@ You can mention an agent in your prompt and it will auto-delegate:
           2. Live API call to https://openrouter.ai/api/v1/models
           3. Static WEE_MODELS fallback (Wee Native (OpenRouter)/(OpenRouter Free))
 
-        Authentication: keyring("openrouter", "api_key") -> OPENROUTER_API_KEY env var
+        Authentication is optional for the public model catalog. When present,
+        the keyring/OpenRouter environment key is attached to the request.
         """
         # Build static fallback + alias lookup from the curated WEE_MODELS lists,
         # normalizing variant-suffixed IDs (Issue #172).
@@ -4172,8 +4292,9 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         cache_ttl = 300
         if (
-            self._openrouter_models_cache is not None
-            and time.time() - self._openrouter_models_cache_ts < cache_ttl
+            getattr(self, "_openrouter_models_cache", None) is not None
+            and time.time() - getattr(self, "_openrouter_models_cache_ts", 0)
+            < cache_ttl
         ):
             return self._openrouter_models_cache
 
@@ -4187,19 +4308,15 @@ You can mention an agent in your prompt and it will auto-delegate:
         if not api_key:
             api_key = os.getenv("OPENROUTER_API_KEY")
 
-        if not api_key:
-            print(
-                "[wee] OpenRouter: no API key available, using static fallback",
-                file=sys.stderr,
-            )
-            return static_fallback
-
         try:
             import urllib.request as _urlreq
 
+            headers = {"Accept": "application/json"}
+            if api_key:
+                headers["Authorization"] = "Bearer " + api_key
             req = _urlreq.Request(
                 "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": "Bearer " + api_key},
+                headers=headers,
             )
             resp = _urlreq.urlopen(req, timeout=15)
             data = json.loads(resp.read())
@@ -4362,10 +4479,21 @@ You can mention an agent in your prompt and it will auto-delegate:
     # enough to add/remove/reorder models with no code changes.
 
     def _model_manifest_models(self, runtime: str) -> Optional[List[str]]:
-        """Return the raw manifest model id list for `runtime`, or None if absent."""
+        """Return the raw manifest model id list for `runtime`, or None if absent.
+
+        Looks up a dedicated entry for `runtime` first (e.g. `copilot-sdk`
+        can define its own model list independent of `copilot`). Only falls
+        back to the alias's list (see `_model_manifest_runtime_key`) when no
+        dedicated entry exists — issue #417.
+        """
         manifest = load_model_manifest()
-        runtime_key = _model_manifest_runtime_key(runtime)
-        models = manifest.get("runtimes", {}).get(runtime_key)
+        runtimes = manifest.get("runtimes", {})
+        runtime_key = (runtime or "").lower().strip()
+        models = runtimes.get(runtime_key)
+        if not models:
+            alias_key = _model_manifest_runtime_key(runtime)
+            if alias_key != runtime_key:
+                models = runtimes.get(alias_key)
         if not models:
             return None
         return [m for m in models if isinstance(m, str) and m.strip()]
@@ -4576,6 +4704,18 @@ You can mention an agent in your prompt and it will auto-delegate:
         truth), then the deprecated CODEX_MODELS_JSON env var override, then
         the static CODEX_MODELS fallback.
         """
+        # Issue #448: a ChatGPT-authenticated Codex CLI rejects model IDs the
+        # account does not carry ("The '<model>' model is not supported when
+        # using Codex with a ChatGPT account"), but it does support a real set
+        # of them. Collapsing the catalog to "default" made codex the only
+        # runtime where no model could be chosen. Offer the account's own list,
+        # falling back to "default" only when it cannot be determined.
+        if self._codex_uses_chatgpt_account():
+            account_models = self._codex_account_models()
+            if account_models:
+                return {"Codex CLI": ["default"] + account_models}
+            return {"Codex CLI": ["default"]}
+
         manifest_models = self._manifest_models_to_dict("codex")
         if manifest_models:
             return manifest_models
@@ -4596,6 +4736,66 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         # Fallback to static configuration
         return self._static_models_to_dict(self.CODEX_MODELS)
+
+    def _codex_account_models(self) -> Optional[List[str]]:
+        """Return the model slugs the local Codex CLI offers for this account.
+
+        Codex CLI still has no model-listing subcommand, but v0.14x maintains
+        `~/.codex/models_cache.json` — the same catalog the CLI itself
+        consults. Only entries marked `visibility: "list"` are user-selectable;
+        others (for example `codex-auto-review`) are internal and must not be
+        offered. Returns None when the cache is absent or unusable so callers
+        can fall back to the account default.
+        """
+        cache_path = Path.home() / ".codex" / "models_cache.json"
+        try:
+            with open(cache_path, "r", encoding="utf-8") as handle:
+                document = json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+        entries = document.get("models")
+        if not isinstance(entries, list):
+            return None
+
+        slugs: List[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("visibility") != "list":
+                continue
+            slug = entry.get("slug")
+            if isinstance(slug, str) and slug.strip() and slug not in slugs:
+                slugs.append(slug.strip())
+        return slugs or None
+
+    def _codex_uses_chatgpt_account(self) -> bool:
+        """Return whether the local Codex CLI is logged in with ChatGPT OAuth.
+
+        The result is cached for the API process: this method is used by both
+        catalog discovery and execution, and `codex login status` is a local,
+        credential-free status command.
+        """
+        cached = getattr(self, "_codex_chatgpt_account", None)
+        if cached is not None:
+            return cached
+
+        try:
+            codex_bin = (
+                getattr(self, "codex_bin", None) or find_executable("codex") or "codex"
+            )
+            status = subprocess.run(
+                [codex_bin, "login", "status"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            output = f"{status.stdout}\n{status.stderr}".lower()
+            self._codex_chatgpt_account = "logged in using chatgpt" in output
+        except (OSError, subprocess.SubprocessError):
+            self._codex_chatgpt_account = False
+        return self._codex_chatgpt_account
 
     def fetch_devin_models(self) -> Dict:
         """Return available Devin models by querying the CLI directly.
@@ -4716,7 +4916,17 @@ You can mention an agent in your prompt and it will auto-delegate:
         if cached and _time.time() - cached_ts < ollama_ttl:
             return cached
 
-        ollama_url = os.environ.get("WEE_OLLAMA_HOST", "http://192.168.1.101:11434") + "/api/tags"
+        ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
+        ).rstrip("/")
+        if ollama_base.endswith("/v1"):
+            ollama_base = ollama_base[:-3]
+        if not ollama_base.startswith(("http://", "https://")):
+            ollama_base = f"http://{ollama_base}"
+        ollama_url = ollama_base + "/api/tags"
         try:
             req = _urllib_req.Request(ollama_url)
             resp = _urllib_req.urlopen(req, timeout=5)
@@ -4829,8 +5039,8 @@ You can mention an agent in your prompt and it will auto-delegate:
         or does not support model listing.
         """
         dispatch = {
-            "copilot": self.fetch_copilot_models,
-            "copilot-sdk": self.fetch_copilot_models,
+            "copilot": lambda: self.fetch_copilot_models("copilot"),
+            "copilot-sdk": lambda: self.fetch_copilot_models("copilot-sdk"),
             "claude-sdk": lambda: self.fetch_claude_models("claude-sdk"),
             "opencode": self.fetch_opencode_models,
             "claude": lambda: self.fetch_claude_models("claude"),
@@ -5461,6 +5671,253 @@ You can mention an agent in your prompt and it will auto-delegate:
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         return text.strip()
 
+    # --- Session browser control for subprocess runtimes -------------------
+    #
+    # The `wee` runtime registers an in-process `browser` Tool. Subprocess
+    # runtimes cannot use it -- the broker's registrations live in the API
+    # process's memory -- so browser control was reachable from exactly one
+    # runtime. These helpers hand those runtimes the `wee-browser` MCP server
+    # instead, which reaches the same browser over HTTP.
+
+    WEE_BROWSER_MCP_NAME = "wee-browser"
+    # Runtimes that reach the session browser through the MCP server. The
+    # others (wee, copilot-sdk, claude-sdk) register an in-process `browser`
+    # tool instead, so pointing them at MCP tool names would be wrong.
+    WEE_BROWSER_MCP_RUNTIMES = frozenset({"codex", "claude", "copilot"})
+
+    def _wee_browser_prompt_note(self, n8n_session_id: str) -> str:
+        """Point the agent at this session's browser, or "" when there is none.
+
+        Registering the tools is not enough. Codex ships a bundled browser
+        plugin (`control-in-app-browser`, driven through node_repl) and reaches
+        for it first; when that finds no browser of its own it reports "no
+        browser session is available" and stops, without ever trying the
+        wee-browser tools sitting right next to it. Observed directly: the
+        plugin's skill file is read, two node_repl "Connect to browser" calls
+        fail, and the turn ends -- while a prompt that names browser_snapshot
+        drives the real panel on the first attempt.
+
+        Naming the tools is enough to redirect it, and is preferable to
+        disabling the bundled plugin, which would take away a capability the
+        user may want in other work.
+        """
+        if self._wee_browser_mcp_server_spec(n8n_session_id) is None:
+            return ""
+        return (
+            "\n\n[Session Browser]\n"
+            "This chat has its own browser attached, and the user can see it. "
+            f"Control it with the `{self.WEE_BROWSER_MCP_NAME}` MCP tools: "
+            "browser_snapshot (read the current page), browser_navigate, "
+            "browser_click, browser_type, browser_evaluate, browser_back, "
+            "browser_forward, browser_reload.\n"
+            "Use these for anything about \"the browser\", \"this page\", or "
+            "\"the attached/connected browser\". Do NOT use any other browser "
+            "tool or plugin for that -- they drive a different browser the user "
+            "cannot see, and will report that no browser is available. If one "
+            "of those reports no browser, call browser_snapshot instead of "
+            "concluding there is none."
+        )
+
+    def _wee_browser_mcp_env(self, n8n_session_id: str) -> Optional[Dict[str, str]]:
+        """Environment for the browser MCP server, or None when unavailable.
+
+        Returns None rather than a broken config when there is no shared key to
+        authenticate with: a server that cannot call the API would advertise
+        browser tools that always fail, which is worse than not offering them.
+        """
+        shared_key = os.environ.get("API_SHARED_KEY", "")
+        if not shared_key or not n8n_session_id:
+            return None
+
+        scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        port = os.environ.get("API_PORT", "8001")
+        session_data = self.get_or_create_session_data(n8n_session_id) or {}
+
+        env = {
+            "WEE_BROWSER_SESSION_ID": n8n_session_id,
+            "WEE_API_BASE": f"{scheme}://127.0.0.1:{port}",
+            "WEE_API_TOKEN": f"shared_{shared_key}",
+        }
+        # The API only trusts these headers from loopback, which is where this
+        # server runs; they carry the session's real owner so the ownership
+        # check passes for the right user rather than the shared-key identity.
+        if identity := session_data.get("identity"):
+            env["WEE_API_IDENTITY"] = str(identity)
+        if channel := session_data.get("channel"):
+            env["WEE_API_CHANNEL"] = str(channel)
+        if scheme == "https":
+            # Prod terminates TLS with a self-signed cert; this is a loopback
+            # call to ourselves, so trusting it adds no exposure.
+            env["WEE_API_INSECURE_TLS"] = "1"
+        return env
+
+    def _wee_browser_mcp_server_spec(self, n8n_session_id: str) -> Optional[dict]:
+        """The `wee-browser` MCP server as command/args/env, or None."""
+        env = self._wee_browser_mcp_env(n8n_session_id)
+        if env is None:
+            return None
+        return {
+            "command": sys.executable or "python3",
+            "args": [os.path.join(SCRIPT_BASE_DIR, "wee_browser_mcp.py")],
+            "env": env,
+        }
+
+    def _wee_browser_mcp_config_file(self, n8n_session_id: str) -> Optional[str]:
+        """Write an `mcpServers` JSON config and return its path, or None.
+
+        Used by CLIs that take a config file (claude's --mcp-config). Written
+        per session under the session state directory so concurrent sessions
+        never share one file and point at each other's browsers.
+        """
+        spec = self._wee_browser_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return None
+        try:
+            directory = os.path.join(SCRIPT_BASE_DIR, ".mcp-configs")
+            # The file embeds the API shared key so the MCP server can
+            # authenticate, so keep it owner-only rather than inheriting the
+            # umask. .gitignore covers the other half of the exposure.
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(directory, 0o700)
+            path = os.path.join(directory, f"browser-{n8n_session_id}.json")
+            # Create with 0600 before anything is written, rather than
+            # chmod-ing after: a world-readable window, however brief, is still
+            # a window where the key is readable.
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"mcpServers": {self.WEE_BROWSER_MCP_NAME: spec}}, handle)
+            os.chmod(path, 0o600)
+            return path
+        except OSError as exc:
+            print(f"[Browser] Could not write MCP config: {exc}", file=sys.stderr)
+            return None
+
+    def _wee_browser_codex_config_args(self, n8n_session_id: str) -> list:
+        """`-c` overrides registering the browser MCP server with codex."""
+        spec = self._wee_browser_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return []
+        prefix = f"mcp_servers.{self.WEE_BROWSER_MCP_NAME}"
+        args = [
+            "-c",
+            f"{prefix}.command={json.dumps(spec['command'])}",
+            "-c",
+            f"{prefix}.args={json.dumps(spec['args'])}",
+        ]
+        for key, value in spec["env"].items():
+            # Codex parses the value as TOML, so each entry is quoted
+            # individually rather than passing one inline table -- a token
+            # containing '=' or '#' would otherwise break the parse.
+            args += ["-c", f"{prefix}.env.{key}={json.dumps(value)}"]
+        return args
+
+    # Same shape as the browser helpers above, for the session shell (#477).
+    # The `wee` runtime registers an in-process `shell` Tool; subprocess
+    # runtimes get the `wee-shell` MCP server instead, for the same reason.
+
+    WEE_SHELL_MCP_NAME = "wee-shell"
+    WEE_SHELL_MCP_RUNTIMES = frozenset({"codex", "claude", "copilot"})
+
+    def _wee_shell_prompt_note(self, n8n_session_id: str) -> str:
+        """Point the agent at this session's shell, or "" when there is none.
+
+        Unlike the browser, codex/claude/copilot each already ship a working
+        native shell tool, so there is no "reports nothing available" failure
+        to redirect around. The problem here is different: without an explicit
+        nudge, the agent has no reason to prefer the one shell the user can
+        actually see and type into over its own private one.
+        """
+        if self._wee_shell_mcp_server_spec(n8n_session_id) is None:
+            return ""
+        return (
+            "\n\n[Session Shell]\n"
+            "This chat has its own shell attached, and the user can see it and "
+            "may type commands into it themselves. "
+            f"Control it with the `{self.WEE_SHELL_MCP_NAME}` MCP tools: "
+            "shell_run (run a command line), shell_write (type raw text, no "
+            "Enter -- for answering an interactive prompt), shell_key (send "
+            "ctrl-c/tab/arrows/etc.), shell_read (see recent output without "
+            "sending input, including anything the user typed).\n"
+            "Use these -- not your own built-in shell/bash/terminal tool -- for "
+            "anything the user might want to see or that responds to what the "
+            "user typed in \"the shell\", \"the terminal\", or \"this session\". "
+            "It is a shared terminal: check shell_read before assuming a "
+            "command failed or that nothing happened."
+        )
+
+    def _wee_shell_mcp_env(self, n8n_session_id: str) -> Optional[Dict[str, str]]:
+        shared_key = os.environ.get("API_SHARED_KEY", "")
+        if not shared_key or not n8n_session_id:
+            return None
+
+        scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        port = os.environ.get("API_PORT", "8001")
+        session_data = self.get_or_create_session_data(n8n_session_id) or {}
+
+        env = {
+            "WEE_SHELL_SESSION_ID": n8n_session_id,
+            "WEE_API_BASE": f"{scheme}://127.0.0.1:{port}",
+            "WEE_API_TOKEN": f"shared_{shared_key}",
+        }
+        if identity := session_data.get("identity"):
+            env["WEE_API_IDENTITY"] = str(identity)
+        if channel := session_data.get("channel"):
+            env["WEE_API_CHANNEL"] = str(channel)
+        if scheme == "https":
+            env["WEE_API_INSECURE_TLS"] = "1"
+        return env
+
+    def _wee_shell_mcp_server_spec(self, n8n_session_id: str) -> Optional[dict]:
+        """The `wee-shell` MCP server as command/args/env, or None."""
+        env = self._wee_shell_mcp_env(n8n_session_id)
+        if env is None:
+            return None
+        return {
+            "command": sys.executable or "python3",
+            "args": [os.path.join(SCRIPT_BASE_DIR, "wee_shell_mcp.py")],
+            "env": env,
+        }
+
+    def _wee_shell_mcp_config_file(self, n8n_session_id: str) -> Optional[str]:
+        """Write an `mcpServers` JSON config and return its path, or None.
+
+        Same secret-hygiene requirements as the browser config: the file
+        embeds the API shared key, so it is owner-only from creation and the
+        containing directory is gitignored.
+        """
+        spec = self._wee_shell_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return None
+        try:
+            directory = os.path.join(SCRIPT_BASE_DIR, ".mcp-configs")
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(directory, 0o700)
+            path = os.path.join(directory, f"shell-{n8n_session_id}.json")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"mcpServers": {self.WEE_SHELL_MCP_NAME: spec}}, handle)
+            os.chmod(path, 0o600)
+            return path
+        except OSError as exc:
+            print(f"[Shell] Could not write MCP config: {exc}", file=sys.stderr)
+            return None
+
+    def _wee_shell_codex_config_args(self, n8n_session_id: str) -> list:
+        """`-c` overrides registering the shell MCP server with codex."""
+        spec = self._wee_shell_mcp_server_spec(n8n_session_id)
+        if spec is None:
+            return []
+        prefix = f"mcp_servers.{self.WEE_SHELL_MCP_NAME}"
+        args = [
+            "-c",
+            f"{prefix}.command={json.dumps(spec['command'])}",
+            "-c",
+            f"{prefix}.args={json.dumps(spec['args'])}",
+        ]
+        for key, value in spec["env"].items():
+            args += ["-c", f"{prefix}.env.{key}={json.dumps(value)}"]
+        return args
+
     def _parse_mode_command(self, prompt: str) -> tuple[str, str]:
         """Parse /mode command from prompt. Returns (cleaned_prompt, mode).
 
@@ -5544,6 +6001,87 @@ You can mention an agent in your prompt and it will auto-delegate:
             text,
         )
         return cleaned.strip()
+
+    @staticmethod
+    def _is_claude_auth_error(err_type: str, err_msg: str) -> bool:
+        """Detect a Claude runtime credential failure (Issue #389).
+
+        The Claude CLI surfaces a bare 401 from the Anthropic API (e.g.
+        "Failed to authenticate. API Error: 401 Invalid authentication
+        credentials") both as plain stderr text and as a structured
+        {"type":"error",...} event depending on invocation mode. Either form
+        must be recognized so the caller can be told to configure a
+        credential instead of seeing a raw API error.
+        """
+        combined = f"{err_type} {err_msg}".lower()
+        return (
+            "401" in combined
+            or "authentication_error" in combined
+            or "invalid authentication credentials" in combined
+            or "invalid api key" in combined
+            or "failed to authenticate" in combined
+        )
+
+    CLAUDE_AUTH_ERROR_MESSAGE = (
+        "Claude runtime authentication is not configured for this agent. "
+        "Run `claude login` on this host, or set the ANTHROPIC_API_KEY "
+        "environment variable, then try the chat again."
+    )
+
+    @staticmethod
+    def _codex_error_text(payload, _depth: int = 0) -> str:
+        """Reduce a Codex error payload to the message a human should read.
+
+        Issue #410: Codex reports failures double-encoded — the frame is
+        `{"type":"error","message":"<json string>"}` and the readable sentence
+        sits at `error.message` *inside* that string:
+
+            {"type":"error","status":400,
+             "error":{"type":"invalid_request_error",
+                      "message":"The 'gpt-5.6' model is not supported when
+                                 using Codex with a ChatGPT account."}}
+
+        Surfacing the frame verbatim put that whole blob in the transcript.
+        Unwrap repeatedly (bounded, so a pathological payload cannot spin) and
+        prefer the innermost human sentence, falling back to whatever text is
+        available rather than dropping the failure entirely.
+        """
+        # Bounded purely to stop runaway recursion on pathological input; deep
+        # enough that realistically nested payloads still reduce to a sentence.
+        if _depth > 8 or payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            text = payload.strip()
+            if not text:
+                return ""
+            # Only try to unwrap when it actually looks like a JSON object.
+            if text.startswith("{"):
+                try:
+                    return (
+                        SessionManager._codex_error_text(json.loads(text), _depth + 1)
+                        or text
+                    )
+                except (ValueError, TypeError):
+                    return text
+            return text
+
+        if isinstance(payload, dict):
+            # Most specific first: a nested error object's own message.
+            nested = payload.get("error")
+            if nested is not None:
+                inner = SessionManager._codex_error_text(nested, _depth + 1)
+                if inner:
+                    return inner
+            for key in ("message", "detail", "text"):
+                value = payload.get(key)
+                if isinstance(value, (str, dict)):
+                    inner = SessionManager._codex_error_text(value, _depth + 1)
+                    if inner:
+                        return inner
+            return ""
+
+        return str(payload).strip()
 
     def strip_metadata(self, text: str, runtime: str) -> str:
         """Remove CLI metadata from output"""
@@ -5651,7 +6189,9 @@ You can mention an agent in your prompt and it will auto-delegate:
                         err_obj = obj.get("error") or {}
                         err_msg = err_obj.get("message", "") or obj.get("message", "")
                         err_type = err_obj.get("type", "")
-                        if err_msg:
+                        if self._is_claude_auth_error(err_type, err_msg):
+                            error_result = self.CLAUDE_AUTH_ERROR_MESSAGE
+                        elif err_msg:
                             error_result = (
                                 f"API Error: {err_type} - {err_msg}"
                                 if err_type
@@ -5693,7 +6233,12 @@ You can mention an agent in your prompt and it will auto-delegate:
                         if obj.get("error"):
                             has_rate_limit_event = True
                 except (ValueError, KeyError, AttributeError):
-                    # Not JSON — treat as plain text (legacy fallback)
+                    # Not JSON — treat as plain text (legacy fallback).
+                    # The Claude CLI can print an unauthenticated-credential
+                    # failure as bare stderr text rather than a JSON event
+                    # (Issue #389); recognize it here too.
+                    if self._is_claude_auth_error("", line_stripped):
+                        error_result = self.CLAUDE_AUTH_ERROR_MESSAGE
                     result.append(line)
             if text_parts:
                 return "".join(text_parts)
@@ -5779,15 +6324,30 @@ You can mention an agent in your prompt and it will auto-delegate:
                                 jsonl_texts.append(_text)
                     elif _etype == "turn.failed":
                         _codex_turn_failed = True
-                        _err = _event.get("error") or {}
+                        # Issue #410: unwrap the double-encoded payload so the
+                        # transcript shows the sentence, not the JSON frame.
                         _codex_error_msg = (
-                            _err.get("message", "") if isinstance(_err, dict)
-                            else str(_err)
+                            self._codex_error_text(_event.get("error"))
+                            or _codex_error_msg
                         )
                     elif _etype == "error":
-                        _codex_error_msg = _event.get("message", "") or str(
-                            _event.get("error", "")
+                        _codex_error_msg = (
+                            self._codex_error_text(_event.get("message"))
+                            or self._codex_error_text(_event.get("error"))
+                            or _codex_error_msg
                         )
+                    elif (
+                        _etype == "item.completed"
+                        and isinstance(_event.get("item"), dict)
+                        and _event["item"].get("type") == "error"
+                    ):
+                        # Codex also reports non-fatal problems as error items
+                        # (e.g. unknown model metadata). Keep one as context if
+                        # nothing more specific arrives.
+                        if not _codex_error_msg:
+                            _codex_error_msg = self._codex_error_text(
+                                _event["item"].get("message")
+                            )
                 except (ValueError, KeyError):
                     continue
 
@@ -5920,7 +6480,7 @@ You can mention an agent in your prompt and it will auto-delegate:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def load_agent_skills(self, agent_path: str) -> str:
+    def load_agent_skills(self, agent_path: str, compact: bool = False) -> str:
         """Load all SKILL.md files from agent's .github/skills/ directory.
 
         Looks for skills in this order:
@@ -5928,6 +6488,13 @@ You can mention an agent in your prompt and it will auto-delegate:
         2. {agent_path}/.claude/skills/
 
         Returns formatted skills context or empty string if no skills found.
+
+        Args:
+            compact: Issue #400 - when True, skip the "how to add a skill"
+                tutorial (repeated verbatim on every single request regardless
+                of whether the user asked about skills) and just list what's
+                loaded. _render_skills_section already covers the how-to in
+                one line for compact callers.
         """
         skills_context = ""
         agent_path_obj = Path(agent_path)
@@ -5988,7 +6555,8 @@ You can mention an agent in your prompt and it will auto-delegate:
             skills_context = "\n[Agent Skills - Available]\n"
             for skill in available_skills:
                 skills_context += f"- {skill['name']}: {skill['description']}\n"
-            skills_context += """
+            if not compact:
+                skills_context += """
 To use these skills, simply reference them in your work. The system will automatically load the appropriate skill instructions.
 
 To add new skills to this agent:
@@ -6011,6 +6579,8 @@ To get skills from Anthropic's official repository:
 - Copy them to .github/skills/ or .claude/skills/
 - Run: git clone https://github.com/anthropics/skills {agent_path}/.github/skills/anthropic-skills
 """
+        elif compact:
+            skills_context = ""
         else:
             skills_context = """
 [Agent Skills - Setup Instructions]
@@ -6351,6 +6921,102 @@ Example skill structure:
 
         return output
 
+    def _render_skills_section(
+        self, agent_path: str, skills_context: str, compact: bool = False
+    ) -> str:
+        """Render the [Skills Discovery & Management] system-prompt section.
+
+        Issue #400: the full version is a step-by-step tutorial plus a
+        skill_repositories.json walkthrough with example JSON and a list of
+        community repos to add — useful reference material, but disproportionate
+        to a small local model's context budget. Compact mode keeps every
+        capability (discover, load, configure repos) referenced in a few lines
+        instead of ~75.
+        """
+        if compact:
+            loaded = skills_context.replace("\n[Agent Skills - Available]\n", "").strip() or "none"
+            return f"""[Skills] Loaded: {loaded}
+Repos: {self._format_repository_info()}
+Use /discover-skills [query] to find more, /load-skill <name> [repo] to install one (lands in {agent_path}/.github/skills/, available next session). Configure repos via skill_repositories.json in the project root (repositories: [{{name, url, description, enabled}}], default_repository)."""
+
+        return f"""[Skills Discovery & Management]
+You can help users discover and load additional skills for this agent from configured skill repositories.
+
+Configured Skill Repositories:
+{self._format_repository_info()}
+
+Current Skills Loaded:
+{skills_context}
+
+How to Discover Skills:
+1. When a user asks about available skills or requests a specific skill:
+   - Search available repositories for matching skills
+   - List relevant skills and their purposes
+   - Explain what each skill does and when it's useful
+   - Indicate which repository each skill comes from
+
+2. When a user wants to load a specific skill:
+   - Verify the skill exists in one of the available repositories
+   - Explain what the skill provides and how to use it
+   - Guide them on how to load it (system will auto-install when requested)
+   - Skills are installed to: {agent_path}/.github/skills/
+   - Skills become available immediately in the next session
+
+3. Skill Loading Process:
+   - User requests: "load the helm-deploy skill" or similar
+   - You verify it exists in available repositories and describe its capabilities
+   - System automatically clones and installs the skill
+   - Skill documentation becomes available immediately
+   - User can use the skill's features in subsequent interactions
+
+[Configuring Custom Skill Repositories]
+To add custom skill repositories or manage repository settings:
+
+1. Create or edit `skill_repositories.json` in the project root directory
+
+2. Repository configuration structure:
+{{
+  "repositories": [
+    {{
+      "name": "Anthropic Official",
+      "url": "https://github.com/anthropics/skills.git",
+      "description": "Official Anthropic skills repository with production-ready skills",
+      "enabled": true
+    }},
+    {{
+      "name": "Community Skills",
+      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
+      "description": "Community-contributed agent skills (300+ skills)",
+      "enabled": false
+    }},
+    {{
+      "name": "Your Custom Skills",
+      "url": "https://github.com/your-org/custom-skills.git",
+      "description": "Organization-specific skills",
+      "enabled": false
+    }}
+  ],
+  "default_repository": "Anthropic Official"
+}}
+
+3. Field explanations:
+   - name: Human-readable repository name
+   - url: Git repository URL (must end with .git)
+   - description: Brief description of the repository
+   - enabled: Set to true to enable, false to disable (without deleting config)
+
+4. Popular community repositories to add:
+   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
+   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
+   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
+   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
+
+5. After updating skill_repositories.json:
+   - The new repositories become available immediately on next session start
+   - Agents will see all enabled repositories in their context
+   - Users can discover and load skills from all enabled repositories
+   - Existing skills continue to work without changes"""
+
     def build_agent_context_prompt(
         self,
         agent: str,
@@ -6362,11 +7028,22 @@ Example skill structure:
         model: str = "gpt-5-mini",
         channel: str = "webui",
         bg_identity: Optional[str] = None,
+        compact: bool = True,
     ) -> str:
         """Build a context-aware prompt that includes agent information, runtime, model, and execution deadline.
 
         Args:
             channel: The communication channel (telegram, webex, webui) - determines which platform to send files to
+            compact: Issue #400 - when True (the default, for every runtime), drop
+                tutorial-style exposition (skill repository config walkthroughs,
+                lettered image-retrieval options, irrelevant workspace file listings)
+                while keeping every capability referenced, just stated tersely instead
+                of as a walkthrough. Originally added only for the wee runtime (small
+                local models were getting buried by the verbose form), then made the
+                default everywhere after confirming the trimmed content was tutorial
+                fluff no model benefits from having repeated on every single turn.
+                Pass compact=False to get the original full walkthrough form back
+                (e.g. for comparison/rollback).
         """
         if agent not in self.AGENTS:
             agent = "devops"
@@ -6377,22 +7054,32 @@ Example skill structure:
         agent_path = agent_info.get("path", "")
 
         # Load agent skills and workspace context
-        skills_context = self.load_agent_skills(agent_path)
+        skills_context = self.load_agent_skills(agent_path, compact=compact)
 
         files_context = ""
-        try:
-            agent_path_obj = Path(agent_path)
-            if agent_path_obj.exists():
-                files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
-                if files:
-                    files_list = "\n".join([f"  - {f.name}" for f in files])
-                    files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
-        except Exception:
-            pass
+        if not compact:
+            # Issue #400: this raw directory listing is unfiltered noise (random
+            # screenshots, status files, etc.) that eats tokens without helping
+            # small local models; drop it in compact mode.
+            try:
+                agent_path_obj = Path(agent_path)
+                if agent_path_obj.exists():
+                    files = list(agent_path_obj.glob("*"))[:10]  # First 10 items
+                    if files:
+                        files_list = "\n".join([f"  - {f.name}" for f in files])
+                        files_context = f"\n\nAvailable resources in this agent's workspace:\n{files_list}"
+            except Exception:
+                pass
 
         # Add render type instruction to the context
         render_instruction = ""
-        if render_type == "markdown":
+        if render_type == "markdown" and compact:
+            # Issue #400: same rule, without the lettered walkthrough — small
+            # models don't need three spelled-out options to embed an image.
+            render_instruction = f"""
+[Output Format: markdown]
+[Image Retrieval: If asked for an image/photo/logo, fetch a real image URL first (e.g. via WebFetch on Wikipedia/the official site) — never guess a URL from memory. Embed with ![caption](url). If you can't confirm a real URL, skip the image entirely rather than link a fake one. No ASCII art or SVG placeholders.]"""
+        elif render_type == "markdown":
             render_instruction = f"""
 [Output Format: markdown]
 [Image Retrieval — MANDATORY: When the user asks for any image, picture, photo, or logo, you MUST retrieve and display a real image. Never say you cannot retrieve images — use your tools.
@@ -6496,12 +7183,26 @@ Do NOT use <img> tags (unsupported). Do NOT create files, generate ASCII art, or
             agent_timeout_min = agent_timeout / 60
             timeout_instruction = f"\n[⏱️ EXECUTION DEADLINE: You have {agent_timeout:.0f} seconds ({agent_timeout_min:.1f} minutes) to complete this task. Plan your approach efficiently and wrap up before this deadline. If an operation might take too long, skip it or provide a summary instead.]"
 
+        # Multi-API awareness (F-remote-api-injection): when this process is a
+        # "local" instance spun up alongside a separate remote Wee Orchestrator
+        # (e.g. the macOS app's local dev API), tell agents the remote instance
+        # exists so they don't assume this is the only Wee Orchestrator API and
+        # don't conflate local-only state (sessions, tasks, schedules) with it.
+        _remote_api_url = os.environ.get("WEE_REMOTE_API_URL", "").strip()
+        _local_app_env = os.environ.get("APP_ENV", "PROD").upper()
+        multi_api_instruction = ""
+        if _remote_api_url:
+            _remote_api_label = os.environ.get("WEE_REMOTE_API_LABEL", "remote").strip() or "remote"
+            multi_api_instruction = f"""
+- Environment: {_local_app_env} (this is a LOCAL Wee Orchestrator instance)
+[Multi-API Awareness] A separate {_remote_api_label} Wee Orchestrator API is also running at {_remote_api_url}. It has its own sessions, background tasks, schedules, and memory — nothing here is shared with it automatically. Do not assume you are the only Wee Orchestrator instance. If the user asks about "the other Wee", production, or remote state, note that this local instance cannot see it directly and the user should check the {_remote_api_label} instance instead."""
+
         # Add runtime, model, and slash commands information
         runtime_instruction = f"""
 [System Configuration]
 - Runtime: {runtime}
 - Model: {model}
-- Agent: {agent_name}
+- Agent: {agent_name}{multi_api_instruction}
 
 [Available Slash Commands]
 These commands allow you to control the agent's behavior and are processed by the system (not the model):
@@ -6539,83 +7240,7 @@ These commands allow you to control the agent's behavior and are processed by th
 - /verbose <on|off> - Toggle verbose mode (show tool calls in responses)
 - /update - Pull latest code from dev branch and restart all dev services (aliases: /upgrade, /pull)
 
-[Skills Discovery & Management]
-You can help users discover and load additional skills for this agent from configured skill repositories.
-
-Configured Skill Repositories:
-{self._format_repository_info()}
-
-Current Skills Loaded:
-{skills_context}
-
-How to Discover Skills:
-1. When a user asks about available skills or requests a specific skill:
-   - Search available repositories for matching skills
-   - List relevant skills and their purposes
-   - Explain what each skill does and when it's useful
-   - Indicate which repository each skill comes from
-
-2. When a user wants to load a specific skill:
-   - Verify the skill exists in one of the available repositories
-   - Explain what the skill provides and how to use it
-   - Guide them on how to load it (system will auto-install when requested)
-   - Skills are installed to: {agent_path}/.github/skills/
-   - Skills become available immediately in the next session
-
-3. Skill Loading Process:
-   - User requests: "load the helm-deploy skill" or similar
-   - You verify it exists in available repositories and describe its capabilities
-   - System automatically clones and installs the skill
-   - Skill documentation becomes available immediately
-   - User can use the skill's features in subsequent interactions
-
-[Configuring Custom Skill Repositories]
-To add custom skill repositories or manage repository settings:
-
-1. Create or edit `skill_repositories.json` in the project root directory
-
-2. Repository configuration structure:
-{{
-  "repositories": [
-    {{
-      "name": "Anthropic Official",
-      "url": "https://github.com/anthropics/skills.git",
-      "description": "Official Anthropic skills repository with production-ready skills",
-      "enabled": true
-    }},
-    {{
-      "name": "Community Skills",
-      "url": "https://github.com/VoltAgent/awesome-agent-skills.git",
-      "description": "Community-contributed agent skills (300+ skills)",
-      "enabled": false
-    }},
-    {{
-      "name": "Your Custom Skills",
-      "url": "https://github.com/your-org/custom-skills.git",
-      "description": "Organization-specific skills",
-      "enabled": false
-    }}
-  ],
-  "default_repository": "Anthropic Official"
-}}
-
-3. Field explanations:
-   - name: Human-readable repository name
-   - url: Git repository URL (must end with .git)
-   - description: Brief description of the repository
-   - enabled: Set to true to enable, false to disable (without deleting config)
-
-4. Popular community repositories to add:
-   - VoltAgent/awesome-agent-skills: https://github.com/VoltAgent/awesome-agent-skills.git (300+ skills)
-   - karanb192/awesome-claude-skills: https://github.com/karanb192/awesome-claude-skills.git (50+ verified)
-   - travisvn/awesome-claude-skills: https://github.com/travisvn/awesome-claude-skills.git (curated list)
-   - abubakarsiddik31/claude-skills-collection: https://github.com/abubakarsiddik31/claude-skills-collection.git (organized by category)
-
-5. After updating skill_repositories.json:
-   - The new repositories become available immediately on next session start
-   - Agents will see all enabled repositories in their context
-   - Users can discover and load skills from all enabled repositories
-   - Existing skills continue to work without changes"""
+{self._render_skills_section(agent_path, skills_context, compact=compact)}"""
 
         # Background tasks instruction — tell the agent how to create tasks
         # that appear in the WebUI Tasks panel via the orchestrator API.
@@ -6762,8 +7387,21 @@ Do NOT emit status updates for quick operations (< 15 seconds)."""
                 flush=True,
             )
 
+        browser_instruction = (
+            self._wee_browser_prompt_note(n8n_session_id)
+            if runtime in self.WEE_BROWSER_MCP_RUNTIMES
+            else ""
+        )
+        shell_instruction = (
+            self._wee_shell_prompt_note(n8n_session_id)
+            if runtime in self.WEE_SHELL_MCP_RUNTIMES
+            else ""
+        )
+
         context = f"""{handoff_prefix}[Session ID: {n8n_session_id}]
-{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}
+{runtime_instruction}{injection_text}{mobile_channel_instruction}{silent_mode_instruction}{memory_section}
+
+{agent_desc}{files_context}{render_instruction}{bg_task_instruction}{canvas_instruction}{wee_executor_instruction}{timeout_instruction}{browser_instruction}{shell_instruction}
 
 User Request:
 {prompt}"""
@@ -6940,7 +7578,27 @@ User Request:
 
         try:
             # Set WEE_SESSION_ID so agents can use wee_executor.py
-            _sub_env = {**os.environ, "WEE_SESSION_ID": n8n_session_id}
+            caller_session_data = self.load_session_data(n8n_session_id) or {}
+            _sub_env = {
+                **os.environ,
+                "WEE_SESSION_ID": n8n_session_id,
+                "WEE_ORIGIN_SESSION_ID": n8n_session_id,
+                "WEE_ORCHESTRATOR_USER_IDENTITY": caller_session_data.get("identity", ""),
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": caller_session_data.get("channel", "webui"),
+            }
+            # GUI-launched macOS processes receive a minimal system PATH.  CLI
+            # wrappers installed by Homebrew (including Codex, whose launcher
+            # invokes `env node`) need the Homebrew Node directory available to
+            # their child process as well as to the initial executable lookup.
+            _cli_paths = [
+                str(Path.home() / ".local" / "bin"),
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+            ]
+            _existing_paths = _sub_env.get("PATH", "").split(os.pathsep)
+            _sub_env["PATH"] = os.pathsep.join(
+                _cli_paths + [path for path in _existing_paths if path not in _cli_paths]
+            )
             if _pty_master is not None:
                 process = subprocess.Popen(
                     cmd,
@@ -7731,6 +8389,14 @@ User Request:
             f"@{mcp_config_path}",
         ]
 
+        # Issue: browser control was wee-runtime only. --additional-mcp-config
+        # may be repeated, so this augments the agent's own MCP servers rather
+        # than replacing them.
+        if _browser_mcp := self._wee_browser_mcp_config_file(n8n_session_id):
+            cmd += ["--additional-mcp-config", f"@{_browser_mcp}"]
+        if _shell_mcp := self._wee_shell_mcp_config_file(n8n_session_id):
+            cmd += ["--additional-mcp-config", f"@{_shell_mcp}"]
+
         # Add elevated flags for full access
         if mode == "elevated":
             cmd.insert(2, "--allow-all-paths")
@@ -7850,6 +8516,13 @@ User Request:
                 f"@{mcp_config_path}",
                 f"--name={_recovery_copilot_name}",
             ]
+            # The recovery path builds its own command, so it needs the browser
+            # server too -- otherwise a session that recovers silently loses
+            # browser control for the rest of its life.
+            if _recovery_browser_mcp := self._wee_browser_mcp_config_file(n8n_session_id):
+                _recovery_cmd += ["--additional-mcp-config", f"@{_recovery_browser_mcp}"]
+            if _recovery_shell_mcp := self._wee_shell_mcp_config_file(n8n_session_id):
+                _recovery_cmd += ["--additional-mcp-config", f"@{_recovery_shell_mcp}"]
             if mode == "elevated":
                 _recovery_cmd.insert(2, "--allow-all-paths")
                 _recovery_cmd.append("--yolo")
@@ -7904,8 +8577,8 @@ User Request:
         tracking for background task progress (Issue #87).
         """
         try:
-            from copilot import CopilotClient, SubprocessConfig
-            from copilot.session import (
+            from copilot import (
+                CopilotClient,
                 CopilotSession,
                 ElicitationContext,
                 ElicitationResult,
@@ -7974,11 +8647,6 @@ User Request:
         # Store session_id for resumption tracking
         sdk_session_id = session_id if resume and session_id else None
 
-        # For elevated mode, pass --allow-all-paths and --yolo via SubprocessConfig
-        # so the underlying Copilot CLI grants full filesystem access and
-        # auto-approves command execution (equivalent to the standard runtime flags).
-        sdk_cli_args = ["--allow-all-paths", "--yolo"] if mode == "elevated" else []
-
         def _auto_approve_user_input(
             request: UserInputRequest, invocation: dict
         ) -> UserInputResponse:
@@ -7996,10 +8664,7 @@ User Request:
         async def _run_sdk() -> str:
             collected_messages: list = []
 
-            _sdk_config = (
-                SubprocessConfig(cli_args=sdk_cli_args) if sdk_cli_args else None
-            )
-            _client = CopilotClient(_sdk_config) if _sdk_config else CopilotClient()
+            _client = CopilotClient(working_directory=agent_dir)
             async with _client as client:
                 # Event handler — streams chunks and detects tool calls
                 def on_event(event):
@@ -8135,7 +8800,7 @@ User Request:
 
                 mcp_config_path = os.path.expanduser("~/.copilot/mcp-config.json")
                 if os.path.exists(mcp_config_path):
-                    session_kwargs["config_dir"] = os.path.expanduser("~/.copilot")
+                    session_kwargs["config_directory"] = os.path.expanduser("~/.copilot")
 
                 try:
                     if sdk_session_id:
@@ -8185,27 +8850,14 @@ User Request:
                             stream_buffer.push("done", result_text)
                         return result_text
 
-                    # Fall back to full message history
-                    messages = session.get_messages()
-                    assistant_msgs = [
-                        m
-                        for m in messages
-                        if m.type == SessionEventType.ASSISTANT_MESSAGE
-                    ]
-                    if assistant_msgs:
-                        last = assistant_msgs[-1]
-                        if hasattr(last, "data") and hasattr(last.data, "content"):
-                            result_text = str(last.data.content)
-                            if stream_buffer:
-                                stream_buffer.push("done", result_text)
-                            return result_text
-
                     if stream_buffer:
                         stream_buffer.push("done", "")
                     return ""
                 finally:
                     try:
-                        await session.disconnect()
+                        disconnect_result = session.disconnect()
+                        if inspect.isawaitable(disconnect_result):
+                            await disconnect_result
                     except Exception:
                         pass
 
@@ -8605,6 +9257,13 @@ User Request:
             "--verbose",
         ]
 
+        if browser_mcp_config := self._wee_browser_mcp_config_file(n8n_session_id):
+            # Additive: no --strict-mcp-config, so the agent's own MCP servers
+            # keep working alongside this one.
+            cmd.extend(["--mcp-config", browser_mcp_config])
+        if shell_mcp_config := self._wee_shell_mcp_config_file(n8n_session_id):
+            cmd.extend(["--mcp-config", shell_mcp_config])
+
         if resume and session_id:
             cmd.append(f"--resume={session_id}")
             print(f"[Session] Resuming Claude session: {session_id}", file=sys.stderr)
@@ -8754,6 +9413,38 @@ User Request:
 
         return self.strip_metadata(output, "gemini")
 
+    @staticmethod
+    def codex_thread_id_from_output(raw_output: str) -> Optional[str]:
+        """Extract the session UUID Codex reports for the turn we just ran.
+
+        Issue #449: the session ID was previously inferred by scanning
+        ~/.codex/sessions for the newest rollout file. That directory is shared
+        with Codex Desktop and any other local Codex use, so the newest file can
+        belong to an unrelated task — `codex exec resume` then hangs or resumes
+        someone else's context.
+
+        `codex exec --json` states the ID outright:
+
+            {"type": "thread.started", "thread_id": "019f96bd-...-19277a22af5e"}
+
+        Reading it removes the guess. Returns None when the frame is absent so
+        the caller can decline to adopt any ID rather than fall back to a scan.
+        """
+        for line in (raw_output or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{") or "thread.started" not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") != "thread.started":
+                continue
+            thread_id = event.get("thread_id")
+            if isinstance(thread_id, str) and thread_id.strip():
+                return thread_id.strip()
+        return None
+
     def run_codex(
         self,
         prompt: str,
@@ -8783,8 +9474,43 @@ User Request:
         # Resolve permission mode from session data (backward compat with yolo_mode)
         mode = self._resolve_permission_mode(session_data, mode)
 
+        codex_bin = getattr(self, "codex_bin", None) or find_executable("codex")
+        if not codex_bin:
+            return "Error: Codex executable not found. Install Codex or add it to PATH."
+
         agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
         effective_timeout = timeout if timeout is not None else self.command_timeout
+
+        if model and self._codex_uses_chatgpt_account():
+            # A ChatGPT-authenticated Codex CLI rejects models the account does
+            # not carry, returning a structured 400 and an empty turn. Only
+            # override in that case (issue #448) — a model the account *does*
+            # support must be honored, otherwise selecting one silently does
+            # nothing. "default" already means "let the account decide".
+            account_models = self._codex_account_models()
+            if model != "default" and account_models is not None and model not in account_models:
+                requested_model = model
+                model = ""
+                self.update_session_field(n8n_session_id, "model", "default")
+                print(
+                    f"[Codex] Model '{requested_model}' is not available to this "
+                    f"ChatGPT account; using the account default instead.",
+                    file=sys.stderr,
+                )
+            elif model == "default":
+                # Sentinel, not a real model ID — omit -m entirely.
+                model = ""
+            elif account_models is None:
+                # Cache unreadable: fall back to the previous conservative
+                # behavior rather than risking a 400 on an unverifiable model.
+                requested_model = model
+                model = ""
+                self.update_session_field(n8n_session_id, "model", "default")
+                print(
+                    f"[Codex] Could not verify '{requested_model}' against this "
+                    f"ChatGPT account; using the account default instead.",
+                    file=sys.stderr,
+                )
 
         # Get channel for file handling instructions
         channel = session_data.get("channel", "webui")
@@ -8830,13 +9556,15 @@ User Request:
 
         if resume and session_id:
             # Resume existing session — v0.125.0+ uses `codex exec resume` subcommand
-            cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "resume"]
+            cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check", "resume"]
             if mode == "elevated":
                 # Apply sandbox bypass and environment inheritance for elevated sessions
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
             if model:
                 cmd += ["-m", model]
+            cmd += self._wee_browser_codex_config_args(n8n_session_id)
+            cmd += self._wee_shell_codex_config_args(n8n_session_id)
             cmd += [session_id, context_prompt]
             print(
                 f"[Session] Resuming CODEX session: {session_id} with model {model} in {mode} mode",
@@ -8845,7 +9573,7 @@ User Request:
         else:
             # Start new session — v0.125.0+: --full-auto for normal mode,
             # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
-            cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
+            cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
                 cmd.append("--dangerously-bypass-approvals-and-sandbox")
@@ -8856,6 +9584,8 @@ User Request:
                 cmd.append("--full-auto")
             if model:
                 cmd += ["-m", model]
+            cmd += self._wee_browser_codex_config_args(n8n_session_id)
+            cmd += self._wee_shell_codex_config_args(n8n_session_id)
             cmd.append(context_prompt)
             print(
                 f"[Session] Starting new CODEX session with model {model} in {mode} mode",
@@ -8868,6 +9598,13 @@ User Request:
 
         if "Error: CODEX command failed" in output:
             return output
+
+        # Issue #449: record the ID Codex itself reported for this turn, so the
+        # next turn resumes exactly this session instead of whatever rollout
+        # file happened to be newest in the shared sessions directory.
+        _codex_thread_id = self.codex_thread_id_from_output(output)
+        if _codex_thread_id:
+            self.update_session_field(n8n_session_id, "session_id", _codex_thread_id)
 
         stripped = self.strip_metadata(output, "codex")
         if not stripped.strip() and output.strip():
@@ -9135,528 +9872,438 @@ User Request:
         timeout: Optional[int] = None,
         render_type: str = "text",
     ) -> str:
-        """Execute via Wee Native runtime - OpenAI-compatible chat completions.
+        """Execute Wee through Copilot SDK BYOK, with the legacy loop as fallback.
 
-        Connects to any OpenAI-compatible API endpoint (Ollama, OpenRouter,
-        LM Studio, etc.) using the openai Python package. No external CLI
-        binary required.
-
-        Model format: [provider/]model_name
-        Examples:
-            ollama/gemma4:e4b         - Ollama on Kubuntu
-            openrouter/meta-llama/llama-4-scout - OpenRouter cloud
-            gemma4:e4b                - Default endpoint (Ollama)
-
-        Supports:
-            - Real-time streaming to WebUI SSE consumers
-            - Multi-turn conversation history (#108)
-            - Tool-call agentic loop (#107)
-            - SSE streaming of tool execution (#109)
+        Provider-qualified model IDs are resolved by the shared Wee SDK module,
+        so API sessions and the standalone CLI use identical Ollama/OpenRouter
+        routing behavior.
         """
-        import json as _json
-
         try:
-            from openai import OpenAI
-        except ImportError:
-            return "Error: openai package not installed. " "Run: pip install openai"
+            from copilot import Tool
+            from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
 
-        session_data = self.get_or_create_session_data(n8n_session_id)
-        agent_dir = self.AGENTS.get(agent, self.AGENTS["orchestrator"])["path"]
-        effective_timeout = timeout if timeout is not None else self.command_timeout
-        channel = session_data.get("channel", "webui")
-
-        # -- Resolve model, endpoint, and API key --
-        api_base = session_data.get("api_base") or os.environ.get("WEE_API_BASE")
-        api_key = session_data.get("api_key") or os.environ.get("WEE_API_KEY")
-
-        # Provider presets
-        _PRESETS = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
-            "openrouter": ("https://openrouter.ai/api/v1", None),
-            "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
-        }
-
-        resolved_model = model
-        for prefix, (preset_base, preset_key) in _PRESETS.items():
-            if model.lower().startswith(f"{prefix}/"):
-                resolved_model = model[len(prefix) + 1 :]
-                if not api_base:
-                    api_base = preset_base
-                if not api_key and preset_key:
-                    api_key = preset_key
-                break
-
-        if not api_base:
-            api_base = "http://192.168.1.101:11434/v1"
-        if not api_key:
-            # Try keyring for OpenRouter
-            if "openrouter" in api_base.lower():
-                try:
-                    import keyring
-
-                    api_key = keyring.get_password("openrouter", "api_key")
-                except Exception:
-                    pass
-                if not api_key:
-                    api_key = os.environ.get("OPENROUTER_API_KEY")
-            if not api_key:
-                api_key = "ollama"
-
-        print(
-            f"[Wee Native] model={resolved_model} api_base={api_base} "
-            f"session={n8n_session_id[:8]}...",
-            file=sys.stderr,
-        )
-
-        # Issue #111: Build context prompt with correct args (after model resolution)
-        base_context_prompt = self.build_agent_context_prompt(
-            agent,
-            prompt,
-            n8n_session_id,
-            render_type=render_type,
-            timeout=effective_timeout,
-            runtime="wee",
-            model=resolved_model,
-            channel=channel,
-        )
-        # Issue #111: Augment system prompt with explicit tool capability section
-        # so models that ignore JSON schemas still know tools are available.
-        context_prompt = self._wee_augment_system_prompt_with_tools(base_context_prompt)
-        # Issue #113: Inject anti-hallucination rules and SSH sanitization guidance.
-        context_prompt = context_prompt + _wee_anti_hallucination_prompt()
-
-        # -- Streaming infrastructure --
-        stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
-
-        # -- Issue #125: Free model 429 retry + fallback chain --
-        _free_cfg = self._wee_load_free_config()
-        _max_retries_429 = _free_cfg.get("max_retries_per_model", 3)
-        _backoff_429 = _free_cfg.get("retry_backoff_seconds", [2, 5, 10])
-        _is_free_model_req = self._wee_is_free_model(model)
-        if _is_free_model_req:
-            _chain_raw = _free_cfg.get("free_model_fallback_chain", [])
-            _attempt_chain = [model] + [m for m in _chain_raw if m.lower() != model.lower()]
-        else:
-            _attempt_chain = [model]
-
-        # -- Create OpenAI client and call API --
-        import httpx as _httpx_wee
-        client = OpenAI(
-            base_url=api_base,
-            api_key=api_key,
-            timeout=_httpx_wee.Timeout(
-                connect=15.0,
-                read=float(effective_timeout),
-                write=30.0,
-                pool=15.0,
-            ),
-            max_retries=0,
-        )
-
-        # -- Issue #108: Load conversation history --
-        try:
-            messages = self._wee_load_messages(n8n_session_id, context_prompt, resume)
-        except Exception as load_err:
-            # Fallback: start with empty messages if loading fails
-            print(
-                f"[Wee Native] Warning: Failed to load messages: "
-                f"{load_err}, starting fresh",
-                file=sys.stderr,
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            agent_info = (
+                self.AGENTS.get(agent)
+                or self.AGENTS.get("orchestrator")
+                or {"path": os.getcwd()}
             )
-            messages = []
-            if context_prompt:
-                messages.append({"role": "system", "content": context_prompt})
-        messages.append({"role": "user", "content": prompt})
-        messages = self._wee_maybe_compact(
-            client, n8n_session_id, messages, resolved_model, context_prompt
-        )
+            agent_dir = agent_info["path"]
+            effective_timeout = timeout if timeout is not None else self.command_timeout
+            channel = session_data.get("channel", "webui")
+            route = resolve_wee_provider(
+                model,
+                api_base=session_data.get("api_base") or os.environ.get("WEE_API_BASE"),
+                api_key=session_data.get("api_key") or os.environ.get("WEE_API_KEY"),
+            )
 
-        # -- Tool definitions for agentic loop (Issue #107) --
-        _WEE_TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash",
-                    "description": "Execute a bash shell command and return its output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The bash command to execute",
-                            }
-                        },
-                        "required": ["command"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "python",
-                    "description": "Execute Python 3 code and return the output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The Python code to execute",
-                            }
-                        },
-                        "required": ["code"],
-                    },
-                },
-            },
-        ]
+            context_prompt = self.build_agent_context_prompt(
+                agent,
+                prompt,
+                n8n_session_id,
+                render_type=render_type,
+                timeout=effective_timeout,
+                runtime="wee",
+                model=route.qualified_model,
+                channel=channel,
+            )
+            context_prompt = self._wee_augment_system_prompt_with_tools(
+                context_prompt,
+                native_tools_registered=self._wee_provider_needs_native_tools(route.provider),
+            )
+            context_prompt += _wee_anti_hallucination_prompt()
+            stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
+            sdk_tool_ids: Dict[str, str] = {}
 
-        # -- Tool definitions for agentic loop (Issue #123) --
-        _WEE_TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash",
-                    "description": "Execute a bash shell command and return its output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The bash command to execute",
-                            }
-                        },
-                        "required": ["command"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "python",
-                    "description": "Execute Python 3 code and return the output.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The Python code to execute",
-                            }
-                        },
-                        "required": ["code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "call_agent",
-                    "description": (
-                        "Delegate a task to a specialized sub-agent. "
-                        "Use mode='background' for long-running tasks (returns task ID). "
-                        "Use mode='quick' to wait for the result inline."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "agent": {
-                                "type": "string",
-                                "description": "Agent name (e.g. orchestrator, research, devops, wee-dev)",
-                            },
-                            "prompt": {
-                                "type": "string",
-                                "description": "The task or question to send to the agent",
-                            },
-                            "mode": {
-                                "type": "string",
-                                "enum": ["quick", "background"],
-                                "description": "quick=wait for result, background=dispatch and return task ID",
-                            },
-                        },
-                        "required": ["agent", "prompt"],
-                    },
-                },
-            },
-        ]
-
-        collected_output = []
-        _tool_call_counter = 0
-        _last_tool_names: set = set()  # Issue #343: track names of tools called in last round
-        MAX_TOOL_ROUNDS = 10
-        WEE_TOOL_OUTPUT_CAP = 8_000  # Issue #336: cap tool output fed back to model
-
-        try:
-            for round_num in range(MAX_TOOL_ROUNDS + 1):
-                # Build create kwargs — include tools unless on final safety round
-                create_kwargs = {
-                    "model": resolved_model,
-                    "messages": messages,
-                    "stream": True,
-                }
-                if round_num < MAX_TOOL_ROUNDS:
-                    create_kwargs["tools"] = _WEE_TOOLS
-
-                try:
-                    stream = client.chat.completions.create(**create_kwargs)
-                except Exception as tools_err:
-                    # Some models/endpoints may not support tools — retry without
-                    if "tools" in create_kwargs:
-                        print(
-                            f"[Wee Native] Tools not supported, retrying without: {tools_err}",
-                            file=sys.stderr,
-                        )
-                        create_kwargs.pop("tools", None)
-                        try:
-                            stream = client.chat.completions.create(**create_kwargs)
-                        except Exception as retry_err:
-                            if self._wee_is_free_model(model) and (
-                                "429" in str(retry_err)
-                                or "rate limit" in str(retry_err).lower()
-                            ):
-                                fallback_cfg = self._wee_load_free_config() or {}
-                                fallback_chain = (
-                                    fallback_cfg.get("free_model_fallback_chain") or []
-                                )
-                                fallback_model = next(iter(fallback_chain), None)
-                                if not fallback_model:
-                                    raise
-                                (
-                                    fallback_base,
-                                    fallback_key,
-                                    fallback_resolved_model,
-                                ) = self._wee_resolve_endpoint(
-                                    fallback_model, api_base, api_key
-                                )
-                                client = OpenAI(
-                                    base_url=fallback_base,
-                                    api_key=fallback_key,
-                                    timeout=effective_timeout,
-                                )
-                                resolved_model = fallback_resolved_model
-                                create_kwargs["model"] = resolved_model
-                                stream = client.chat.completions.create(
-                                    **create_kwargs
-                                )
-                            else:
-                                raise
-                    else:
-                        raise
-
-                # Accumulate content and tool calls from streaming response
-                round_content = []
-                tool_calls_acc = {}  # index -> {id, name, arguments}
-
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-
-                    # Content tokens — stream to user
-                    if delta.content:
-                        token = delta.content
-                        round_content.append(token)
-                        if stream_buffer:
-                            stream_buffer.push("chunk", {"text": token})
-
-                    # Tool call deltas (Issue #107)
-                    if getattr(delta, "tool_calls", None):
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in tool_calls_acc:
-                                _tool_call_counter += 1
-                                tool_calls_acc[idx] = {
-                                    "id": getattr(tc_delta, "id", None)
-                                    or f"tc_wee_{_tool_call_counter}",
-                                    "name": "",
-                                    "arguments": "",
-                                }
-                            if tc_delta.id and not tool_calls_acc[idx]["id"].startswith(
-                                "tc_wee_"
-                            ):
-                                pass  # keep first real id
-                            elif tc_delta.id:
-                                tool_calls_acc[idx]["id"] = tc_delta.id
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    tool_calls_acc[idx]["name"] = tc_delta.function.name
-                                if tc_delta.function.arguments:
-                                    tool_calls_acc[idx][
-                                        "arguments"
-                                    ] += tc_delta.function.arguments
-
-                content_text = "".join(round_content)
-
-                # No tool calls — we have the final answer
-                if not tool_calls_acc:
-                    # Issue #343: When call_agent was the last tool and model returns
-                    # empty synthesis, surface the task dispatch result as confirmation.
-                    if not content_text.strip() and "call_agent" in _last_tool_names:
-                        _tool_msgs = [
-                            m["content"] for m in messages if m.get("role") == "tool"
-                        ]
-                        if _tool_msgs:
-                            content_text = _tool_msgs[-1]
-                            print(
-                                "[Wee Native] Empty synthesis after call_agent — "
-                                "surfacing task dispatch result",
-                                file=sys.stderr,
-                            )
-                            if stream_buffer:
-                                stream_buffer.push("chunk", {"text": content_text})
-                    collected_output.append(content_text)
-                    messages.append({"role": "assistant", "content": content_text})
-                    break
-
-                # -- Tool calls detected (Issues #107 + #109) --
-                print(
-                    f"[Wee Native] Round {round_num + 1}: {len(tool_calls_acc)} tool call(s) detected",
-                    file=sys.stderr,
+            async def call_agent_handler(invocation):
+                return self._wee_execute_tool(
+                    "call_agent",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
                 )
 
-                # Build assistant message with tool_calls for conversation history
-                assistant_tool_calls = []
-                for idx in sorted(tool_calls_acc.keys()):
-                    tc = tool_calls_acc[idx]
-                    assistant_tool_calls.append(
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
+            call_agent_tool = Tool(
+                name="call_agent",
+                description=(
+                    "Delegate a task to another configured Wee agent. Use background "
+                    "mode for long-running work and quick mode for short questions."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "agent": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "mode": {
+                            "type": "string",
+                            "enum": ["quick", "background"],
+                            "default": "background",
+                        },
+                    },
+                    "required": ["agent", "prompt"],
+                },
+                handler=call_agent_handler,
+            )
+
+            async def search_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "search",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            search_tool = Tool(
+                name="search",
+                description=(
+                    "Search the web and return sourced results. Use this to find "
+                    "current information; use web_fetch only when you already "
+                    "know the exact URL."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "q": {"type": "string", "description": "The search query."},
+                        "count": {
+                            "type": "integer",
+                            "description": "How many results to return (max 20).",
+                            "default": 5,
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["text", "json"],
+                            "default": "text",
+                        },
+                    },
+                    "required": ["q"],
+                },
+                handler=search_handler,
+            )
+
+            async def browser_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "browser",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            browser_tool = Tool(
+                name="browser",
+                description=(
+                    "Control the browser attached to this chat session. Use it to "
+                    "navigate, inspect page text and links, click, type, go back or "
+                    "forward, reload, or evaluate JavaScript."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "navigate",
+                                "snapshot",
+                                "click",
+                                "type",
+                                "evaluate",
+                                "back",
+                                "forward",
+                                "reload",
+                            ],
+                        },
+                        "url": {"type": "string"},
+                        "selector": {"type": "string"},
+                        "text": {"type": "string"},
+                        "script": {"type": "string"},
+                        "submit": {"type": "boolean"},
+                    },
+                    "required": ["action"],
+                },
+                handler=browser_handler,
+            )
+
+            async def shell_handler(invocation):
+                return await asyncio.to_thread(
+                    self._wee_execute_tool,
+                    "session_shell",
+                    dict(invocation.arguments or {}),
+                    agent,
+                    n8n_session_id,
+                )
+
+            shell_tool = Tool(
+                name="session_shell",
+                description=(
+                    "Control the shell attached to this chat session, which the "
+                    "user can see and may type into themselves. Use shell_read "
+                    "before assuming a command failed -- it may still be running "
+                    "or the user may have already handled it. This is NOT your "
+                    "own private shell/bash tool; it is a shared terminal."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["run", "write", "key", "read"],
+                        },
+                        "command": {"type": "string", "description": "For action=run"},
+                        "text": {"type": "string", "description": "For action=write"},
+                        "key": {
+                            "type": "string",
+                            "description": "For action=key",
+                            "enum": [
+                                "ctrl-c", "ctrl-d", "tab", "up", "down", "left",
+                                "right", "enter", "escape", "backspace",
+                            ],
+                        },
+                    },
+                    "required": ["action"],
+                },
+                handler=shell_handler,
+            )
+
+            # Issue #453: #443 stopped redeclaring shell/file tools on the theory
+            # that "the Copilot SDK session already knows about and describes its
+            # own built-in tools". That holds for Copilot-native models but not
+            # for a BYOK route: on Ollama the registered set really is just
+            # search/call_agent/browser, so the model has no way to run a command
+            # or touch a file. It improvises instead -- markdown code fences,
+            # pseudo-XML, invented function names -- and the turn ends with
+            # nothing having run. Register real bash/python tools whenever the
+            # provider is not Copilot-native.
+            native_tools: list = []
+            if self._wee_provider_needs_native_tools(route.provider):
+
+                async def bash_handler(invocation):
+                    return self._wee_execute_tool(
+                        "bash",
+                        dict(invocation.arguments or {}),
+                        agent,
+                        n8n_session_id,
                     )
 
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": content_text or None,
-                    "tool_calls": assistant_tool_calls,
-                }
-                messages.append(assistant_msg)
+                async def python_handler(invocation):
+                    return self._wee_execute_tool(
+                        "python",
+                        dict(invocation.arguments or {}),
+                        agent,
+                        n8n_session_id,
+                    )
 
-                # Execute each tool call and emit SSE events (Issue #109)
-                for tc_entry in assistant_tool_calls:
-                    tc_id = tc_entry["id"]
-                    func_name = tc_entry["function"]["name"]
-                    func_args_str = tc_entry["function"]["arguments"]
+                native_tools = [
+                    Tool(
+                        name="bash",
+                        description=(
+                            "Execute a bash shell command on this machine and return its "
+                            "output. Use this to read or write files, inspect the system, "
+                            "and run commands. For delegating whole tasks to another Wee "
+                            "agent, use call_agent instead."
+                        ),
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "command": {
+                                    "type": "string",
+                                    "description": "The bash command to execute",
+                                }
+                            },
+                            "required": ["command"],
+                        },
+                        handler=bash_handler,
+                    ),
+                    Tool(
+                        name="python",
+                        description=(
+                            "Execute Python 3 code on this machine and return its stdout. "
+                            "Use this for computation and data handling. For delegating "
+                            "whole tasks to another Wee agent, use call_agent instead."
+                        ),
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "The Python code to execute",
+                                }
+                            },
+                            "required": ["code"],
+                        },
+                        handler=python_handler,
+                    ),
+                ]
 
-                    # Parse arguments
-                    try:
-                        func_args = _json.loads(func_args_str)
-                    except (ValueError, _json.JSONDecodeError):
-                        func_args = {"raw": func_args_str}
+            # Issue #398: track whether the model actually invoked anything, so a
+            # turn that only *promised* to act can be detected afterwards. The
+            # counter must be updated even when nothing is streaming, so it sits
+            # before the stream_buffer guard.
+            tool_calls_seen = {"count": 0}
 
-                    # Issue #109: Emit tool start event to SSE stream
-                    tc_start_event = {
-                        "id": tc_id,
-                        "name": func_name,
-                        "arguments": func_args,
-                        "status": "running",
-                    }
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_start_event)
+            def on_sdk_event(kind, payload):
+                if kind == "tool_call":
+                    tool_calls_seen["count"] += 1
+                if kind == "usage":
+                    # Issue #423: persist context usage so /sessions/{id}/status
+                    # can report it to the macOS ring and the WebUI pill. Nothing
+                    # had populated this since #443 removed the loop that did.
+                    if isinstance(payload, dict) and payload:
+                        self.update_session_field(
+                            n8n_session_id, "wee_context_usage", payload
+                        )
+                    return
+                if not stream_buffer:
+                    return
+                if kind == "chunk":
+                    stream_buffer.push("chunk", {"text": str(payload)})
+                elif kind == "tool_call":
+                    stream_buffer.push(
+                        "tool_call",
+                        _normalize_wee_sdk_tool_event(payload, sdk_tool_ids),
+                    )
+                elif kind == "done":
+                    stream_buffer.push("done", str(payload or ""))
 
+            saved_sdk_session = session_data.get("wee_copilot_session_id")
+            output, actual_session_id = execute_wee_copilot(
+                prompt=context_prompt,
+                route=route,
+                working_directory=agent_dir,
+                timeout=float(effective_timeout),
+                session_id=saved_sdk_session,
+                resume=bool(resume and saved_sdk_session),
+                tools=[search_tool, call_agent_tool, browser_tool, shell_tool] + native_tools,
+                enable_tools=True,
+                event_callback=on_sdk_event,
+            )
+            if actual_session_id:
+                self.update_session_field(
+                    n8n_session_id, "wee_copilot_session_id", actual_session_id
+                )
+
+            # Issue #398: some local models narrate an action instead of calling
+            # the tool. Re-prompt once, in the same SDK session so the context
+            # carries, telling the model to actually perform it. Bounded to a
+            # single attempt: if it narrates twice, returning its second answer
+            # is better than looping.
+            if self._wee_turn_is_incomplete(output, tool_calls_seen["count"]):
+                print(
+                    "[Wee Copilot SDK] incomplete agentic turn "
+                    "(promised an action, made no tool call) — retrying once",
+                    file=sys.stderr,
+                )
+                retry_session = actual_session_id or saved_sdk_session
+                try:
+                    retry_output, retry_session_id = execute_wee_copilot(
+                        prompt=self.WEE_COMPLETION_INSTRUCTION,
+                        route=route,
+                        working_directory=agent_dir,
+                        timeout=float(effective_timeout),
+                        session_id=retry_session,
+                        resume=bool(retry_session),
+                        tools=[search_tool, call_agent_tool, browser_tool, shell_tool],
+                        enable_tools=True,
+                        event_callback=on_sdk_event,
+                    )
+                except Exception as retry_error:
+                    # The first answer is still the user's best available result.
                     print(
-                        f"[Wee Native] Tool: {func_name}({_json.dumps(func_args)[:200]})",
+                        f"[Wee Copilot SDK] completion retry failed: {retry_error}",
                         file=sys.stderr,
                     )
-
-                    # Execute the tool
-                    tool_result = self._wee_execute_tool(func_name, func_args, agent)
-
-                    # Issue #109: Emit tool complete event to SSE stream
-                    tc_done_event = {
-                        "id": tc_id,
-                        "name": func_name,
-                        "arguments": func_args,
-                        "result": tool_result[:2000] if tool_result else "",
-                        "status": "complete",
-                    }
-                    if stream_buffer:
-                        stream_buffer.push("tool_call", tc_done_event)
-
-                    # Append tool result to conversation for next round
-                    # Issue #336: cap output to prevent model context overflow
-                    _raw = tool_result or "No output"
-                    if len(_raw) > WEE_TOOL_OUTPUT_CAP:
-                        _raw = _raw[:WEE_TOOL_OUTPUT_CAP] + "\n[...output truncated at " + str(WEE_TOOL_OUTPUT_CAP) + " chars]"
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": _raw,
-                        }
-                    )
-
-                # Issue #343: record which tools were called in this round
-                _last_tool_names = {tc["function"]["name"] for tc in assistant_tool_calls}
-
-            else:
-                # All MAX_TOOL_ROUNDS had tool calls with no final text
-                last_tool_results = [
-                    m["content"] for m in messages if m.get("role") == "tool"
-                ]
-                if last_tool_results:
-                    collected_output.append(
-                        "Tool execution completed. Last result:\n"
-                        + last_tool_results[-1][:2000]
-                    )
                 else:
-                    collected_output.append(
-                        "Max tool rounds reached without final response."
-                    )
-
-            output = "".join(collected_output)
-
-            # Issue #108: Persist conversation history
-            self._wee_save_messages(n8n_session_id, messages)
-
-            # Push done sentinel
-            if stream_buffer:
-                stream_buffer.push("done", output)
+                    if retry_session_id:
+                        self.update_session_field(
+                            n8n_session_id, "wee_copilot_session_id", retry_session_id
+                        )
+                    if retry_output and retry_output.strip():
+                        output = retry_output
 
             print(
-                f"[Wee Native] Completed. Output length: {len(output)} chars",
+                f"[Wee Copilot SDK] provider={route.provider} "
+                f"model={route.model} session={n8n_session_id[:8]}...",
                 file=sys.stderr,
             )
             return output
-
-        except Exception as e:
-            _e_str = str(e)
-            _is_429 = "429" in _e_str or "rate limit" in _e_str.lower() or "429 exhausted" in _e_str
-            if _is_free_model_req and _is_429:
-                # Try next model in fallback chain
-                _cur_idx = _attempt_chain.index(model) if model in _attempt_chain else 0
-                for _fi, _fallback_model in enumerate(_attempt_chain):
-                    if _fallback_model.lower() == model.lower():
-                        _cur_idx = _fi
-                        break
-                if _cur_idx + 1 < len(_attempt_chain):
-                    _next_model = _attempt_chain[_cur_idx + 1]
-                    _fb_msg = f"\n⚠️ Still rate limited, falling back to {_next_model.split('/')[-1]}...\n"
-                    print(f"[Wee Native] {_fb_msg.strip()}", file=sys.stderr)
-                    if stream_buffer:
-                        stream_buffer.push("chunk", {"text": _fb_msg})
-                    # Recurse with next model (single fallback step)
-                    return self.run_wee_native(
-                        prompt=prompt, model=_next_model, agent=agent,
-                        session_id=session_id, resume=resume,
-                        n8n_session_id=n8n_session_id, timeout=timeout,
-                        render_type=render_type,
-                    )
-                else:
-                    _done_msg = "\n❌ All free model fallbacks exhausted. Please try again later or switch to a paid model."
-                    if stream_buffer:
-                        stream_buffer.push("done", _done_msg)
-                    return _done_msg
-
-            error_msg = f"Error: Wee native runtime failed: {e}"
-            print(f"[Wee Native] {error_msg}", file=sys.stderr)
-
-            # Push error as done sentinel
+        except Exception as sdk_error:
+            print(
+                f"[Wee Copilot SDK] failed: {type(sdk_error).__name__}: {sdk_error}",
+                file=sys.stderr,
+            )
+            error_msg = f"Error: Wee Copilot SDK failed: {sdk_error}"
+            stream_buffer = getattr(self, "_stream_buffers", {}).get(n8n_session_id)
             if stream_buffer:
                 stream_buffer.push("done", error_msg)
-
             return error_msg
+
+    @staticmethod
+    def _wee_response_promises_search(text: str) -> bool:
+        """Return true only for an explicit, unfinished promise to web-search."""
+        normalized = " ".join((text or "").lower().split())
+        return bool(
+            re.search(
+                r"\b(?:i(?:'|’)ll|i will|let me|i need to)\s+(?:web\s+)?search\b",
+                normalized,
+            )
+        )
+
+    # Issue #398: an incomplete agentic turn is prose that *announces* an action
+    # the model then never performs. The verbs below are the ones the SDK can
+    # actually act on (its own search/shell/file tools, plus wee's call_agent
+    # and browser); announcing anything else is not a recoverable turn.
+    _WEE_PROMISED_ACTION_RE = re.compile(
+        r"\b(?:i(?:'|’)ll|i will|let me|i(?:'|’)m going to|i am going to|i need to|"
+        r"give me a moment (?:to|while i)|hold on while i)\s+"
+        r"(?:now\s+|just\s+|quickly\s+|first\s+)*"
+        r"(?:web\s+)?"
+        r"(?:search|look\s+(?:up|at|into)|check|read|open|fetch|browse|run|execute|"
+        r"inspect|grep|find|list|delegate|ask\s+\w+|call\s+\w+)\b"
+    )
+
+    # Phrases that mean the work already happened, or that the model is
+    # declining. Neither is an incomplete turn, so they must not trigger a retry.
+    _WEE_COMPLETED_OR_REFUSED_RE = re.compile(
+        # "read" is deliberately absent: past and present tense are identical in
+        # English, so "while i read the log" (a promise) is indistinguishable
+        # from "i read the log" (done). A promise always carries a lead-in
+        # phrase, so omitting it here costs nothing and avoids a false negative.
+        r"\b(?:search\s+completed|i\s+(?:searched|checked|ran|found)|"
+        r"here\s+(?:are|is)\s+the\s+(?:results|result)|based\s+on\s+(?:the\s+)?(?:results|output)|"
+        r"i\s+(?:cannot|can(?:'|’)t|am\s+unable\s+to|do\s+not\s+have\s+access)"
+        r"(?:\s+\w+){0,3}\s+(?:search|browse|access|read|run))\b"
+    )
+
+    @classmethod
+    def _wee_turn_is_incomplete(cls, text: str, tool_calls_made: int) -> bool:
+        """Return whether a finished turn only *promised* to act.
+
+        Issue #398. Two conditions must hold:
+
+        * the model performed no tool call at all during the turn, and
+        * its final text announces an action it was equipped to take.
+
+        A turn that used any tool is left alone even if its prose still reads
+        like a promise — the model did work, and re-prompting it risks
+        duplicating a side effect (a delegated task, a shell command).
+        """
+        if tool_calls_made > 0:
+            return False
+        normalized = " ".join((text or "").lower().split())
+        if not normalized:
+            return False
+        if cls._WEE_COMPLETED_OR_REFUSED_RE.search(normalized):
+            return False
+        return bool(cls._WEE_PROMISED_ACTION_RE.search(normalized))
+
+    # Appended verbatim to the retry so the instruction is auditable and the
+    # model is told to act rather than narrate.
+    WEE_COMPLETION_INSTRUCTION = (
+        "You described an action but did not perform it. Carry it out now using "
+        "your tools, then answer with the result. Do not restate your intent, and "
+        "do not ask for confirmation. If the action is genuinely impossible, say "
+        "plainly why in one sentence."
+    )
 
     # -- Wee runtime helper methods (Issues #107, #108, #109) --
 
@@ -9750,46 +10397,65 @@ User Request:
                 session_map[n8n_session_id]["wee_messages"] = clean
                 self.save_session_map(session_map)
 
-    def _wee_augment_system_prompt_with_tools(self, system_prompt: str) -> str:
-        """Issue #111: Append explicit tool capability declaration to system prompt.
+    # Providers whose sessions genuinely ship built-in shell/file/python tools.
+    # Everything else is a BYOK OpenAI-compatible route where the registered
+    # tool list is the complete set (issue #453).
+    _WEE_COPILOT_NATIVE_PROVIDERS = frozenset({"copilot", "github", "githubcopilot"})
 
-        Many Ollama models ignore JSON tool schemas entirely and respond as if
-        no tools exist. Explicitly stating tool availability in the system
-        prompt text reliably fixes this across all models.
+    @classmethod
+    def _wee_provider_needs_native_tools(cls, provider: str) -> bool:
+        return (provider or "").strip().lower() not in cls._WEE_COPILOT_NATIVE_PROVIDERS
+
+    def _wee_augment_system_prompt_with_tools(
+        self, system_prompt: str, native_tools_registered: bool = False
+    ) -> str:
+        """Issue #111 / #443 / #397: Describe only the custom tools wee registers
+        on top of the Copilot SDK session (search, call_agent, browser).
+
+        The Copilot SDK session already knows about and describes its own
+        built-in tools (shell, file read/write, etc.) — don't redeclare those
+        here, since a hand-written description can drift out of sync with what
+        the SDK actually exposes and cause the model to call a tool that isn't
+        wired to anything.
         """
         tool_section = (
-            "\n[Available Tools]\n"
-            "You have access to the following tools. ALWAYS use them when the user asks you to\n"
-            "perform any action -- do NOT say you cannot do something that these tools enable.\n"
+            "\n[Additional Tools]\n"
+            "Beyond your built-in tools, you also have access to:\n"
             "\n"
-            "**call_agent** -- Delegate tasks to other specialized agents (PREFERRED for background tasks).\n"
+            "**search** -- Search the web and get sourced results.\n"
+            '  Call: search tool with {"q": "your query", "count": 5}\n'
+            "  Use for: current information you do not already have a URL for. "
+            "Prefer this over web_fetch unless you already know the exact URL.\n"
+            "\n"
+            "**call_agent** -- Delegate tasks to other specialized Wee agents (PREFERRED for background tasks).\n"
             '  Call: call_agent tool with {"agent": "agent_name", "prompt": "task", "mode": "background", ...}\n'
             "  Use for: scheduling background tasks, delegating work to orchestrator/research/other agents\n"
-            "  BEST CHOICE for: background task scheduling, agent delegation\n"
-            "  Example: To schedule a background task, ALWAYS use call_agent with mode=\'background\' instead of raw API calls\n"
+            "  Example: To schedule a background task, ALWAYS use call_agent with mode='background' instead of raw API calls\n"
             "\n"
-            "**bash** -- Execute a bash shell command and return its output.\n"
-            '  Call: bash tool with {"command": "your shell command here"}\n'
-            "  Use for: running commands, SSH, file operations, checking system state\n"
-            "  DO NOT use bash for API calls or background task scheduling -- use call_agent instead\n"
+            "**browser** -- Control the browser attached to this chat session (navigate, click, type, read page text).\n"
             "\n"
-            "**python** -- Execute Python 3 code and return its output.\n"
-            '  Call: python tool with {"code": "your python code here"}\n'
-            "  Use for: data processing, calculations, scripting, file parsing\n"
-            "\n"
-            "**search** -- Query SearXNG for web search results.\n"
-            '  Call: search tool with {"q": "your query", "count": 5, "format": "text"}\n'
-            "  Use for: finding information online, web searches, research\n"
-            "  Parameters: q (required, search query), count (optional, 1-20, default 5), format (optional, 'json' or 'text')\n"
-            "  Env: WEE_SEARXNG_URL (default: http://localhost:8888)\n"
-            "\n"
-            "CRITICAL RULES:\n"
-            "1. For background task scheduling: ALWAYS use call_agent with mode=\'background\'\n"
+            "[CRITICAL — Tool Usage Rules]\n"
+            "1. For background task scheduling: ALWAYS use call_agent with mode='background'\n"
             "2. For delegating work to other agents: use call_agent\n"
-            "3. For running shell commands: use bash tool\n"
-            "4. NEVER make raw API calls via bash/curl when call_agent can handle it\n"
-            "5. NEVER refuse or claim you lack capability. The tools are active and functional."
+            "3. NEVER refuse or claim you lack capability. Your tools are active and functional."
         )
+        if native_tools_registered:
+            # Only described when actually registered, so the prompt can never
+            # advertise a tool that is not wired to anything -- the drift #443
+            # was guarding against.
+            tool_section += (
+                "\n\n**bash** -- Run a shell command on this machine and get its output.\n"
+                '  Call: bash tool with {"command": "ls -la /tmp"}\n'
+                "  Use for: reading and writing files, inspecting the system, running commands.\n"
+                "\n"
+                "**python** -- Run Python 3 code and get its stdout.\n"
+                '  Call: python tool with {"code": "print(6 * 7)"}\n'
+                "  Use for: computation and data handling.\n"
+                "\n"
+                "4. To run a command or touch a file, CALL the bash or python tool. "
+                "Do NOT write the command in a markdown code block, in XML tags, or as "
+                "prose describing what you would run -- none of those execute."
+            )
         return system_prompt + tool_section
 
 
@@ -9804,11 +10470,39 @@ User Request:
         """Resolve the context window size for a wee model."""
         return self._wee_get_context_limit_for_api(model, "")
 
+    @staticmethod
+    def _wee_ollama_context_window_for_api(api_base: str) -> Optional[int]:
+        """Return the configured context window when ``api_base`` is Ollama.
+
+        Ollama defaults to 4K unless each generation supplies ``num_ctx``.
+        The desktop Local API sets this value to 64K, while server deployments
+        remain unchanged unless they explicitly opt in through the same env var.
+        """
+        configured = os.environ.get("WEE_OLLAMA_CONTEXT_WINDOW", "").strip()
+        if not configured:
+            return None
+        try:
+            context_window = int(configured)
+        except ValueError:
+            return None
+        if context_window < 4_096:
+            return None
+
+        endpoint = (api_base or "").rstrip("/").lower()
+        ollama_host = os.environ.get(
+            "WEE_OLLAMA_HOST", "http://192.168.1.101:11434"
+        ).rstrip("/").lower()
+        return context_window if endpoint.startswith(ollama_host) else None
+
     def _wee_get_context_limit_for_api(self, model: str, api_base: str) -> int:
         """Resolve the context window size for a wee model and endpoint."""
+        if configured_window := self._wee_ollama_context_window_for_api(api_base):
+            return configured_window
+
         normalized = (model or "").lower()
         known_windows = [
             ("gemma4", 128000),
+            ("gemma3", 131072),
             ("llama-4-scout", 131072),
             ("llama-3.1", 131072),
             ("64k", 65536),
@@ -10089,6 +10783,23 @@ User Request:
             if role in ("user", "assistant") and content:
                 prefix = "User" if role == "user" else "Assistant"
                 transcript_lines.append(f"{prefix}: {_summary_snippet(content)}")
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Issue #399: preserve the fact that a tool was invoked even
+                # when the assistant message itself has no text content, so
+                # the summary doesn't silently drop tool-call turns.
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    name = fn.get("name", "unknown")
+                    args = fn.get("arguments", "")
+                    transcript_lines.append(
+                        f"Assistant: [called tool {name} with args {_summary_snippet(args, 200)}]"
+                    )
+            elif role == "tool" and content:
+                # Issue #399: tool results (e.g. web_search output) were being
+                # dropped entirely during compaction, causing the summary to
+                # lose all knowledge of prior tool output (search results,
+                # command output, etc.) referenced by later follow-up turns.
+                transcript_lines.append(f"Tool result: {_summary_snippet(content)}")
         if not transcript_lines:
             return messages
 
@@ -10164,8 +10875,18 @@ User Request:
         self, model: str, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[str, str, str]:
         """Compatibility shim returning the resolved endpoint tuple."""
+        _ollama_base = (
+            os.environ.get("WEE_OLLAMA_BASE_URL")
+            or os.environ.get("WEE_OLLAMA_HOST")
+            or os.environ.get("OLLAMA_HOST")
+            or "http://192.168.1.101:11434"
+        ).rstrip("/")
+        if not _ollama_base.startswith(("http://", "https://")):
+            _ollama_base = f"http://{_ollama_base}"
+        if not _ollama_base.endswith("/v1"):
+            _ollama_base += "/v1"
         _presets = {
-            "ollama": ("http://192.168.1.101:11434/v1", "ollama"),
+            "ollama": (_ollama_base, "ollama"),
             "openrouter": ("https://openrouter.ai/api/v1", None),
             "lmstudio": ("http://localhost:1234/v1", "lm-studio"),
         }
@@ -10186,56 +10907,79 @@ User Request:
             resolved_key = "ollama"
         return resolved_base, resolved_key, resolved_model
 
-    def _wee_execute_tool(self, func_name: str, func_args: dict, agent: str) -> str:
-        """Execute a tool call from the wee runtime agentic loop.
+    def _wee_execute_tool(
+        self,
+        func_name: str,
+        func_args: dict,
+        agent: str,
+        n8n_session_id: Optional[str] = None,
+    ) -> str:
+        """Execute a tool call handler bound to a Wee Copilot SDK custom Tool.
 
-        Issue #107: Supports bash and python tools.  Uses the same
-        _execute_bash_command infrastructure as other runtimes.
+        The Copilot SDK owns shell and file execution, so wee does not hand-roll
+        those. It does not provide web *search* though — only web_fetch for a URL
+        already known — so search is wired here alongside call_agent and browser
+        (issue #397).
         """
         try:
             if func_name == "bash":
-                command = func_args.get("command", "")
-                if not command:
-                    return "Error: No command provided"
-                command = _wee_sanitize_bash_command(command)
-                return self._execute_bash_command(command, agent)
+                # Issue #453: only registered for non-Copilot-native providers,
+                # which have no built-in shell tool of their own.
+                from wee_runtime import execute_bash
+
+                return execute_bash(func_args)
             elif func_name == "python":
-                code = func_args.get("code", "")
-                if not code:
-                    return "Error: No code provided"
-                agent_info = self.AGENTS.get(agent, self.AGENTS.get("orchestrator"))
-                cwd = agent_info["path"] if agent_info else str(Path.cwd())
-                result = subprocess.run(
-                    [sys.executable, "-c", code],
-                    capture_output=True,
-                    text=True,
-                    timeout=min(self.command_timeout, 120),
-                    cwd=cwd,
-                )
-                output = result.stdout
-                if result.stderr:
-                    output += ("\n" if output else "") + result.stderr
-                if not output.strip():
-                    if result.returncode == 0:
-                        return "✓ Executed successfully (exit code: 0)"
-                    else:
-                        return f"✗ Failed with exit code: {result.returncode}"
-                return output.strip()
+                from wee_runtime import execute_python
+
+                return execute_python(func_args)
+            elif func_name == "search":
+                # Issue #397: the Copilot SDK ships web_fetch (retrieve a known
+                # URL) but no web *search*, so a local agent had no way to
+                # discover pages for a query. _execute_search survived #443 —
+                # only its caller was removed — and prefers a configured SearXNG
+                # instance with a public-search fallback.
+                from wee_runtime import _execute_search
+
+                return _execute_search(func_args)
             elif func_name == "call_agent":
                 # Issue #343: Delegate to sub-agent via orchestrator API
-                return self._wee_call_agent(func_args)
+                # Issue #444: propagate the originating chat session so the
+                # background task can be routed back and notified correctly.
+                return self._wee_call_agent(func_args, origin_session_id=n8n_session_id)
+            elif func_name == "browser":
+                if not n8n_session_id:
+                    return "Error: Browser tool requires a chat session"
+                from browser_bridge import execute_browser_command
+
+                return execute_browser_command(
+                    n8n_session_id,
+                    func_args,
+                    timeout=min(float(self.command_timeout), 90.0),
+                )
+            elif func_name == "session_shell":
+                if not n8n_session_id:
+                    return "Error: Shell tool requires a chat session"
+                from shell_bridge import execute_shell_command
+
+                return execute_shell_command(
+                    n8n_session_id,
+                    func_args,
+                    timeout=min(float(self.command_timeout), 90.0),
+                )
             else:
-                return f"Error: Unknown tool '{func_name}'. Available: bash, python, call_agent"
-        except subprocess.TimeoutExpired:
-            return f"Error: Tool '{func_name}' timed out"
+                return (
+                    f"Error: Unknown tool '{func_name}'. "
+                    "Available: search, call_agent, browser, session_shell"
+                )
         except Exception as e:
             return f"Error executing {func_name}: {e}"
 
-    def _wee_call_agent(self, func_args: dict) -> str:
+    def _wee_call_agent(
+        self, func_args: dict, origin_session_id: Optional[str] = None
+    ) -> str:
         # Issue #343: Handle call_agent tool calls from the wee agentic loop.
         # Dispatches to the Wee Orchestrator background-tasks API (mode=background)
-        # or query API (mode=quick).  Uses environment variables for API URL/token,
-        # falling back to the same defaults as wee_runtime._call_agent_handler.
+        # or query API (mode=quick).  Uses environment variables for API URL/token.
         import ssl
         import urllib.error
         import urllib.request
@@ -10260,10 +11004,22 @@ User Request:
             protocol = "http" if host in ("127.0.0.1", "localhost") else "https"
             api_url = f"{protocol}://{host}:{port}"
 
-        token = os.environ.get(
-            "WEE_ORCHESTRATOR_TOKEN",
-            "shared_R6R6wReORUV6bouLntScMTowbsh30Rzqa3hzjs3bWgU",
-        )
+        # Issue #444: the API authenticates requests against
+        # f"shared_{API_SHARED_KEY}" (see _api_config / the background-tasks
+        # instruction block above). A hard-coded fallback secret here would
+        # silently keep authenticating with a stale key after rotation, or
+        # authenticate as a different, unrelated deployment's shared key.
+        # Explicit overrides are still honored, but otherwise derive the
+        # token from the live shared key so it always matches this instance.
+        token = os.environ.get("WEE_ORCHESTRATOR_TOKEN")
+        if not token:
+            shared_key = os.environ.get("API_SHARED_KEY", "")
+            if not shared_key:
+                return (
+                    "Error: call_agent cannot authenticate — "
+                    "API_SHARED_KEY is not configured"
+                )
+            token = f"shared_{shared_key}"
 
         agent_cfg = self.AGENTS.get(agent, {})
         runtime = agent_cfg.get("primary_runtime", "copilot")
@@ -10275,7 +11031,14 @@ User Request:
             task_data = {
                 "prompt": prompt, "agent": agent,
                 "runtime": runtime, "model": model, "timeout": 1800,
+                "origin_session_id": origin_session_id,
             }
+            caller_context = _wee_dispatch_context.get() or {}
+            origin_session_id = os.environ.get(
+                "WEE_ORIGIN_SESSION_ID", os.environ.get("WEE_SESSION_ID", "")
+            ) or caller_context.get("origin_session_id", "")
+            if origin_session_id:
+                task_data["origin_session_id"] = origin_session_id
         else:
             endpoint = "/api/v1/query"
             http_timeout = 120
@@ -10288,6 +11051,13 @@ User Request:
         req = urllib.request.Request(url, method="POST")
         req.add_header("Content-Type", "application/json")
         req.add_header("Authorization", f"Bearer {token}")
+        caller_context = _wee_dispatch_context.get() or {}
+        identity = os.environ.get("WEE_ORCHESTRATOR_USER_IDENTITY") or caller_context.get("identity")
+        channel = os.environ.get("WEE_ORCHESTRATOR_AUTH_CHANNEL") or caller_context.get("channel")
+        if identity:
+            req.add_header("X-User-Identity", identity)
+        if channel:
+            req.add_header("X-Auth-Channel", channel)
 
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -10639,6 +11409,37 @@ User Request:
                         },
                     )
 
+    @staticmethod
+    def describe_missing_agent_workspace(agent: str, path: str) -> str:
+        """Explain an agent whose configured workspace is not on this host.
+
+        iOS issue #8. A configured agent whose path does not exist produced a raw
+        subprocess failure — "[Errno 2] No such file or directory:
+        '/mnt/nas/Agents/research'" — naming neither the agent nor what to do.
+        Every runtime passes this path as a subprocess cwd, so the same opaque
+        error surfaced from all of them, and it looked like a client bug because
+        a session on a *different* agent worked fine.
+        """
+        return (
+            f"Error: the '{agent}' agent is configured with working directory "
+            f"'{path}', which does not exist on the API host. Create that "
+            f"directory, correct the agent's path in agents.json, or pick a "
+            f"different agent. Other agents are unaffected."
+        )
+
+    def agent_workspace_error(self, agent: str) -> Optional[str]:
+        """Return an actionable message when the agent cannot be dispatched to.
+
+        None means the workspace is usable. A blank configured path is left
+        alone: some deployments intentionally rely on the process working
+        directory rather than a per-agent workspace.
+        """
+        info = self.AGENTS.get(agent) or self.AGENTS.get("orchestrator") or {}
+        path = (info.get("path") or "").strip()
+        if not path or os.path.isdir(path):
+            return None
+        return self.describe_missing_agent_workspace(agent, path)
+
     def _dispatch_single_runtime(
         self,
         runtime: str,
@@ -10655,6 +11456,14 @@ User Request:
         """Dispatch prompt to a single runtime and return the output."""
         # Touch before dispatch to keep session alive during long operations
         self.touch_session(n8n_session_id)
+
+        # iOS issue #8: every runtime hands this path to a subprocess as its
+        # cwd, so a missing agent workspace failed identically from all of them
+        # with a bare Errno 2. Check once, here, and say what to fix.
+        workspace_error = self.agent_workspace_error(agent)
+        if workspace_error:
+            print(f"[Dispatch] {workspace_error}", file=sys.stderr)
+            return workspace_error
 
         if runtime == "copilot":
             result = self.run_copilot(
@@ -10759,16 +11568,27 @@ User Request:
                 render_type,
             )
         elif runtime == "wee":
-            result = self.run_wee_native(
-                prompt,
-                model,
-                agent,
-                session_id if can_resume else None,
-                can_resume,
-                n8n_session_id,
-                effective_timeout,
-                render_type,
+            session_data = self.get_or_create_session_data(n8n_session_id)
+            context_token = _wee_dispatch_context.set(
+                {
+                    "origin_session_id": n8n_session_id,
+                    "identity": session_data.get("identity"),
+                    "channel": session_data.get("channel"),
+                }
             )
+            try:
+                result = self.run_wee_native(
+                    prompt,
+                    model,
+                    agent,
+                    session_id if can_resume else None,
+                    can_resume,
+                    n8n_session_id,
+                    effective_timeout,
+                    render_type,
+                )
+            finally:
+                _wee_dispatch_context.reset(context_token)
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -10909,11 +11729,15 @@ User Request:
         # Codex is included here: it creates sessions with its own UUID that differs
         # from the pre-generated UUID in the session map, so we must capture the real
         # session ID after each new run for resume to work correctly on the next turn.
+        # Issue #449: codex is deliberately absent here. run_codex records the
+        # thread_id Codex reported for its own turn; scanning the shared
+        # ~/.codex/sessions directory by mtime could adopt a Codex Desktop
+        # session instead. #326 (session-turn memory) still holds because that
+        # recorded ID is the real one, not an inferred one.
         if not can_resume and current_runtime in (
             "copilot",
             "opencode",
             "gemini",
-            "codex",
         ):
             new_id = self.get_most_recent_session_id(current_runtime, agent)
             if new_id:
@@ -10976,17 +11800,47 @@ def _check_command_result(result: str, error_keywords: List[str]) -> None:
 _api_auth_manager: Optional["AuthManager"] = None
 
 
+def _telegram_config_path() -> str:
+    """Return the shared Telegram config path used by API pairing and listener."""
+    return os.environ.get("TELEGRAM_CONFIG_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "telegram_config.json"
+    )
+
+
+def _load_telegram_config() -> dict:
+    """Load Telegram pairing metadata without requiring a token in the file."""
+    try:
+        with open(_telegram_config_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     """Deliver a pairing code. Returns True on success, False on failure."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         if channel == "telegram":
-            from telegram_connector import TelegramConnector
+            from telegram_connector import (
+                TelegramConnector,
+                _resolve_orchestrator_bot_token,
+            )
 
-            config_path = os.path.join(script_dir, "telegram_config.json")
-            with open(config_path) as f:
-                cfg = json.load(f)
-            token = cfg.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            config_path = _telegram_config_path()
+            cfg = _load_telegram_config()
+            file_token = cfg.get("token")
+            if not isinstance(file_token, str):
+                file_token = ""
+            token = (
+                file_token
+                or os.getenv("TELEGRAM_BOT_TOKEN", "")
+                or _resolve_orchestrator_bot_token(
+                    "telegram", os.path.join(script_dir, "agents.json")
+                )
+            )
+            if not token:
+                raise RuntimeError("Telegram bot token is not configured")
             connector = TelegramConnector(token, config_file=config_path)
             last_exc = None
             for attempt in range(1, 4):
@@ -11051,11 +11905,8 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
 def _get_telegram_username(user_id: str):
     """Look up @username for a numeric Telegram user_id in telegram_config.json.
     Returns the username string (without @), or None if not found."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "telegram_config.json")
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = _load_telegram_config()
         pairing = cfg.get("user_pairings", {}).get(str(user_id), {})
         username = pairing.get("username", "")
         return username.lstrip("@") if username else None
@@ -11124,13 +11975,11 @@ def _resolve_telegram_identity(username: str):
     """Reverse-lookup @username in telegram_config.json user_pairings.
     Returns numeric user_id string, or None if not found (user must message bot first).
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "telegram_config.json")
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = _load_telegram_config()
         for uid, pairing in cfg.get("user_pairings", {}).items():
-            if pairing.get("username", "").lower() == username.lower():
+            stored_username = pairing.get("username", "").lstrip("@").lower()
+            if stored_username == username.lstrip("@").lower():
                 return uid
         return None
     except Exception:
@@ -11181,6 +12030,34 @@ def _compute_bg_task_defaults(session_map, identity, channel):
     return defaults
 
 
+def _resolved_agents_config_path(session_mgr) -> Path:
+    """Return the configuration file loaded by this API instance.
+
+    API clients must read and write the same file as ``SessionManager``. This
+    matters for isolated installations that set ``AGENT_CONFIG_FILE``.
+    """
+    config_path = getattr(session_mgr, "_agents_config_path", None)
+    return Path(config_path) if config_path else Path(SCRIPT_BASE_DIR) / "agents.json"
+
+
+def _api_config_file_from_argv(argv: Optional[List[str]] = None) -> Optional[str]:
+    """Extract a ``--config``/``-c`` value from raw argv for API mode.
+
+    ``--api`` (see ``start_api_server``) short-circuits before ``argparse`` runs,
+    so a caller cannot otherwise point a local API instance at an isolated
+    agents.json via the CLI — only the ``AGENT_CONFIG_FILE`` env var works. This
+    restores CLI parity for API mode without requiring full argparse.
+    """
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    for i, token in enumerate(tokens):
+        if token in ("--config", "-c"):
+            if i + 1 < len(tokens):
+                return tokens[i + 1]
+        elif token.startswith("--config="):
+            return token.split("=", 1)[1]
+    return None
+
+
 def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     """Factory that builds and returns the FastAPI application."""
     import asyncio
@@ -11214,6 +12091,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     # ---- configuration from environment ----
     APP_ENV = os.environ.get("APP_ENV", "PROD").upper()
     IS_PRODUCTION = APP_ENV != "DEV"
+    REMOTE_API_URL = os.environ.get("WEE_REMOTE_API_URL", "").strip()
     SHARED_KEY = os.environ.get("API_SHARED_KEY", "")
     if not SHARED_KEY:
         print(
@@ -11221,12 +12099,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             file=sys.stderr,
         )
     PAIRING_CODE_LENGTH = int(os.environ.get("PAIRING_CODE_LENGTH", "6"))
-    PAIRING_CODE_TTL = int(os.environ.get("PAIRING_CODE_TTL", "300"))
-    SESSION_TOKEN_TTL = int(os.environ.get("SESSION_TOKEN_TTL", "3600"))
-    SESSION_TOKEN_ABSOLUTE_TTL = int(
-        os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "86400")
+    PAIRING_CODE_TTL = int(
+        os.environ.get("WEE_PAIRING_CODE_TTL", os.environ.get("PAIRING_CODE_TTL", "300"))
     )
-    CONFIG_FILE = os.environ.get("AGENT_CONFIG_FILE")
+    SESSION_TOKEN_TTL = int(
+        os.environ.get(
+            "WEE_SESSION_TOKEN_TTL",
+            os.environ.get("SESSION_TOKEN_TTL", "2592000"),
+        )
+    )
+    SESSION_TOKEN_ABSOLUTE_TTL = int(
+        os.environ.get(
+            "WEE_SESSION_TOKEN_ABSOLUTE_TTL",
+            os.environ.get("SESSION_TOKEN_ABSOLUTE_TTL", "15552000"),
+        )
+    )
+    # CLI --config takes priority so `--api --config <path>` can select an
+    # isolated agents.json the same way non-API mode does (see
+    # _api_config_file_from_argv for why this can't just use argparse).
+    CONFIG_FILE = _api_config_file_from_argv() or os.environ.get("AGENT_CONFIG_FILE")
     SCHEDULER_JOBS_FILE = os.environ.get(
         "SCHEDULER_JOBS_FILE",
         os.path.join(
@@ -11764,7 +12655,318 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
             "active_sessions": len(session_mgr.load_session_map()),
+            "remote_api_url": REMOTE_API_URL or None,
         }
+
+    def _assert_browser_session_owner(session_id: str, user: dict) -> None:
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        owner = data.get("identity")
+        channel = data.get("channel")
+        if owner and owner != user["identity"]:
+            raise HTTPException(
+                status_code=403, detail="Browser session belongs to another user"
+            )
+        if channel and channel != user["channel"]:
+            raise HTTPException(
+                status_code=403, detail="Browser session belongs to another channel"
+            )
+
+    @app.post("/api/v1/browser/sessions/{session_id}/register")
+    async def register_native_browser(session_id: str, request: Request):
+        """Attach a native browser controller to one authenticated chat session."""
+        from browser_bridge import native_browser_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id is required")
+        try:
+            native_browser_broker.register(
+                session_id, user["identity"], user["channel"], client_id
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"registered": True, "session_id": session_id}
+
+    @app.get("/api/v1/browser/sessions/{session_id}/commands")
+    async def poll_native_browser_commands(
+        session_id: str, request: Request, client_id: str, timeout: float = 25.0
+    ):
+        """Long-poll the next command for a native session browser."""
+        from browser_bridge import native_browser_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+        try:
+            command = await asyncio.to_thread(
+                native_browser_broker.poll,
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                timeout,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"command": command}
+
+    @app.post("/api/v1/browser/sessions/{session_id}/results")
+    async def submit_native_browser_result(session_id: str, request: Request):
+        """Return a native WKWebView command result to the waiting Wee tool."""
+        from browser_bridge import native_browser_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        command_id = str(body.get("command_id") or "").strip()
+        if not client_id or not command_id:
+            raise HTTPException(
+                status_code=400, detail="client_id and command_id are required"
+            )
+        try:
+            native_browser_broker.submit_result(
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                command_id,
+                result=body.get("result"),
+                error=body.get("error"),
+                url=body.get("url"),
+                title=body.get("title"),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"accepted": True}
+
+    @app.post("/api/v1/browser/sessions/{session_id}/execute")
+    async def execute_native_browser_command(session_id: str, request: Request):
+        """Drive this session's browser from outside the API process.
+
+        The `wee` runtime calls `execute_browser_command` in-process, which the
+        subprocess runtimes (codex, claude, gemini, ...) cannot do -- the
+        broker's registrations live in this process's memory. Without an HTTP
+        seam, browser control was reachable from exactly one runtime. The
+        `wee-browser` MCP server calls this endpoint on their behalf.
+        """
+        from browser_bridge import execute_browser_command
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_browser_session_owner(session_id, user)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+        action = str(body.get("action") or "").strip()
+        if not action:
+            raise HTTPException(status_code=400, detail="'action' is required")
+
+        command = {k: v for k, v in body.items() if k != "timeout" and v is not None}
+        raw_timeout = body.get("timeout")
+        try:
+            timeout = float(raw_timeout) if raw_timeout is not None else 45.0
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="'timeout' must be a number")
+
+        loop = asyncio.get_running_loop()
+        try:
+            # execute_browser_command blocks waiting on the browser client, so
+            # keep it off the event loop -- otherwise one slow page would stall
+            # every other request this API is serving.
+            output = await loop.run_in_executor(
+                None, lambda: execute_browser_command(session_id, command, timeout=timeout)
+            )
+        except RuntimeError as exc:
+            # Raised when no browser client is attached to this session.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Browser command failed: {exc}") from exc
+
+        return {"result": output}
+
+    def _assert_shell_session_owner(session_id: str, user: dict) -> None:
+        data = session_mgr.load_session_data(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        owner = data.get("identity")
+        channel = data.get("channel")
+        if owner and owner != user["identity"]:
+            raise HTTPException(
+                status_code=403, detail="Shell session belongs to another user"
+            )
+        if channel and channel != user["channel"]:
+            raise HTTPException(
+                status_code=403, detail="Shell session belongs to another channel"
+            )
+
+    @app.post("/api/v1/shell/sessions/{session_id}/register")
+    async def register_native_shell(session_id: str, request: Request):
+        """Attach a native shell controller to one authenticated chat session."""
+        from shell_bridge import native_shell_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id is required")
+        try:
+            native_shell_broker.register(
+                session_id, user["identity"], user["channel"], client_id
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"registered": True, "session_id": session_id}
+
+    @app.get("/api/v1/shell/sessions/{session_id}/commands")
+    async def poll_native_shell_commands(
+        session_id: str, request: Request, client_id: str, timeout: float = 25.0
+    ):
+        """Long-poll the next command for a native session shell."""
+        from shell_bridge import native_shell_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+        try:
+            command = await asyncio.to_thread(
+                native_shell_broker.poll,
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                timeout,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"command": command}
+
+    @app.post("/api/v1/shell/sessions/{session_id}/results")
+    async def submit_native_shell_result(session_id: str, request: Request):
+        """Return a native PTY command result to the waiting Wee tool."""
+        from shell_bridge import native_shell_broker
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+        body = await request.json()
+        client_id = str(body.get("client_id") or "").strip()
+        command_id = str(body.get("command_id") or "").strip()
+        if not client_id or not command_id:
+            raise HTTPException(
+                status_code=400, detail="client_id and command_id are required"
+            )
+        try:
+            native_shell_broker.submit_result(
+                session_id,
+                user["identity"],
+                user["channel"],
+                client_id,
+                command_id,
+                output=body.get("output"),
+                error=body.get("error"),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"accepted": True}
+
+    @app.post("/api/v1/shell/sessions/{session_id}/execute")
+    async def execute_native_shell_command(session_id: str, request: Request):
+        """Drive this session's shell from outside the API process.
+
+        Same seam as `/api/v1/browser/sessions/{id}/execute`: the `wee-shell`
+        MCP server calls this on behalf of the subprocess runtimes, since the
+        broker's registrations live in this process's memory.
+        """
+        from shell_bridge import execute_shell_command
+
+        user = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        _assert_shell_session_owner(session_id, user)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+        action = str(body.get("action") or "").strip()
+        if not action:
+            raise HTTPException(status_code=400, detail="'action' is required")
+
+        command = {k: v for k, v in body.items() if k != "timeout" and v is not None}
+        raw_timeout = body.get("timeout")
+        try:
+            timeout = float(raw_timeout) if raw_timeout is not None else 45.0
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="'timeout' must be a number")
+
+        loop = asyncio.get_running_loop()
+        try:
+            # execute_shell_command blocks waiting on the shell client, so keep
+            # it off the event loop -- otherwise one slow command would stall
+            # every other request this API is serving.
+            output = await loop.run_in_executor(
+                None, lambda: execute_shell_command(session_id, command, timeout=timeout)
+            )
+        except RuntimeError as exc:
+            # Raised when no shell client is attached to this session.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Shell command failed: {exc}") from exc
+
+        return {"result": output}
 
     @app.get("/api/v1/service-status")
     async def get_service_status():
@@ -13307,35 +14509,35 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         error=None,
         notify: bool = True,
         agent: Optional[str] = None,
+        is_critical: bool = False,
     ):
         """Emit a background task completion notification via notification_mgr.
 
         When ``is_critical`` is True the notification bypasses the global
         suppression toggle (used for heartbeat alerts and system crashes).
         """
-        if notification_mgr is None:
-            return
         try:
-            # Re-check per-identity mute preference at emit time
-            # (user may have muted after the task was created).
-            if notify and not is_critical:
-                if notification_mgr.is_muted(user_identity):
-                    notify = False
-                elif agent and notification_mgr.is_agent_muted(user_identity, agent):
-                    notify = False
+            if notification_mgr is not None:
+                # Re-check per-identity mute preference at emit time
+                # (user may have muted after the task was created).
+                if notify and not is_critical:
+                    if notification_mgr.is_muted(user_identity):
+                        notify = False
+                    elif agent and notification_mgr.is_agent_muted(user_identity, agent):
+                        notify = False
 
-            user_key = bg_task_mgr._user_key(channel, user_identity)
-            notification_mgr.create_notification(
-                task_id=task_id,
-                description=prompt[:200],
-                status=status,
-                channel=channel,
-                user_key=user_key,
-                output_preview=output_preview,
-                error=error,
-                skip_external=not notify,
-                agent=agent,
-            )
+                user_key = bg_task_mgr._user_key(channel, user_identity)
+                notification_mgr.create_notification(
+                    task_id=task_id,
+                    description=prompt[:200],
+                    status=status,
+                    channel=channel,
+                    user_key=user_key,
+                    output_preview=output_preview,
+                    error=error,
+                    skip_external=not notify,
+                    agent=agent,
+                )
             # Push in-thread event to originating session
             task = bg_task_mgr.get_task(task_id)
             origin_sid = task.get("origin_session_id") if task else None
@@ -13772,7 +14974,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
                 _cmd = [_oc_bin, "run", "--model", mdl, ctx_prompt]
             elif rt == "codex":
-                _codex_bin = _which_bin("codex") or "codex"
+                _codex_bin = find_executable("codex") or "codex"
                 _cmd = [_codex_bin, "exec", "--json", "--skip-git-repo-check"]
                 if perm_mode == "elevated":
                     _cmd.extend([
@@ -13925,7 +15127,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
                     _cmd = [_oc_bin, "run", "--model", model, context_prompt]
                 elif runtime == "codex":
-                    _codex_bin = _which_bin("codex") or "codex"
+                    _codex_bin = find_executable("codex") or "codex"
                     _cmd = [
                         _codex_bin,
                         "exec",
@@ -14052,6 +15254,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "WEE_AGENT_DIR": agent_dir,
                 "WEE_SESSION_ID": session_id,
                 "WEE_TASK_ID": task_id,
+                "WEE_ORIGIN_SESSION_ID": (
+                    bg_task_mgr.get_task(task_id) or {}
+                ).get("origin_session_id", ""),
+                "WEE_ORCHESTRATOR_USER_IDENTITY": user_identity,
+                "WEE_ORCHESTRATOR_AUTH_CHANNEL": channel,
             }
 
             # Use Popen for incremental output capture
@@ -14487,6 +15694,18 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         channel = user["channel"]
         identity = user["identity"]
 
+        # Origin sessions are routing targets, so never accept an arbitrary
+        # session ID from another user/channel.  Omitting it remains valid for
+        # API-created tasks that only need normal per-user notifications.
+        if body.origin_session_id:
+            origin = session_mgr.load_session_data(body.origin_session_id)
+            if (
+                not isinstance(origin, dict)
+                or origin.get("identity") != identity
+                or origin.get("channel") != channel
+            ):
+                raise HTTPException(status_code=422, detail="Invalid origin session")
+
         # Check concurrent limit (used below after resolving params)
 
         # Resolve agent/runtime/model — default to user's current session config
@@ -14663,12 +15882,19 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
     @app.get("/api/v1/sessions/{session_id}/bg-events")
     async def get_session_bg_events(session_id: str, request: Request):
         """Return and clear pending BG task completion events."""
-        await authenticate(
+        user = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        origin = session_mgr.load_session_data(session_id)
+        if (
+            not isinstance(origin, dict)
+            or origin.get("identity") != user["identity"]
+            or origin.get("channel") != user["channel"]
+        ):
+            raise HTTPException(status_code=404, detail="Session not found")
         events = bg_task_mgr.pop_bg_events(session_id)
         return {"events": events}
 
@@ -15068,6 +16294,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         due: Optional[str] = None
         priority: Optional[str] = None
         urgency: Optional[str] = None
+        labels: Optional[list[str]] = None
 
     class KanbanCommentRequest(BaseModel):
         body: str
@@ -15106,18 +16333,24 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
-        from kanban import load_kanban_board
+        try:
+            from kanban import load_kanban_board
 
-        return load_kanban_board(
-            todo_path=_resolve_todo_file(agent),
-            repo=repo,
-            limit=limit,
-            agent=agent,
-            urgency=urgency,
-            date_from=date_from,
-            date_to=date_to,
-            source=source,
-        )
+            return load_kanban_board(
+                todo_path=_resolve_todo_file(agent),
+                repo=repo,
+                limit=limit,
+                agent=agent,
+                urgency=urgency,
+                date_from=date_from,
+                date_to=date_to,
+                source=source,
+            )
+        except Exception as exc:
+            # Every sibling kanban route funnels through _kanban_http_error;
+            # this one did not, so anything raised below it reached the client
+            # as a bare 500 with no detail to act on.
+            _kanban_http_error(exc)
 
     @app.get("/api/v1/kanban/items/{item_id}")
     async def get_kanban_item(request: Request, item_id: str, repo: Optional[str] = None):
@@ -15162,6 +16395,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 due=body.due,
                 priority=body.priority,
                 urgency=body.urgency,
+                labels=body.labels,
             )
         except Exception as exc:
             _kanban_http_error(exc)
@@ -17341,6 +18575,131 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
 
+    @app.get("/api/v1/settings/model-manifest")
+    async def get_model_manifest_settings(request: Request, runtime: str = "claude"):
+        """Return the editable model list for a runtime.
+
+        `wee` is excluded — its catalog is assembled dynamically from local
+        Ollama and OpenRouter discovery, not the static manifest.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        runtime_key = _model_manifest_runtime_key(runtime)
+        if runtime_key == "wee":
+            raise HTTPException(
+                status_code=400,
+                detail="The wee runtime catalog is discovered dynamically and is not editable here.",
+            )
+        try:
+            manifest = load_model_manifest()
+            runtimes = manifest.get("runtimes", {})
+            available_runtimes = sorted(k for k in runtimes.keys() if k != "wee")
+            models = runtimes.get(runtime_key)
+            if models is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"{runtime_key} is not a configured runtime in model-manifest.json",
+                )
+            return {
+                "runtime": runtime_key,
+                "models": models,
+                "available_runtimes": available_runtimes,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read model-manifest.json: {e}"
+            )
+
+    @app.put("/api/v1/settings/model-manifest")
+    async def put_model_manifest_settings(request: Request):
+        """Save an updated model list for one runtime.
+
+        Preserves every other runtime's list and the rest of the manifest
+        document. `wee` is rejected for the same reason it's excluded from
+        the GET above.
+        """
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        runtime = body.get("runtime", "")
+        models = body.get("models", [])
+        runtime_key = _model_manifest_runtime_key(runtime)
+        if runtime_key == "wee":
+            raise HTTPException(
+                status_code=400,
+                detail="The wee runtime catalog is discovered dynamically and is not editable here.",
+            )
+        if not isinstance(models, list) or not all(isinstance(m, str) for m in models):
+            raise HTTPException(status_code=400, detail="models must be a list of strings")
+
+        normalized: List[str] = []
+        for candidate in models:
+            model_id = candidate.strip()
+            if model_id and model_id not in normalized:
+                normalized.append(model_id)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="Add at least one model before saving.")
+
+        try:
+            if MODEL_MANIFEST_PATH.exists():
+                document = json.loads(MODEL_MANIFEST_PATH.read_text())
+            else:
+                document = {"runtimes": {}}
+            runtimes = document.get("runtimes", {})
+            if runtime_key not in runtimes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{runtime_key} is not a configured runtime in model-manifest.json",
+                )
+
+            # Backup before overwrite, mirroring the .env editor's safety net.
+            if MODEL_MANIFEST_PATH.exists():
+                backup_path = Path(str(MODEL_MANIFEST_PATH) + ".bak")
+                shutil.copy2(MODEL_MANIFEST_PATH, backup_path)
+
+            from datetime import datetime, timezone
+
+            runtimes[runtime_key] = normalized
+            document["runtimes"] = runtimes
+            document["last_updated"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
+            # Write-then-rename so a crash or concurrent reader never observes
+            # a partially written manifest (issue #442).
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                dir=str(MODEL_MANIFEST_PATH.parent),
+                prefix=f".{MODEL_MANIFEST_PATH.name}.",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(tmp_fd, "w") as tmp_file:
+                    tmp_file.write(json.dumps(document, indent=2, sort_keys=True) + "\n")
+                os.replace(tmp_name, MODEL_MANIFEST_PATH)
+            except Exception:
+                if os.path.exists(tmp_name):
+                    os.remove(tmp_name)
+                raise
+            # Drop the mtime cache so the next /api/v1/models read picks this up
+            # immediately instead of waiting on the next file-change poll.
+            load_model_manifest._cache_key = None
+            return {"saved": True, "runtime": runtime_key, "models": normalized}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save model-manifest.json: {e}"
+            )
+
     @app.post("/api/v1/settings/restart-services")
     async def restart_services(request: Request):
         """Restart dev services (agent-manager-api-dev, etc.)."""
@@ -17381,7 +18740,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     # --- Settings & Logs API ──────────────────────────────────────────────────
 
-    _agents_json_path = Path(SCRIPT_BASE_DIR) / "agents.json"
+    _agents_json_path = _resolved_agents_config_path(session_mgr)
 
     @app.get("/api/v1/agents-config")
     async def get_agents_config(request: Request):

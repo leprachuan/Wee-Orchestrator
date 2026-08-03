@@ -321,6 +321,57 @@ function _updateVerboseToggleUI(silent) {
   }
 }
 
+// ─── Issue #423: session context usage ring ──────────────────────────────────
+// r=8 -> circumference 2*pi*8. Kept in sync with app.css stroke-dasharray.
+const CTX_RING_CIRCUMFERENCE = 50.27;
+
+function contextRingPercent(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  // Prefer the percentage the API already computed; fall back to the token
+  // counts so a partially populated payload still renders something truthful.
+  const reported = Number(usage.context_percent ?? usage.percent_used);
+  if (Number.isFinite(reported)) return Math.min(100, Math.max(0, reported));
+
+  const used = Number(usage.current_context_tokens);
+  const window = Number(usage.context_window);
+  if (!Number.isFinite(used) || !Number.isFinite(window) || window <= 0) return null;
+  return Math.min(100, Math.max(0, (used / window) * 100));
+}
+
+function updateContextRing(usage) {
+  const pill = $('meta-context');
+  if (!pill) return;
+
+  const percent = contextRingPercent(usage);
+  if (percent === null) {
+    pill.hidden = true;
+    return;
+  }
+
+  const fill = $('ctx-ring-fill');
+  if (fill) {
+    // Offset shrinks as usage grows, so the arc sweeps clockwise from empty.
+    // Must be an inline *style*, not setAttribute: app.css declares
+    // stroke-dashoffset, and a CSS declaration beats an SVG presentation
+    // attribute, so setAttribute() renders nothing. Verified in a browser.
+    const offset = CTX_RING_CIRCUMFERENCE * (1 - percent / 100);
+    fill.style.strokeDashoffset = String(offset);
+  }
+
+  const label = $('meta-context-label');
+  if (label) label.textContent = `${Math.round(percent)}%`;
+
+  pill.dataset.level = percent >= 90 ? 'danger' : percent >= 75 ? 'warn' : 'ok';
+
+  const used = Number(usage.current_context_tokens);
+  const window = Number(usage.context_window);
+  pill.title = Number.isFinite(used) && Number.isFinite(window) && window > 0
+    ? `Context: ${used.toLocaleString()} / ${window.toLocaleString()} tokens (${Math.round(percent)}%)`
+    : `Context usage: ${Math.round(percent)}%`;
+
+  pill.hidden = false;
+}
+
 function updateSessionMeta(data) {
   const set = (id, text, extra = '') => {
     const el = $(id);
@@ -343,6 +394,11 @@ function updateSessionMeta(data) {
 
   set('meta-agent',   data?.agent);
   set('meta-runtime', data?.runtime);
+
+  // Issue #423: session context usage. The API reports this only for runtimes
+  // that track it (wee today), so the pill stays hidden rather than showing a
+  // misleading 0% for runtimes that never populate it.
+  updateContextRing(data?.wee_context_usage);
 
   // Shorten model names for display
   const model = data?.model ? data.model.replace(/^claude-/, '').replace(/^gpt-/, '') : null;
@@ -7203,6 +7259,68 @@ if (document.readyState !== 'loading') {
   if (btnEnvSave)    btnEnvSave.addEventListener('click', saveEnvFile);
   if (btnEnvRestart) btnEnvRestart.addEventListener('click', restartDevServices);
 
+
+  /* ── Model Catalog Editor ──────────────────────────────────────────────── */
+  const modelCatalogRuntimeSelect = document.getElementById('asf-model-catalog-runtime');
+  const modelCatalogEditor        = document.getElementById('asf-model-catalog-editor');
+  const btnModelCatalogLoad       = document.getElementById('btn-model-catalog-load');
+  const btnModelCatalogSave       = document.getElementById('btn-model-catalog-save');
+  const modelCatalogStatus        = document.getElementById('asf-model-catalog-status');
+
+  function showModelCatalogStatus(msg, isError) {
+    if (!modelCatalogStatus) return;
+    modelCatalogStatus.textContent = msg;
+    modelCatalogStatus.className = 'asf-env-status' + (isError ? ' asf-env-error' : ' asf-env-ok');
+    modelCatalogStatus.classList.remove('hidden');
+    setTimeout(() => modelCatalogStatus.classList.add('hidden'), 5000);
+  }
+
+  function populateModelCatalogRuntimes(runtimes, selected) {
+    if (!modelCatalogRuntimeSelect || !runtimes || !runtimes.length) return;
+    const current = selected || modelCatalogRuntimeSelect.value || runtimes[0];
+    modelCatalogRuntimeSelect.innerHTML = '';
+    runtimes.forEach(rt => {
+      const opt = document.createElement('option');
+      opt.value = rt;
+      opt.textContent = rt;
+      modelCatalogRuntimeSelect.appendChild(opt);
+    });
+    if (runtimes.includes(current)) modelCatalogRuntimeSelect.value = current;
+  }
+
+  async function loadModelCatalog(runtime) {
+    if (!modelCatalogEditor) return;
+    const rt = runtime || (modelCatalogRuntimeSelect && modelCatalogRuntimeSelect.value) || 'claude';
+    modelCatalogEditor.value = 'Loading...';
+    try {
+      const data = await apiRequest('GET', '/settings/model-manifest?runtime=' + encodeURIComponent(rt));
+      populateModelCatalogRuntimes(data.available_runtimes, data.runtime);
+      modelCatalogEditor.value = (data.models || []).join('\n');
+    } catch (e) {
+      modelCatalogEditor.value = '';
+      showModelCatalogStatus('Failed to load models: ' + e.message, true);
+    }
+  }
+
+  async function saveModelCatalog() {
+    if (!modelCatalogEditor || !modelCatalogRuntimeSelect) return;
+    const runtime = modelCatalogRuntimeSelect.value;
+    const models = modelCatalogEditor.value.split('\n');
+    try {
+      const data = await apiRequest('PUT', '/settings/model-manifest', { runtime, models });
+      modelCatalogEditor.value = (data.models || []).join('\n');
+      showModelCatalogStatus('✓ Saved ' + (data.models || []).length + ' models for ' + data.runtime, false);
+    } catch (e) {
+      showModelCatalogStatus('Failed to save: ' + e.message, true);
+    }
+  }
+
+  if (btnModelCatalogLoad) btnModelCatalogLoad.addEventListener('click', () => loadModelCatalog());
+  if (btnModelCatalogSave) btnModelCatalogSave.addEventListener('click', saveModelCatalog);
+  if (modelCatalogRuntimeSelect) {
+    modelCatalogRuntimeSelect.addEventListener('change', () => loadModelCatalog(modelCatalogRuntimeSelect.value));
+  }
+
   function showKanbanSettingsStatus(msg, isError) {
     if (!kanbanStatus) return;
     kanbanStatus.textContent = msg;
@@ -7470,6 +7588,19 @@ if (document.readyState !== 'loading') {
     if (btnSettings) {
       btnSettings.removeEventListener('click', openSettings);
       btnSettings.addEventListener('click', _wrappedOpenInstr);
+    }
+  }
+
+  // Auto-load the model catalog when settings panel opens
+  const _origOpenSettingsModels = typeof openSettings === 'function' ? openSettings : null;
+  if (_origOpenSettingsModels) {
+    const _wrappedOpenModels = async function() {
+      await _origOpenSettingsModels();
+      loadModelCatalog();
+    };
+    if (btnSettings) {
+      btnSettings.removeEventListener('click', openSettings);
+      btnSettings.addEventListener('click', _wrappedOpenModels);
     }
   }
 
