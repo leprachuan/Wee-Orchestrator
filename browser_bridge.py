@@ -240,8 +240,12 @@ def execute_browser_command(
     session_id: str, command: dict[str, Any], timeout: float = 45.0
 ) -> str:
     if native_browser_broker.is_active(session_id):
-        response = native_browser_broker.execute(session_id, command, timeout=timeout)
-        source = "native-macos"
+        try:
+            response = native_browser_broker.execute(session_id, command, timeout=timeout)
+            source = "native-macos"
+        except (RuntimeError, TimeoutError):
+            response = playwright_browser_manager.execute(session_id, command)
+            source = "playwright-fallback"
     else:
         response = playwright_browser_manager.execute(session_id, command)
         source = "playwright"

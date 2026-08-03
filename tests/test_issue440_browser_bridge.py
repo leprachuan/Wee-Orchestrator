@@ -68,6 +68,29 @@ def test_native_poll_refreshes_liveness():
     assert broker.is_active("session-a")
 
 
+def test_rejected_native_browser_falls_back_to_playwright(monkeypatch):
+    from browser_bridge import native_browser_broker, playwright_browser_manager
+
+    monkeypatch.setattr(native_browser_broker, "is_active", lambda _session: True)
+    monkeypatch.setattr(
+        native_browser_broker,
+        "execute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("shared browser rejected the command")
+        ),
+    )
+    monkeypatch.setattr(
+        playwright_browser_manager,
+        "execute",
+        lambda session, command: {"result": session, "url": command["url"]},
+    )
+
+    result = execute_browser_command(
+        "ios-session", {"action": "navigate", "url": "https://example.com"}
+    )
+    assert '"source": "playwright-fallback"' in result
+
+
 def test_browser_api_requires_a_real_owned_session(monkeypatch, tmp_path):
     os.environ["API_SHARED_KEY"] = "issue440"
     os.environ["APP_ENV"] = "DEV"
