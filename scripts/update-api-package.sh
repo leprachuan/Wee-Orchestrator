@@ -92,6 +92,12 @@ if [[ -f "$INSTALL_DIR/requirements.txt" ]]; then
     log "updating dependencies"
     "$VENV_PY" -m pip install -q -r "$INSTALL_DIR/requirements.txt" || \
       log "WARNING: dependency install failed; services may not start"
+    if "$VENV_PY" -c 'import playwright' >/dev/null 2>&1; then
+      log "installing Playwright Chromium"
+      PLAYWRIGHT_BROWSERS_PATH="$INSTALL_DIR/.playwright-browsers" \
+        "$VENV_PY" -m playwright install chromium || \
+        log "WARNING: Playwright Chromium install failed; browser fallback may be unavailable"
+    fi
   fi
 fi
 

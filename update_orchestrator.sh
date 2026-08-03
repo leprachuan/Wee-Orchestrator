@@ -127,6 +127,17 @@ if [ "$BEFORE" != "$AFTER" ] && git diff "$BEFORE".."$AFTER" --name-only | grep 
     echo ""
 fi
 
+# Playwright ships its browser binary separately from the Python package, and
+# Chromium also needs host libraries. Provision both for the API service user
+# whenever a dependency update includes Playwright, so browser fallback works
+# for mobile sessions without an attached macOS client.
+if [ "$BEFORE" != "$AFTER" ] && git diff "$BEFORE".."$AFTER" --name-only | grep -q 'requirements.txt' && grep -q '^playwright' requirements.txt; then
+    echo "--- provisioning Playwright Chromium for n8n ---"
+    sudo -u n8n -H python3 -m playwright install-deps chromium 2>&1 || echo "WARNING: Playwright system dependency install failed"
+    sudo -u n8n -H python3 -m playwright install chromium 2>&1 || echo "WARNING: Playwright browser install failed"
+    echo ""
+fi
+
 # ------------------------------------------------------------------
 # Step 3: Restart services with health checks
 # ------------------------------------------------------------------

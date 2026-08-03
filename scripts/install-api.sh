@@ -111,6 +111,15 @@ fi
 "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip
 "$INSTALL_DIR/.venv/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
 
+# Playwright's Chromium binary is not bundled with the Python wheel. Keep it
+# inside the install so the service account and interactive installer use the
+# same browser cache.
+if "$INSTALL_DIR/.venv/bin/python" -c 'import playwright' >/dev/null 2>&1; then
+  printf 'Installing Playwright Chromium…\n'
+  PLAYWRIGHT_BROWSERS_PATH="$INSTALL_DIR/.playwright-browsers" \
+    "$INSTALL_DIR/.venv/bin/python" -m playwright install chromium
+fi
+
 if [[ ! -f "$INSTALL_DIR/agents.json" ]]; then
   printf 'Creating a minimal local agent configuration.\n'
   printf '{\n  "agents": [\n    {\n      "name": "orchestrator",\n      "description": "Local Wee Orchestrator agent",\n      "path": "%s"\n    }\n  ]\n}\n' "$INSTALL_DIR" > "$INSTALL_DIR/agents.json"

@@ -8,6 +8,8 @@ Playwright page if Playwright is installed on the API host.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import threading
 import time
 from collections import defaultdict, deque
@@ -155,6 +157,15 @@ class PlaywrightBrowserManager:
                     "Browser control requires a connected macOS browser or "
                     "Playwright (`pip install playwright && playwright install chromium`)"
                 ) from exc
+            # The release installer keeps browsers alongside the application,
+            # making the fallback usable by the API service account as well as
+            # interactive installs.
+            browser_path = Path(__file__).resolve().parent / ".playwright-browsers"
+            if browser_path.is_dir():
+                os.environ.setdefault(
+                    "PLAYWRIGHT_BROWSERS_PATH",
+                    str(browser_path),
+                )
             if self._playwright is None:
                 self._playwright = sync_playwright().start()
                 self._browser = self._playwright.chromium.launch(headless=True)
