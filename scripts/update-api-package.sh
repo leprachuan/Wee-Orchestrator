@@ -65,7 +65,10 @@ NEW_ROOT="$(find "$WORK/unpacked" -mindepth 1 -maxdepth 1 -type d | head -1)"
 
 # Preserve anything that is deployment state rather than code.
 log "preserving local state"
-for keep in .env .task-scheduler .canvas-sessions VERSION; do
+# Keep credentials, TLS material, and connector configuration outside the
+# release archive. rsync runs with --delete, so every state path must also be
+# excluded below.
+for keep in .env agents.json telegram_config.json certs .task-scheduler .canvas-sessions VERSION; do
   [[ -e "$INSTALL_DIR/$keep" ]] && cp -a "$INSTALL_DIR/$keep" "$WORK/unpacked/.keep-$(basename "$keep")" || true
 done
 
@@ -77,7 +80,12 @@ log "installing $VERSION"
 # Copy in place rather than swapping the directory: the path is referenced by
 # systemd units and, on some hosts, by symlinks and git worktrees.
 rsync -a --delete \
-  --exclude '.env' --exclude '.task-scheduler' --exclude '.canvas-sessions' \
+  --exclude '.env' \
+  --exclude 'agents.json' \
+  --exclude 'telegram_config.json' \
+  --exclude 'certs/' \
+  --exclude '.task-scheduler' \
+  --exclude '.canvas-sessions' \
   --exclude '.venv' --exclude 'venv' \
   "$NEW_ROOT"/ "$INSTALL_DIR"/ 2>/dev/null || {
     # rsync is not guaranteed present; fall back to tar piping.

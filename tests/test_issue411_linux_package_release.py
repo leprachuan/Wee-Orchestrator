@@ -200,7 +200,14 @@ class TestShellIntegration(unittest.TestCase):
 
     def test_updater_preserves_deployment_state(self):
         body = self._script("update-api-package.sh")
-        for keep in (".env", ".task-scheduler", ".canvas-sessions"):
+        for keep in (
+            ".env",
+            "agents.json",
+            "telegram_config.json",
+            "certs",
+            ".task-scheduler",
+            ".canvas-sessions",
+        ):
             self.assertIn(keep, body, f"{keep} must survive an update")
 
     def test_git_updater_hands_off_when_there_is_no_checkout(self):
