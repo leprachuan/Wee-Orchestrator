@@ -18932,6 +18932,152 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             raise HTTPException(status_code=500, detail=f"Failed to write AGENTS.md: {exc}")
 
 
+    # --- Per-agent Memory API ---
+    #
+    # Memory location per agent is {agent_path}/memories/, with a durable
+    # MEMORY.md plus dated notes under daily/YYYY-MM-DD.md (see memory/__init__.py
+    # and memory/inject.py). This exposes that same layout over HTTP so clients
+    # can list, read, and edit an agent's memories -- the resolver logic already
+    # exists, it just wasn't reachable outside background-task processes, which
+    # resolve it via the WEE_AGENT_DIR env var rather than a request parameter.
+
+    def _agent_memories_dir(agent_name: str) -> Path:
+        agent_info = session_mgr.AGENTS.get(agent_name)
+        if agent_info is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        agent_path = Path(agent_info["path"]).expanduser().resolve()
+        return agent_path / "memories"
+
+    def _guarded_memory_path(memories_dir: Path, name: str) -> Path:
+        """Resolves `name` under `memories_dir`, rejecting any path that escapes it."""
+        candidate = (memories_dir / name).resolve()
+        try:
+            candidate.relative_to(memories_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+        return candidate
+
+    def _memory_summary(path: Path) -> str:
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip().lstrip("#").strip()
+                if stripped:
+                    return stripped[:160]
+        except OSError:
+            pass
+        return ""
+
+    @app.get("/api/v1/agents/{agent_name}/memories")
+    async def list_agent_memories(agent_name: str, request: Request):
+        """List the given agent's memory files (MEMORY.md plus daily/*.md notes)."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        memories_dir = _agent_memories_dir(agent_name)
+        if not memories_dir.exists():
+            return JSONResponse(content={"memories": []})
+
+        entries = []
+        for path in sorted(memories_dir.rglob("*.md")):
+            if not path.is_file():
+                continue
+            name = path.relative_to(memories_dir).as_posix()
+            entries.append({"name": name, "summary": _memory_summary(path)})
+
+        # MEMORY.md is the durable index -- surface it first, then everything
+        # else (daily notes, category files) in alphabetical order.
+        entries.sort(key=lambda entry: (entry["name"] != "MEMORY.md", entry["name"]))
+        return JSONResponse(content={"memories": entries})
+
+    @app.get("/api/v1/agents/{agent_name}/memories/{name:path}")
+    async def get_agent_memory(agent_name: str, name: str, request: Request):
+        """Return the content of one of the given agent's memory files."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        memories_dir = _agent_memories_dir(agent_name)
+        memory_path = _guarded_memory_path(memories_dir, name)
+
+        if not memory_path.exists():
+            return JSONResponse(content={"content": "", "exists": False})
+        if not memory_path.is_file():
+            raise HTTPException(status_code=400, detail=f"'{name}' is not a file")
+
+        try:
+            content = memory_path.read_text(encoding="utf-8")
+            return JSONResponse(content={"content": content, "exists": True})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read memory '{name}': {exc}")
+
+    @app.put("/api/v1/agents/{agent_name}/memories/{name:path}")
+    async def put_agent_memory(agent_name: str, name: str, request: Request):
+        """Write updated content to one of the given agent's memory files."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        memories_dir = _agent_memories_dir(agent_name)
+        memory_path = _guarded_memory_path(memories_dir, name)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+        if not isinstance(body, dict) or "content" not in body:
+            raise HTTPException(status_code=400, detail="Body must contain a 'content' field")
+
+        content = body["content"]
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="'content' must be a string")
+
+        try:
+            memory_path.parent.mkdir(parents=True, exist_ok=True)
+            memory_path.write_text(content, encoding="utf-8")
+            print(
+                f"[API] Memory '{name}' updated for '{agent_name}' by {auth.get('identity', 'unknown')}",
+                file=sys.stderr,
+            )
+            return JSONResponse(content={"status": "saved", "path": str(memory_path)})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write memory '{name}': {exc}")
+
+    @app.delete("/api/v1/agents/{agent_name}/memories/{name:path}")
+    async def delete_agent_memory(agent_name: str, name: str, request: Request):
+        """Remove one of the given agent's memory files."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        memories_dir = _agent_memories_dir(agent_name)
+        memory_path = _guarded_memory_path(memories_dir, name)
+
+        if not memory_path.exists():
+            raise HTTPException(status_code=404, detail=f"Memory '{name}' not found")
+        if not memory_path.is_file():
+            raise HTTPException(status_code=400, detail=f"'{name}' is not a file")
+
+        try:
+            memory_path.unlink()
+            print(
+                f"[API] Memory '{name}' deleted for '{agent_name}' by {auth.get('identity', 'unknown')}",
+                file=sys.stderr,
+            )
+            return JSONResponse(content={"status": "deleted"})
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to delete memory '{name}': {exc}")
+
+
     # --- Per-agent Bot Token Management API ---
 
     _VALID_BOT_CHANNELS = frozenset({"telegram", "webex"})
