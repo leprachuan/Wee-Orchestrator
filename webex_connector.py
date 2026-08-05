@@ -1596,7 +1596,37 @@ def main():
         print("[INFO] Using orchestrator WebEx bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
 
     connector = WebEXConnector(token, args.config)
-    connector.listen_to_queue()
+
+    import webex_mercury_listener
+
+    if webex_mercury_listener.is_enabled():
+        import asyncio
+
+        print("[INFO] WEBEX_MERCURY_ENABLED — using the Mercury real-time listener instead of the message queue", file=sys.stderr)
+        bot_person_id = None
+        try:
+            me = requests.get(
+                "https://webexapis.com/v1/people/me",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=15,
+            )
+            me.raise_for_status()
+            bot_person_id = me.json().get("id")
+        except requests.RequestException as exc:
+            print(f"[WARN] Could not resolve bot person ID ({exc}); bot-authored messages will not be filtered", file=sys.stderr)
+
+        async def _run():
+            listener = await webex_mercury_listener.run(
+                token, connector.handle_message, bot_person_id=bot_person_id
+            )
+            try:
+                await asyncio.Event().wait()  # run until the process is stopped
+            finally:
+                await listener.stop()
+
+        asyncio.run(_run())
+    else:
+        connector.listen_to_queue()
 
 
 if __name__ == "__main__":
