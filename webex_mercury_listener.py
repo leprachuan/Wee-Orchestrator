@@ -33,10 +33,11 @@ operational step.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
-import logging
 import os
 import random
+import sys
 import time
 import uuid
 from collections import OrderedDict
@@ -46,7 +47,17 @@ import requests
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-logger = logging.getLogger("webex_mercury")
+
+def _log(msg: str) -> None:
+    """print(..., file=sys.stderr), matching this codebase's convention.
+
+    Not the `logging` module: agent_manager.py and webex_connector.py both
+    use plain stderr prints (the structured-logging migration in issue #31
+    was reverted -- see #471), and a bare `logging.getLogger()` with no
+    handler configured only surfaces WARNING+ via Python's last-resort
+    handler, silently swallowing INFO-level connection/event logs here.
+    """
+    print(f"[webex_mercury] {msg}", file=sys.stderr, flush=True)
 
 WDM_DEVICES_URL = "https://wdm-a.wbx2.com/wdm/api/v1/devices"
 MESSAGES_API_URL = "https://webexapis.com/v1/messages/{message_id}"
@@ -73,6 +84,47 @@ def is_enabled() -> bool:
         "true",
         "yes",
     )
+
+
+def decode_webex_resource_id(encoded_id: str) -> str:
+    """Reverse a Webex API resource ID back to its raw UUID.
+
+    REST endpoints like GET /v1/people/me return base64(ciscospark://us/
+    PEOPLE/{uuid}) -- confirmed live: decoding the bot's own `id` from
+    /v1/people/me yields exactly this shape. But Mercury's activity.actor.id
+    is the bare UUID with no encoding at all. Comparing the two forms
+    directly always mismatches, which is exactly how a first live test found
+    this: the bot's own reply was never recognized as its own message and
+    got re-ingested as a new query, in a loop.
+
+    Falls back to returning `encoded_id` unchanged if it isn't valid base64
+    or doesn't look like a Webex URN -- callers compare against Mercury's
+    raw actor id either way, so an unrecognized shape just fails the
+    equality check safely rather than raising.
+    """
+    try:
+        padded = encoded_id + "=" * (-len(encoded_id) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return encoded_id
+    if "/" not in decoded:
+        return encoded_id
+    return decoded.rsplit("/", 1)[-1]
+
+
+def activity_id_to_message_id(activity_id: str) -> str:
+    """Convert a Mercury activity's raw UUID into a Messages-API message ID.
+
+    A `post` activity's `object.id` is NOT the message ID (`object` is the
+    encrypted comment body, with no `id` field) -- confirmed by comparing a
+    real Mercury frame's `activity.id` against the `id` the Messages API
+    returned for that same message when it was sent: the API ID is the
+    unpadded base64 encoding of `ciscospark://us/MESSAGE/{activity.id}`.
+    This is the same scheme Webex uses for all its resource IDs (rooms,
+    people, etc.), just with a different URN segment.
+    """
+    urn = f"ciscospark://us/MESSAGE/{activity_id}"
+    return base64.b64encode(urn.encode()).decode()
 
 
 def reconnect_delay(attempt: int, base: float = 1.0, cap: float = 60.0) -> float:
@@ -184,15 +236,15 @@ class WebexMercuryListener:
                     await self._authenticate_socket(ws)
                     self._connected = True
                     attempt = 0
-                    logger.info("Mercury socket connected")
+                    _log("Mercury socket connected")
                     async for raw in ws:
                         if self._stopping.is_set():
                             break
                         await self._handle_raw_event(raw)
             except (ConnectionClosed, OSError, requests.RequestException) as exc:
-                logger.warning("Mercury socket disconnected: %s", exc)
-            except Exception:
-                logger.exception("Unexpected Mercury listener error")
+                _log(f"Mercury socket disconnected: {exc}")
+            except Exception as exc:
+                _log(f"Unexpected Mercury listener error: {type(exc).__name__}: {exc}")
             finally:
                 self._connected = False
 
@@ -201,7 +253,7 @@ class WebexMercuryListener:
             self._reconnect_count += 1
             delay = reconnect_delay(attempt)
             attempt += 1
-            logger.info("Reconnecting to Mercury in %.1fs (attempt %d)", delay, attempt)
+            _log(f"Reconnecting to Mercury in {delay:.1f}s (attempt {attempt})")
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=delay)
             except asyncio.TimeoutError:
@@ -215,34 +267,42 @@ class WebexMercuryListener:
 
     async def _handle_raw_event(self, raw: str) -> None:
         self._last_event_at = time.time()
+        _log(f"raw frame received (len={len(raw)})")
         try:
             envelope = json.loads(raw)
         except (TypeError, ValueError):
-            logger.warning("Discarding non-JSON Mercury frame")
+            _log("Discarding non-JSON Mercury frame")
             return
 
         activity = (envelope.get("data") or {}).get("activity") or {}
-        if activity.get("verb") != "post":
+        verb = activity.get("verb")
+        if verb != "post":
+            _log(f"Ignoring non-post activity (verb={verb!r})")
             return  # not a new message (typing indicators, reactions, etc.)
 
         actor_id = (activity.get("actor") or {}).get("id")
         if self._bot_person_id and actor_id == self._bot_person_id:
+            _log("Ignoring bot's own message")
             return  # ignore the bot's own messages
 
-        message_id = (activity.get("object") or {}).get("id")
-        if not message_id:
+        activity_id = activity.get("id")
+        if not activity_id:
+            _log("Post activity had no id — cannot enrich, dropping")
             return
+        message_id = activity_id_to_message_id(activity_id)
 
         if not self._seen.add_if_new(message_id):
+            _log(f"Duplicate message_id={message_id}, skipping")
             return  # duplicate delivery of an event we already processed
 
+        _log(f"Queuing message_id={message_id} for enrichment + dispatch")
         # Bounded backpressure: if downstream processing can't keep up, drop
         # the oldest queued item rather than growing without limit or
         # blocking the socket read loop (which would stall keepalive pings).
         if self._queue.full():
             try:
                 self._queue.get_nowait()
-                logger.warning("Mercury processing queue full — dropped oldest event")
+                _log("Mercury processing queue full — dropped oldest event")
             except asyncio.QueueEmpty:
                 pass
         await self._queue.put({"message_id": message_id})
@@ -257,12 +317,15 @@ class WebexMercuryListener:
             try:
                 message = await asyncio.to_thread(self._fetch_message, item["message_id"])
                 if message is None:
+                    _log(f"message_id={item['message_id']} fetch returned None (404?)")
                     continue
+                _log(f"Dispatching message_id={item['message_id']} to handle_message()")
                 result = self._on_message(message)
                 if asyncio.iscoroutine(result):
-                    await result
-            except Exception:
-                logger.exception("Failed processing Mercury message %s", item.get("message_id"))
+                    result = await result
+                _log(f"handle_message() returned {result!r} for message_id={item['message_id']}")
+            except Exception as exc:
+                _log(f"Failed processing Mercury message {item.get('message_id')}: {type(exc).__name__}: {exc}")
 
     def _fetch_message(self, message_id: str) -> Optional[dict]:
         """Enrich a Mercury activity reference via the Messages API.

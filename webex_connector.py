@@ -1611,7 +1611,11 @@ def main():
                 timeout=15,
             )
             me.raise_for_status()
-            bot_person_id = me.json().get("id")
+            raw_id = me.json().get("id")
+            # /people/me returns a base64-wrapped URN; Mercury's activity.actor.id
+            # is the bare UUID. Decode here so the listener compares like with
+            # like (see decode_webex_resource_id's docstring for how this was found).
+            bot_person_id = webex_mercury_listener.decode_webex_resource_id(raw_id) if raw_id else None
         except requests.RequestException as exc:
             print(f"[WARN] Could not resolve bot person ID ({exc}); bot-authored messages will not be filtered", file=sys.stderr)
 

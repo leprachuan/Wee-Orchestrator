@@ -10,6 +10,8 @@ credentials and is explicitly a separate, human-in-the-loop operational step
 """
 
 import asyncio
+import base64
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -87,33 +89,79 @@ def listener():
     )
 
 
+def _post_event(activity_id="m1", actor_id="someone-else", verb="post"):
+    """Build a real-shaped Mercury frame (verified against a live test message,
+    see the activity_id_to_message_id docstring): the message identity is the
+    activity's own top-level `id`, NOT `object.id` -- `object` is the
+    encrypted comment body and has no `id` field."""
+    return json.dumps(
+        {
+            "data": {
+                "activity": {
+                    "id": activity_id,
+                    "verb": verb,
+                    "actor": {"id": actor_id},
+                    "object": {"objectType": "comment", "displayName": "<encrypted>"},
+                }
+            }
+        }
+    )
+
+
+class TestActivityIdToMessageId:
+    def test_matches_the_real_messages_api_id_format(self):
+        # Verified live: sent a real message, compared the Messages API's
+        # returned `id` against the activity `id` Mercury delivered for it.
+        activity_id = "48649760-9127-11f1-adfd-53ca1f681f98"
+        expected = "Y2lzY29zcGFyazovL3VzL01FU1NBR0UvNDg2NDk3NjAtOTEyNy0xMWYxLWFkZmQtNTNjYTFmNjgxZjk4"
+        assert wml.activity_id_to_message_id(activity_id) == expected
+
+
+class TestDecodeWebexResourceId:
+    def test_decodes_a_real_people_me_id_to_its_raw_uuid(self):
+        # Verified live: GET /v1/people/me for the dev bot returned exactly
+        # this id, decoding to ciscospark://us/PEOPLE/{uuid}. This is the bug
+        # a first live test found -- the bot never recognized its own
+        # replies and re-ingested them as new queries, in a loop.
+        encoded = "Y2lzY29zcGFyazovL3VzL1BFT1BMRS9lYmQ1MDY3MC02YjhlLTQwMWYtOGM1Mi02ZWQ5NmYyZDY1YWY"
+        assert wml.decode_webex_resource_id(encoded) == "ebd50670-6b8e-401f-8c52-6ed96f2d65af"
+
+    def test_round_trips_with_activity_id_to_message_id_shape(self):
+        # Same encoding scheme, different URN segment (PEOPLE vs MESSAGE) --
+        # decoding a message id should recover the raw activity id.
+        activity_id = "48649760-9127-11f1-adfd-53ca1f681f98"
+        encoded = wml.activity_id_to_message_id(activity_id)
+        assert wml.decode_webex_resource_id(encoded) == activity_id
+
+    def test_falls_back_to_input_on_invalid_base64(self):
+        assert wml.decode_webex_resource_id("not-valid-base64!!!") == "not-valid-base64!!!"
+
+    def test_falls_back_to_input_when_decoded_has_no_slash(self):
+        garbage = base64.b64encode(b"no-urn-shape-here").decode()
+        assert wml.decode_webex_resource_id(garbage) == garbage
+
+
 class TestHandleRawEvent:
     @pytest.mark.asyncio
     async def test_non_post_verb_is_ignored(self, listener):
-        await listener._handle_raw_event(
-            '{"data": {"activity": {"verb": "typing", "object": {"id": "m1"}}}}'
-        )
+        await listener._handle_raw_event(_post_event(verb="typing"))
         assert listener._queue.qsize() == 0
 
     @pytest.mark.asyncio
     async def test_bot_authored_message_is_ignored(self, listener):
-        await listener._handle_raw_event(
-            '{"data": {"activity": {"verb": "post", "actor": {"id": "bot-person-id"}, "object": {"id": "m1"}}}}'
-        )
+        await listener._handle_raw_event(_post_event(actor_id="bot-person-id"))
         assert listener._queue.qsize() == 0
 
     @pytest.mark.asyncio
     async def test_valid_post_is_queued(self, listener):
-        await listener._handle_raw_event(
-            '{"data": {"activity": {"verb": "post", "actor": {"id": "someone-else"}, "object": {"id": "m1"}}}}'
-        )
+        await listener._handle_raw_event(_post_event(activity_id="m1"))
         assert listener._queue.qsize() == 1
         item = await listener._queue.get()
-        assert item["message_id"] == "m1"
+        assert item["message_id"] == wml.activity_id_to_message_id("m1")
 
     @pytest.mark.asyncio
     async def test_duplicate_message_id_is_deduplicated(self, listener):
-        event = '{"data": {"activity": {"verb": "post", "actor": {"id": "x"}, "object": {"id": "dup-1"}}}}'
+        event = _post_event(activity_id="dup-1")
         await listener._handle_raw_event(event)
         await listener._handle_raw_event(event)
         assert listener._queue.qsize() == 1
@@ -124,7 +172,7 @@ class TestHandleRawEvent:
         assert listener._queue.qsize() == 0
 
     @pytest.mark.asyncio
-    async def test_missing_message_id_is_ignored(self, listener):
+    async def test_missing_activity_id_is_ignored(self, listener):
         await listener._handle_raw_event(
             '{"data": {"activity": {"verb": "post", "actor": {"id": "x"}, "object": {}}}}'
         )
@@ -136,15 +184,16 @@ class TestHandleRawEvent:
             token="t", on_message=MagicMock(), max_queue_size=2
         )
         for i in range(4):
-            await small_listener._handle_raw_event(
-                f'{{"data": {{"activity": {{"verb": "post", "actor": {{"id": "x"}}, "object": {{"id": "m{i}"}}}}}}}}'
-            )
+            await small_listener._handle_raw_event(_post_event(activity_id=f"m{i}"))
         assert small_listener._queue.qsize() == 2
         remaining_ids = []
         while not small_listener._queue.empty():
             remaining_ids.append((await small_listener._queue.get())["message_id"])
         # The two oldest (m0, m1) should have been dropped in favor of m2, m3.
-        assert remaining_ids == ["m2", "m3"]
+        assert remaining_ids == [
+            wml.activity_id_to_message_id("m2"),
+            wml.activity_id_to_message_id("m3"),
+        ]
 
 
 class TestFetchMessage:
@@ -175,9 +224,7 @@ class TestHealth:
 
     @pytest.mark.asyncio
     async def test_health_reflects_queue_depth_after_event(self, listener):
-        await listener._handle_raw_event(
-            '{"data": {"activity": {"verb": "post", "actor": {"id": "x"}, "object": {"id": "m1"}}}}'
-        )
+        await listener._handle_raw_event(_post_event(activity_id="m1"))
         assert listener.health()["queue_depth"] == 1
         assert listener.health()["last_event_at"] is not None
 
