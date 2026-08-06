@@ -14335,6 +14335,70 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             str(resolved), media_type=mime or "application/octet-stream"
         )
 
+    # --- Per-agent file browser (issue #62) ---
+    #
+    # /api/v1/files/view above already validates against a broad prefix
+    # allowlist (/opt/, /tmp/, /home/) and is reused here for content -- an
+    # agent's working directory always falls under one of those prefixes in
+    # practice. This listing endpoint adds the stricter boundary #62 asks
+    # for: scoped to one agent's own root, not the broad allowlist, so a
+    # client browsing agent A's files can never be pointed at agent B's (or
+    # any other host path) even though the underlying view endpoint would
+    # technically allow it.
+
+    @app.get("/api/v1/agents/{agent_name}/files")
+    async def list_agent_files(agent_name: str, request: Request, path: str = ""):
+        """List files/directories under an agent's working folder.
+
+        `path` is relative to the agent's root and defaults to the root
+        itself. Never resolves outside that root.
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        agent_info = session_mgr.AGENTS.get(agent_name)
+        if agent_info is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        agent_root = Path(agent_info["path"]).expanduser().resolve()
+        target = (agent_root / path).resolve() if path else agent_root
+        try:
+            target.relative_to(agent_root)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path traversal detected")
+
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Directory not found")
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+
+        from datetime import datetime, timezone
+
+        entries = []
+        try:
+            for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+                try:
+                    stat = child.stat()
+                except OSError:
+                    continue
+                entries.append({
+                    "name": child.name,
+                    "isDirectory": child.is_dir(),
+                    "size": None if child.is_dir() else stat.st_size,
+                    "modifiedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                })
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+        return {
+            "agent": agent_name,
+            "path": str(target.relative_to(agent_root)) if target != agent_root else "",
+            "entries": entries,
+        }
+
     # --- Image search ---
 
     @app.get("/api/v1/search/images")
