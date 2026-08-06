@@ -19297,6 +19297,119 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "reloaded": ok,
         }
 
+    # --- Per-agent Bot Service Control (issue #491) ---
+    #
+    # "orchestrator" maps to the existing singleton webex-connector[.service|
+    # -dev.service] that predates this feature and is live with real family
+    # traffic (see issue #487) -- it is never duplicated or silently
+    # reconfigured by this code. Every other agent gets its own instance of
+    # the webex-connector-agent@.service template unit (pre-installed on
+    # dev/prod as a deployment step, not created dynamically here -- the API
+    # process has no filesystem write access to /etc/systemd/system, only a
+    # narrowly-scoped sudoers grant to start/stop/restart/status these
+    # specific unit names).
+
+    def _webex_service_unit_name(agent_name: str) -> str:
+        if agent_name == "orchestrator":
+            return "webex-connector-dev.service" if APP_ENV == "DEV" else "webex-connector.service"
+        return f"webex-connector-agent@{agent_name}.service"
+
+    def _run_systemctl(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sudo", "systemctl", *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    @app.get("/api/v1/agents/{agent_name}/bots/{channel}/status")
+    async def get_agent_bot_service_status(agent_name: str, channel: str, request: Request):
+        """Return whether the given agent's bot connector process is running."""
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        if agent_name not in session_mgr.AGENTS:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        if channel != "webex":
+            return {
+                "agent": agent_name,
+                "channel": channel,
+                "supported": False,
+                "detail": "Service start/restart is only wired up for the webex channel today (issue #491).",
+            }
+
+        unit = _webex_service_unit_name(agent_name)
+        try:
+            proc = _run_systemctl("is-active", unit)
+            state = proc.stdout.strip() or proc.stderr.strip()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to check service status: {exc}")
+        return {
+            "agent": agent_name,
+            "channel": channel,
+            "supported": True,
+            "unit": unit,
+            "running": state == "active",
+            "state": state,
+        }
+
+    @app.post("/api/v1/agents/{agent_name}/bots/{channel}/restart")
+    async def restart_agent_bot_service(agent_name: str, channel: str, request: Request):
+        """Start the given agent's bot connector if stopped, or restart it if running."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        if agent_name not in session_mgr.AGENTS:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        if channel != "webex":
+            raise HTTPException(
+                status_code=400,
+                detail="Service start/restart is only wired up for the webex channel today (issue #491).",
+            )
+
+        if agent_name != "orchestrator":
+            status = await get_agent_bot_token_status(agent_name, channel, request)
+            if not status.get("configured"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Agent '{agent_name}' has no webex bot token configured yet — set one before starting its service.",
+                )
+
+        unit = _webex_service_unit_name(agent_name)
+        try:
+            # systemctl restart starts a never-started/stopped unit just as well
+            # as it restarts a running one -- one verb covers both cases.
+            proc = _run_systemctl("restart", unit)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to restart service: {exc}")
+        if proc.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"systemctl restart {unit} failed: {proc.stderr.strip() or proc.stdout.strip()}",
+            )
+        print(
+            f"[API] Webex service restarted for agent '{agent_name}' ({unit})"
+            f" by {auth.get('identity', 'unknown')}",
+            file=sys.stderr,
+        )
+        return {"status": "restarted", "agent": agent_name, "channel": channel, "unit": unit}
+
     @app.get("/api/v1/logs")
     async def get_logs(
         request: Request,

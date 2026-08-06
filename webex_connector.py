@@ -1471,13 +1471,19 @@ class WebEXConnector(BaseConnector):
         self.disconnect_rabbitmq()
 
 
-def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.json") -> Optional[str]:
-    """Resolve the orchestrator bot token from agents.json via secret_tool.
+def _resolve_agent_bot_token(agent_name: str, channel: str, agents_json: str = "agents.json") -> Optional[str]:
+    """Resolve a given agent's bot token from agents.json via secret_tool (issue #491).
 
-    Reads agents.json, finds the 'orchestrator' agent, and resolves
+    Reads agents.json, finds the named agent, and resolves
     bots.<channel>.token_secret from the file-backend secret store.
 
-    Returns the token string or None (caller falls back to env/config).
+    Returns the token string or None (caller falls back to env/config). This
+    is the fallback path for every agent including "orchestrator": on both
+    dev and prod today, orchestrator's agents.json entry has no bots.webex
+    configured, so this always returns None for it and callers fall through
+    to WEBEX_BOT_TOKEN unchanged -- generalizing this function to accept any
+    agent name does not alter orchestrator's existing behavior.
+
     Never logs the actual token value.
     """
     try:
@@ -1488,17 +1494,17 @@ def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.jso
             return None
         data = json.loads(agents_path.read_text())
         agents = data.get("agents", [])
-        orch = next((a for a in agents if a.get("name") == "orchestrator"), None)
-        if not orch:
+        agent = next((a for a in agents if a.get("name") == agent_name), None)
+        if not agent:
             return None
-        bots = orch.get("bots") or {}
+        bots = agent.get("bots") or {}
         ch_cfg = bots.get(channel) or {}
         secret_name = ch_cfg.get("token_secret", "").strip()
         if not secret_name:
             return None
         secret_tool_path = Path(__file__).resolve().parent / "secret_tool" / "secret_tool.py"
         if not secret_tool_path.exists():
-            logger.warning("secret_tool.py not found at %s — cannot resolve orchestrator bot token", secret_tool_path)
+            logger.warning("secret_tool.py not found at %s — cannot resolve bot token for '%s'", secret_tool_path, agent_name)
             return None
         import subprocess as _subprocess
         result = _subprocess.run(
@@ -1516,9 +1522,9 @@ def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.jso
             except Exception:
                 if output:
                     return output
-        logger.warning("Failed to resolve orchestrator webex token (secret=%s)", secret_name)
+        logger.warning("Failed to resolve webex token for agent '%s' (secret=%s)", agent_name, secret_name)
     except Exception as exc:
-        logger.warning("Error resolving orchestrator bot token: %s", exc)
+        logger.warning("Error resolving bot token for agent '%s': %s", agent_name, exc)
     return None
 
 
@@ -1534,13 +1540,28 @@ def main():
     )
     parser.add_argument(
         "--config",
-        default="webex_config.json",
-        help="Configuration file path",
+        default=None,
+        help=(
+            "Configuration file path. Defaults to webex_config.json for the "
+            "orchestrator agent (unchanged from before #491), or "
+            "webex_config_<agent>.json for any other agent, so concurrent "
+            "per-agent instances don't share (and overwrite) one another's "
+            "allowed_users/pinned_users/default_agent settings."
+        ),
     )
     parser.add_argument(
         "--agents-json",
         default="agents.json",
         help="Path to agents.json (used to resolve orchestrator bot token from Settings)",
+    )
+    parser.add_argument(
+        "--agent",
+        default=os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
+        help=(
+            "Which agent this connector instance serves (issue #491): resolves that "
+            "agent's own bots.webex.token_secret and routes new sessions to it. "
+            "Defaults to orchestrator, preserving the original single-bot behavior."
+        ),
     )
     parser.add_argument(
         "--allow-user",
@@ -1557,6 +1578,26 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.config is None:
+        args.config = (
+            "webex_config.json"
+            if args.agent == "orchestrator"
+            else f"webex_config_{args.agent}.json"
+        )
+
+    # COPILOT_DEFAULT_AGENT must be set before WebEXConfig() reads it below, so
+    # a per-agent instance's new sessions default to that agent (issue #491).
+    # Passing --agent orchestrator (the default) sets it to what it already
+    # was, so this is a no-op for the original single-bot invocation.
+    os.environ["COPILOT_DEFAULT_AGENT"] = args.agent
+
+    # A per-agent instance has no upstream n8n webhook routing configured for
+    # it (unlike the orchestrator's queue, which n8n already feeds) -- Mercury
+    # needs only the bot token, so default it on for any non-orchestrator
+    # agent unless the operator explicitly set the flag either way.
+    if args.agent != "orchestrator" and "WEBEX_MERCURY_ENABLED" not in os.environ:
+        os.environ["WEBEX_MERCURY_ENABLED"] = "true"
 
     # Initialize config
     config = WebEXConfig(args.config)
@@ -1578,10 +1619,11 @@ def main():
         return
 
     # Token resolution priority:
-    # 1. Settings-backed token (agents.json bots.webex.token_secret via secret_tool)
+    # 1. Settings-backed token (agents.json bots.<channel>.token_secret via secret_tool),
+    #    scoped to the agent this instance serves (--agent, default orchestrator)
     # 2. CLI --token / WEBEX_BOT_TOKEN env var (migration fallback)
     # 3. webex_config.json token field (handled inside WebEXConnector.__init__)
-    settings_token = _resolve_orchestrator_bot_token("webex", args.agents_json)
+    settings_token = _resolve_agent_bot_token(args.agent, "webex", args.agents_json)
     token = settings_token or args.token
 
     # Start connector
@@ -1593,7 +1635,7 @@ def main():
         sys.exit(1)
 
     if settings_token:
-        print("[INFO] Using orchestrator WebEx bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
+        print(f"[INFO] Using '{args.agent}' agent's WebEx bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
 
     connector = WebEXConnector(token, args.config)
 

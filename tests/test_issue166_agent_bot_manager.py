@@ -1212,7 +1212,7 @@ class TestIssue339OrchestratorTokenResolution:
 
     @patch("subprocess.run")
     def test_resolves_webex_token(self, mock_run):
-        from webex_connector import _resolve_orchestrator_bot_token
+        from webex_connector import _resolve_agent_bot_token
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({"status": "success", "credential": "wx_token_xyz"}),
@@ -1232,7 +1232,7 @@ class TestIssue339OrchestratorTokenResolution:
                 tmpdir,
             )
             with patch("pathlib.Path.exists", return_value=True):
-                result = _resolve_orchestrator_bot_token("webex", path)
+                result = _resolve_agent_bot_token("orchestrator", "webex", path)
             assert result == "wx_token_xyz"
 
     @patch("subprocess.run")
