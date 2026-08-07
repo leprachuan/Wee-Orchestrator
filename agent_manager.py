@@ -19361,22 +19361,27 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "reloaded": ok,
         }
 
-    # --- Per-agent Bot Service Control (issue #491) ---
+    # --- Per-agent Bot Service Control (issues #491, #492) ---
     #
     # "orchestrator" maps to the existing singleton webex-connector[.service|
-    # -dev.service] that predates this feature and is live with real family
-    # traffic (see issue #487) -- it is never duplicated or silently
-    # reconfigured by this code. Every other agent gets its own instance of
-    # the webex-connector-agent@.service template unit (pre-installed on
-    # dev/prod as a deployment step, not created dynamically here -- the API
-    # process has no filesystem write access to /etc/systemd/system, only a
-    # narrowly-scoped sudoers grant to start/stop/restart/status these
-    # specific unit names).
+    # -dev.service] / telegram-bot-listener[.service|-dev.service] that
+    # predate this feature and are live with real family traffic (see issue
+    # #487) -- they are never duplicated or silently reconfigured by this
+    # code. Every other agent gets its own instance of the per-channel
+    # `*-agent@.service` template unit (pre-installed on dev/prod as a
+    # deployment step, not created dynamically here -- the API process has no
+    # filesystem write access to /etc/systemd/system, only a narrowly-scoped
+    # sudoers grant to start/stop/restart/status these specific unit names).
 
-    def _webex_service_unit_name(agent_name: str) -> str:
+    def _bot_service_unit_name(agent_name: str, channel: str) -> str:
+        env_suffix = "-dev" if APP_ENV == "DEV" else ""
         if agent_name == "orchestrator":
-            return "webex-connector-dev.service" if APP_ENV == "DEV" else "webex-connector.service"
-        return f"webex-connector-agent@{agent_name}.service"
+            if channel == "webex":
+                return f"webex-connector{env_suffix}.service"
+            return f"telegram-bot-listener{env_suffix}.service"
+        if channel == "webex":
+            return f"webex-connector-agent@{agent_name}.service"
+        return f"telegram-bot-listener-agent@{agent_name}.service"
 
     def _run_systemctl(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -19402,15 +19407,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
         if agent_name not in session_mgr.AGENTS:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
-        if channel != "webex":
-            return {
-                "agent": agent_name,
-                "channel": channel,
-                "supported": False,
-                "detail": "Service start/restart is only wired up for the webex channel today (issue #491).",
-            }
 
-        unit = _webex_service_unit_name(agent_name)
+        unit = _bot_service_unit_name(agent_name, channel)
         try:
             proc = _run_systemctl("is-active", unit)
             state = proc.stdout.strip() or proc.stderr.strip()
@@ -19441,21 +19439,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             )
         if agent_name not in session_mgr.AGENTS:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
-        if channel != "webex":
-            raise HTTPException(
-                status_code=400,
-                detail="Service start/restart is only wired up for the webex channel today (issue #491).",
-            )
 
         if agent_name != "orchestrator":
             status = await get_agent_bot_token_status(agent_name, channel, request)
             if not status.get("configured"):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Agent '{agent_name}' has no webex bot token configured yet — set one before starting its service.",
+                    detail=f"Agent '{agent_name}' has no {channel} bot token configured yet — set one before starting its service.",
                 )
 
-        unit = _webex_service_unit_name(agent_name)
+        unit = _bot_service_unit_name(agent_name, channel)
         try:
             # systemctl restart starts a never-started/stopped unit just as well
             # as it restarts a running one -- one verb covers both cases.
@@ -19468,11 +19461,59 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 detail=f"systemctl restart {unit} failed: {proc.stderr.strip() or proc.stdout.strip()}",
             )
         print(
-            f"[API] Webex service restarted for agent '{agent_name}' ({unit})"
+            f"[API] {channel} service restarted for agent '{agent_name}' ({unit})"
             f" by {auth.get('identity', 'unknown')}",
             file=sys.stderr,
         )
         return {"status": "restarted", "agent": agent_name, "channel": channel, "unit": unit}
+
+    @app.get("/api/v1/agents/{agent_name}/bots/{channel}/logs")
+    async def get_agent_bot_service_logs(
+        agent_name: str,
+        channel: str,
+        request: Request,
+        lines: int = Query(200, ge=1, le=2000),
+    ):
+        """Return recent journalctl output for the given agent's bot listener.
+
+        Unlike the fixed-allowlist /api/v1/logs (built for the WebUI's global
+        admin log viewer), this resolves the unit name the same way
+        status/restart do -- so it automatically covers every current and
+        future per-agent `*-agent@.service` instance without needing its own
+        allowlist maintained in lockstep (issue #492).
+        """
+        await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        if channel not in _VALID_BOT_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid channel '{channel}'. Must be one of: {', '.join(sorted(_VALID_BOT_CHANNELS))}",
+            )
+        if agent_name not in session_mgr.AGENTS:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+        unit = _bot_service_unit_name(agent_name, channel)
+        cmd = ["journalctl", "-u", unit, "--no-pager", "-n", str(lines), "-o", "short-iso"]
+        try:
+            proc = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=15),
+            )
+            raw = proc.stdout or ""
+            return {
+                "agent": agent_name,
+                "channel": channel,
+                "unit": unit,
+                "lines": raw.strip().split("\n") if raw.strip() else [],
+            }
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="journalctl timed out")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
     @app.get("/api/v1/logs")
     async def get_logs(

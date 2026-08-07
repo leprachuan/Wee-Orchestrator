@@ -2,7 +2,8 @@
 
 Covers:
 - GET /api/v1/agents/{name}/bots/{channel}/status: running/stopped state,
-  unsupported channel, unknown agent, invalid channel
+  unknown agent, invalid channel (telegram support added in #492 --
+  see test_issue_492_telegram_and_logs.py for telegram-specific coverage)
 - POST /api/v1/agents/{name}/bots/{channel}/restart: unit-name mapping
   (orchestrator -> the existing singleton service; other agents -> their
   own webex-connector-agent@ instance), token-configured gating for
@@ -139,10 +140,13 @@ class TestWebexServiceControlAPI(unittest.TestCase):
         resp = self.client.get("/api/v1/agents/orchestrator/bots/bogus/status", headers=self.auth)
         self.assertEqual(resp.status_code, 400)
 
-    def test_status_telegram_channel_reports_unsupported(self):
+    @patch("subprocess.run")
+    def test_status_telegram_channel_is_supported(self, mock_run):
+        # As of #492, telegram is wired up the same way webex is.
+        mock_run.return_value = MagicMock(returncode=0, stdout="active\n", stderr="")
         resp = self.client.get("/api/v1/agents/orchestrator/bots/telegram/status", headers=self.auth)
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse(resp.json()["supported"])
+        self.assertTrue(resp.json()["supported"])
 
     def test_status_requires_auth(self):
         resp = self.client.get("/api/v1/agents/orchestrator/bots/webex/status")
@@ -182,9 +186,13 @@ class TestWebexServiceControlAPI(unittest.TestCase):
         resp = self.client.post("/api/v1/agents/orchestrator/bots/bogus/restart", headers=self.auth)
         self.assertEqual(resp.status_code, 400)
 
-    def test_restart_telegram_channel_returns_400(self):
+    @patch("subprocess.run")
+    def test_restart_telegram_channel_succeeds(self, mock_run):
+        # As of #492, telegram is wired up the same way webex is.
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         resp = self.client.post("/api/v1/agents/orchestrator/bots/telegram/restart", headers=self.auth)
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["unit"], "telegram-bot-listener-dev.service")
 
     def test_restart_requires_auth(self):
         resp = self.client.post("/api/v1/agents/orchestrator/bots/webex/restart")

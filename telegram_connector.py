@@ -1214,13 +1214,20 @@ class TelegramConnector(BaseConnector):
         self._wait_for_active_requests()
 
 
-def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.json") -> Optional[str]:
-    """Resolve the orchestrator bot token from agents.json via secret_tool.
+def _resolve_agent_bot_token(agent_name: str, channel: str, agents_json: str = "agents.json") -> Optional[str]:
+    """Resolve a given agent's bot token from agents.json via secret_tool (issue #492).
 
-    Reads agents.json, finds the 'orchestrator' agent, and resolves
+    Reads agents.json, finds the named agent, and resolves
     bots.<channel>.token_secret from the file-backend secret store.
 
-    Returns the token string or None (caller falls back to env/config).
+    Returns the token string or None (caller falls back to env/config). This
+    is the fallback path for every agent including "orchestrator": on both
+    dev and prod today, orchestrator's agents.json entry has no bots.telegram
+    configured, so this always returns None for it and callers fall through
+    to TELEGRAM_BOT_TOKEN unchanged -- generalizing this function to accept
+    any agent name (mirroring webex_connector.py's #491 equivalent) does not
+    alter orchestrator's existing behavior.
+
     Never logs the actual token value.
     """
     import json
@@ -1234,10 +1241,10 @@ def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.jso
             return None
         data = json.loads(agents_path.read_text())
         agents = data.get("agents", [])
-        orch = next((a for a in agents if a.get("name") == "orchestrator"), None)
-        if not orch:
+        agent = next((a for a in agents if a.get("name") == agent_name), None)
+        if not agent:
             return None
-        bots = orch.get("bots") or {}
+        bots = agent.get("bots") or {}
         ch_cfg = bots.get(channel) or {}
         secret_name = ch_cfg.get("token_secret", "").strip()
         if not secret_name:
@@ -1245,7 +1252,7 @@ def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.jso
         # Resolve from file backend — same backend the Settings API uses for storage
         secret_tool_path = Path(__file__).resolve().parent / "secret_tool" / "secret_tool.py"
         if not secret_tool_path.exists():
-            logger.warning("secret_tool.py not found at %s — cannot resolve orchestrator bot token", secret_tool_path)
+            logger.warning("secret_tool.py not found at %s — cannot resolve bot token for '%s'", secret_tool_path, agent_name)
             return None
         result = subprocess.run(
             [sys.executable, str(secret_tool_path), "get", "--name", secret_name, "--backend", "file"],
@@ -1262,9 +1269,9 @@ def _resolve_orchestrator_bot_token(channel: str, agents_json: str = "agents.jso
             except Exception:
                 if output:
                     return output
-        logger.warning("Failed to resolve orchestrator telegram token (secret=%s)", secret_name)
+        logger.warning("Failed to resolve telegram token for agent '%s' (secret=%s)", agent_name, secret_name)
     except Exception as exc:
-        logger.warning("Error resolving orchestrator bot token: %s", exc)
+        logger.warning("Error resolving bot token for agent '%s': %s", agent_name, exc)
     return None
 
 
@@ -1282,13 +1289,28 @@ def main():
     )
     parser.add_argument(
         "--config",
-        default=default_telegram_config_path(),
-        help="Configuration file path",
+        default=None,
+        help=(
+            "Configuration file path. Defaults to telegram_config.json for the "
+            "orchestrator agent (unchanged from before #492), or "
+            "telegram_config_<agent>.json for any other agent, so concurrent "
+            "per-agent instances don't share (and overwrite) one another's "
+            "allowed_users/pinned_users/default_agent settings."
+        ),
     )
     parser.add_argument(
         "--agents-json",
         default="agents.json",
-        help="Path to agents.json (used to resolve orchestrator bot token from Settings)",
+        help="Path to agents.json (used to resolve the agent's bot token from Settings)",
+    )
+    parser.add_argument(
+        "--agent",
+        default=os.environ.get("COPILOT_DEFAULT_AGENT", "orchestrator"),
+        help=(
+            "Which agent this connector instance serves (issue #492): resolves that "
+            "agent's own bots.telegram.token_secret and routes new sessions to it. "
+            "Defaults to orchestrator, preserving the original single-bot behavior."
+        ),
     )
     parser.add_argument(
         "--allow-user",
@@ -1307,6 +1329,22 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.config is None:
+        args.config = (
+            default_telegram_config_path()
+            if args.agent == "orchestrator"
+            else os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                f"telegram_config_{args.agent}.json",
+            )
+        )
+
+    # COPILOT_DEFAULT_AGENT must be set before TelegramConfig() reads it below,
+    # so a per-agent instance's new sessions default to that agent (issue
+    # #492). Passing --agent orchestrator (the default) sets it to what it
+    # already was, so this is a no-op for the original single-bot invocation.
+    os.environ["COPILOT_DEFAULT_AGENT"] = args.agent
 
     # Initialize config
     config = TelegramConfig(args.config)
@@ -1328,10 +1366,11 @@ def main():
         return
 
     # Token resolution priority:
-    # 1. Settings-backed token (agents.json bots.telegram.token_secret via secret_tool)
+    # 1. Settings-backed token (agents.json bots.<channel>.token_secret via secret_tool),
+    #    scoped to the agent this instance serves (--agent, default orchestrator)
     # 2. CLI --token / TELEGRAM_BOT_TOKEN env var (migration fallback)
     # 3. telegram_config.json token field (handled inside TelegramConnector.__init__)
-    settings_token = _resolve_orchestrator_bot_token("telegram", args.agents_json)
+    settings_token = _resolve_agent_bot_token(args.agent, "telegram", args.agents_json)
     token = settings_token or args.token
 
     # Start connector
@@ -1343,7 +1382,7 @@ def main():
         sys.exit(1)
 
     if settings_token:
-        print("[INFO] Using orchestrator Telegram bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
+        print(f"[INFO] Using '{args.agent}' agent's Telegram bot token from Settings (agents.json/secret_tool)", file=sys.stderr)
 
     connector = TelegramConnector(token, args.config)
     connector.run()
