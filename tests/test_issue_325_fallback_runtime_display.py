@@ -28,9 +28,33 @@ class TestFallbackRuntimeDisplayPersistence:
     """Tests for issue #325: fallback runtime display persistence after save."""
 
     @pytest.fixture
-    def client(self):
-        app = create_api_app()
-        return TestClient(app, raise_server_exceptions=False)
+    def client(self, tmp_path):
+        # Issues #499/#500/#501/#504: every job this suite creates used to land
+        # in the real .task-scheduler/jobs.json (create_api_app() and
+        # TaskScheduler both fall back to that shared file when
+        # SCHEDULER_JOBS_FILE is unset). With no fixed IDs and no teardown,
+        # each test run -- daily in CI, or any time a developer runs pytest --
+        # added a fresh, permanent, real recurring job. Pointing
+        # SCHEDULER_JOBS_FILE/SCHEDULER_LOGS_DIR/SCHEDULER_RESULTS_DIR at a
+        # tmp_path for the duration of the test isolates every job this suite
+        # creates to storage that is deleted when the test ends.
+        jobs_file = tmp_path / "jobs.json"
+        logs_dir = tmp_path / "logs"
+        results_dir = tmp_path / "results"
+        logs_dir.mkdir()
+        results_dir.mkdir()
+        jobs_file.write_text('{"jobs": []}')
+
+        os.environ["SCHEDULER_JOBS_FILE"] = str(jobs_file)
+        os.environ["SCHEDULER_LOGS_DIR"] = str(logs_dir)
+        os.environ["SCHEDULER_RESULTS_DIR"] = str(results_dir)
+        try:
+            app = create_api_app()
+            yield TestClient(app, raise_server_exceptions=False)
+        finally:
+            os.environ.pop("SCHEDULER_JOBS_FILE", None)
+            os.environ.pop("SCHEDULER_LOGS_DIR", None)
+            os.environ.pop("SCHEDULER_RESULTS_DIR", None)
 
     @pytest.fixture
     def auth_headers(self):
@@ -148,3 +172,33 @@ class TestFallbackRuntimeDisplayPersistence:
         job = resp.json()["result"]
         assert job["fallback_runtime"] == "copilot"
         assert job["fallback_model"] == "gpt-5.4-mini"
+
+    def test_issue_499_creating_jobs_does_not_leak_into_the_shared_jobs_file(
+        self, client, auth_headers
+    ):
+        """Regression for #499/#500/#501/#504: every job this suite creates
+        must land only in this test's isolated SCHEDULER_JOBS_FILE, never in
+        the real .task-scheduler/jobs.json shared by dev/prod. Before the
+        `client` fixture set SCHEDULER_JOBS_FILE, every run of this suite
+        (daily in CI, or any local pytest run) added a new, permanent,
+        recurring job to that shared file -- 222 such jobs had accumulated in
+        this checkout alone by the time this test was written.
+        """
+        shared_jobs_file = (
+            Path(__file__).resolve().parent.parent / ".task-scheduler" / "jobs.json"
+        )
+        before = shared_jobs_file.read_text() if shared_jobs_file.exists() else None
+
+        self._create_base_job(client, auth_headers, "Issue 499 Isolation Check")
+
+        after = shared_jobs_file.read_text() if shared_jobs_file.exists() else None
+        assert after == before, (
+            "Creating a job in this suite modified the shared jobs.json -- "
+            "SCHEDULER_JOBS_FILE isolation regressed (see #499/#500/#501/#504)"
+        )
+
+        isolated_jobs_file = Path(os.environ["SCHEDULER_JOBS_FILE"])
+        assert "Issue 499 Isolation Check" in isolated_jobs_file.read_text(), (
+            "The job should still have been created -- just isolated to this "
+            "test's own tmp_path file, not skipped entirely"
+        )
