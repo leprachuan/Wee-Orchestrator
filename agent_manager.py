@@ -18764,16 +18764,139 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 status_code=500, detail=f"Failed to save model-manifest.json: {e}"
             )
 
+    # ---- macOS LaunchAgent equivalents of the systemd units below ----
+    #
+    # Issue #508: on Linux, agent-manager-api / task-scheduler-executor /
+    # webex-connector / telegram-bot-listener are four separate systemd
+    # units, each its own process. On macOS "Local" mode, the app itself
+    # spawns and manages the agent-manager-api process directly -- it is
+    # never a LaunchAgent, so restarting it via launchctl here would either
+    # fail (nothing bootstrapped under that label) or race the very process
+    # serving this request. The other three, though, have no macOS-native
+    # equivalent running at all today; this gives them one, matching how
+    # they already run as independent processes on Linux.
+    _MACOS_SERVICE_ENTRYPOINTS = {
+        "webex-connector": "webex_connector.py",
+        "telegram-bot-listener": "telegram_connector.py",
+        "task-scheduler-executor": "scheduler/executor.py",
+    }
+
+    def _macos_launch_agent_label(service_key: str) -> str:
+        return f"com.flipkey.wee-{service_key}"
+
+    def _macos_launch_agents_dir() -> Path:
+        launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
+        launch_agents_dir.mkdir(parents=True, exist_ok=True)
+        return launch_agents_dir
+
+    def _macos_service_environment(repo_dir: Path) -> Dict[str, str]:
+        # A LaunchAgent plist's EnvironmentVariables is a static snapshot,
+        # unlike systemd's EnvironmentFile= (sourced fresh on every start) --
+        # rebuilding it on every restart keeps it in step with the .env file
+        # a user edits through Settings.
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", str(Path.home())),
+            "PYTHONUNBUFFERED": "1",
+        }
+        try:
+            from dotenv import dotenv_values
+
+            env.update(
+                {
+                    k: v
+                    for k, v in dotenv_values(repo_dir / ".env").items()
+                    if v is not None
+                }
+            )
+        except Exception:
+            pass
+        return env
+
+    def _macos_write_launch_agent_plist(service_key: str, repo_dir: Path) -> Path:
+        import plistlib
+
+        label = _macos_launch_agent_label(service_key)
+        script_path = repo_dir / _MACOS_SERVICE_ENTRYPOINTS[service_key]
+        logs_dir = repo_dir / ".task-scheduler" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = str(logs_dir / f"{service_key}.log")
+        plist = {
+            "Label": label,
+            "ProgramArguments": [sys.executable, str(script_path)],
+            "WorkingDirectory": str(repo_dir),
+            "EnvironmentVariables": _macos_service_environment(repo_dir),
+            "RunAtLoad": False,
+            "KeepAlive": {"SuccessfulExit": False},
+            "StandardOutPath": log_path,
+            "StandardErrorPath": log_path,
+        }
+        plist_path = _macos_launch_agents_dir() / f"{label}.plist"
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist, f)
+        return plist_path
+
+    def _macos_launchctl(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["launchctl", *args], capture_output=True, text=True, timeout=30
+        )
+
+    def _macos_restart_service(service_key: str, repo_dir: Path) -> str:
+        script_path = repo_dir / _MACOS_SERVICE_ENTRYPOINTS[service_key]
+        if not script_path.exists():
+            return f"skipped: {script_path.name} not found in this checkout"
+
+        plist_path = _macos_write_launch_agent_plist(service_key, repo_dir)
+        label = _macos_launch_agent_label(service_key)
+        domain = f"gui/{os.getuid()}"
+        target = f"{domain}/{label}"
+
+        # bootout an already-loaded job so bootstrap below picks up the
+        # freshly written plist; a job that was never loaded (first run, or
+        # it crashed out) is expected here, not a failure worth reporting.
+        _macos_launchctl("bootout", target)
+
+        proc = _macos_launchctl("bootstrap", domain, str(plist_path))
+        if proc.returncode != 0:
+            return f"failed to load: {proc.stderr.strip() or proc.stdout.strip()}"
+
+        proc = _macos_launchctl("kickstart", "-k", target)
+        if proc.returncode != 0:
+            return f"loaded but failed to start: {proc.stderr.strip() or proc.stdout.strip()}"
+        return "restarted"
+
     @app.post("/api/v1/settings/restart-services")
     async def restart_services(request: Request):
-        """Restart dev services (agent-manager-api-dev, etc.)."""
+        """Restart dev services (agent-manager-api-dev, etc.) on Linux, or
+        their macOS LaunchAgent equivalents when running locally on macOS."""
         auth = await authenticate(
             request,
             authorization=request.headers.get("authorization"),
             x_user_identity=request.headers.get("x-user-identity"),
             x_auth_channel=request.headers.get("x-auth-channel"),
         )
+        import platform
         import subprocess
+
+        if platform.system() == "Darwin":
+            repo_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+            results = {}
+            api_label = _macos_launch_agent_label("agent-manager-api")
+            results[api_label] = (
+                "not applicable: the main API runs as a process the macOS "
+                "app itself manages, not a LaunchAgent -- restart it from "
+                "the app's Local Settings instead"
+            )
+            for service_key in _MACOS_SERVICE_ENTRYPOINTS:
+                label = _macos_launch_agent_label(service_key)
+                try:
+                    results[label] = _macos_restart_service(service_key, repo_dir)
+                except Exception as e:
+                    results[label] = f"error: {e}"
+            return {
+                "results": results,
+                "note": "Services are restarting. The API will briefly disconnect.",
+            }
 
         services = [
             "agent-manager-api-dev.service",

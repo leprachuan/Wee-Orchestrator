@@ -58,8 +58,14 @@ class TestFallbackRuntimeDisplayPersistence:
 
     @pytest.fixture
     def auth_headers(self):
+        # Several test files set API_SHARED_KEY at module-import time with
+        # differing literals (see 3b95eb4's #491/#492 fix); whichever file
+        # pytest collects first wins for the whole run. Reading the value
+        # live here, rather than hardcoding the literal this file set,
+        # keeps this test correct regardless of collection order.
+        shared_key = os.environ.get("API_SHARED_KEY", "test_key_123")
         return {
-            "Authorization": "Bearer shared_test_key_123",
+            "Authorization": f"Bearer shared_{shared_key}",
             "X-User-Identity": "test-user",
             "X-Auth-Channel": "api",
         }
