@@ -21,9 +21,9 @@ class TestElevatedPermissionsEnvironment(unittest.TestCase):
         """Set up test fixtures."""
         self.test_dir = tempfile.mkdtemp()
         # Import agent_manager here to ensure test isolation
-        from agent_manager import AgentManager
+        from agent_manager import SessionManager
 
-        self.agent_manager = AgentManager()
+        self.agent_manager = SessionManager()
 
     def tearDown(self):
         """Clean up test fixtures."""
@@ -33,9 +33,9 @@ class TestElevatedPermissionsEnvironment(unittest.TestCase):
 
     def test_devin_elevated_sets_permission_mode_env_var(self):
         """Test that DEVIN_PERMISSION_MODE=dangerous is set for elevated agents."""
-        from agent_manager import AgentManager
+        from agent_manager import SessionManager
 
-        manager = AgentManager()
+        manager = SessionManager()
 
         # Mock _execute_subprocess_with_tracking to capture the environment
         captured_env = {}
@@ -82,10 +82,10 @@ class TestElevatedPermissionsEnvironment(unittest.TestCase):
 
     def test_build_runtime_permission_env_mapping(self):
         """Test the permission mode to env var mapping function."""
-        from agent_manager import AgentManager
+        from agent_manager import SessionManager
 
         # Get or create the mapping function
-        manager = AgentManager()
+        manager = SessionManager()
         
         # Test that the function exists and works correctly
         if hasattr(manager, "build_runtime_permission_env"):
@@ -104,9 +104,9 @@ class TestElevatedPermissionsEnvironment(unittest.TestCase):
 
     def test_execute_subprocess_includes_permission_env(self):
         """Test that _execute_subprocess_with_tracking includes permission env vars."""
-        from agent_manager import AgentManager
+        from agent_manager import SessionManager
 
-        manager = AgentManager()
+        manager = SessionManager()
         
         # Mock subprocess.Popen to capture the env argument
         captured_popen_calls = []
@@ -147,9 +147,9 @@ class TestElevatedPermissionsEnvironment(unittest.TestCase):
 
     def test_restricted_mode_doesnt_set_dangerous_perms(self):
         """Test that restricted mode does NOT set DEVIN_PERMISSION_MODE=dangerous."""
-        from agent_manager import AgentManager
+        from agent_manager import SessionManager
 
-        manager = AgentManager()
+        manager = SessionManager()
 
         # Mock _execute_subprocess_with_tracking to capture environment
         captured_env = {}
