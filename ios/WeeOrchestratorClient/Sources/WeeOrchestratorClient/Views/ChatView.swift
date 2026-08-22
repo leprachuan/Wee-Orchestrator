@@ -10,6 +10,18 @@ struct ChatView: View {
     @State private var draft: String = ""
     @State private var showAgentPicker = false
     @State private var showSessions = false
+    @State private var draftTextHeight: CGFloat = ChatView.inputMinHeight
+
+    private static let inputMinHeight: CGFloat = 36
+    private static let inputMaxHeight: CGFloat = 200
+
+    /// Clamps the composer's measured text height between a one-line floor
+    /// (so a single short line never renders smaller than a normal text
+    /// field) and issue #509's 200pt cap (past which the ScrollView it's
+    /// wrapped in takes over rather than clipping).
+    static func inputBarHeight(forMeasuredTextHeight measuredHeight: CGFloat) -> CGFloat {
+        min(max(measuredHeight, inputMinHeight), inputMaxHeight)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,13 +124,34 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            TextField("Message \(chatStore.currentAgent)…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(WeeTheme.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .lineLimit(1...5)
+            // Issue #509: a bare TextField(axis: .vertical) clips anything
+            // past its lineLimit instead of scrolling to it. Wrapping it in
+            // a ScrollView fixes the clipping, but a ScrollView with no size
+            // of its own asks to fill whatever height its parent offers --
+            // capping that with frame(maxHeight:) alone left the input bar
+            // sitting near 200pt tall even for a single short line, and
+            // fixedSize(vertical:) does not read a wrapped vertical-axis
+            // TextField's true single-line height reliably. Measuring the
+            // TextField's own rendered height via GeometryReader and driving
+            // the ScrollView's frame from that (clamped between a one-line
+            // floor and the 200pt cap) is what actually makes it hug short
+            // text and only grow -- then scroll -- as content demands more.
+            ScrollView {
+                TextField("Message \(chatStore.currentAgent)…", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .lineLimit(1...10)
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(key: InputTextHeightKey.self, value: geometry.size.height)
+                        }
+                    )
+            }
+            .onPreferenceChange(InputTextHeightKey.self) { draftTextHeight = $0 }
+            .frame(height: Self.inputBarHeight(forMeasuredTextHeight: draftTextHeight))
+            .background(WeeTheme.surfaceRaised)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button(action: sendDraft) {
                 Image(systemName: "arrow.up.circle.fill")
@@ -270,5 +303,16 @@ struct ChatSessionListSheet: View {
             }
             .weeBackground()
         }
+    }
+}
+
+/// Reports the composer TextField's own rendered height so `inputBar` can
+/// size the ScrollView wrapping it to actual content instead of either
+/// clipping (no ScrollView) or always filling its cap (ScrollView sized by
+/// its parent instead of its content).
+private struct InputTextHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

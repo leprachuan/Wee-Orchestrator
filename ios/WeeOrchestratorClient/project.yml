@@ -21,6 +21,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.weeorchestrator.client
         PRODUCT_NAME: "Wee Orchestrator"
+        # PRODUCT_NAME's space makes Swift sanitize the module name to
+        # Wee_Orchestrator; pinning it keeps `@testable import
+        # WeeOrchestratorClient` (used throughout Tests/) resolving correctly.
+        PRODUCT_MODULE_NAME: WeeOrchestratorClient
     info:
       path: Generated/Info.plist
       properties:
@@ -49,5 +53,23 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.weeorchestrator.client.tests
+        # The app target's PRODUCT_NAME is "Wee Orchestrator" (with a
+        # space, for CFBundleDisplayName), not the WeeOrchestratorClient
+        # XcodeGen infers by default -- without this override, TEST_HOST
+        # points at a binary that doesn't exist and the test bundle never
+        # builds.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Wee Orchestrator.app/Wee Orchestrator"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: WeeOrchestratorClient
+
+schemes:
+  WeeOrchestratorClient:
+    build:
+      targets:
+        WeeOrchestratorClient: all
+        WeeOrchestratorClientTests: [test]
+    test:
+      targets:
+        - WeeOrchestratorClientTests
