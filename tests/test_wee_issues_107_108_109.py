@@ -19,6 +19,11 @@ from unittest.mock import MagicMock, PropertyMock, patch
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+# Part of #471: SessionManager was never imported here at all -- every test
+# in this file failed with NameError before it could reach its actual
+# assertions, not because of any change to SessionManager itself.
+from agent_manager import SessionManager
+
 
 def _make_mgr():
     """Create a minimal SessionManager for testing."""
