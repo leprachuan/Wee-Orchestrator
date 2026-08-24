@@ -22,7 +22,14 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-os.environ["API_SHARED_KEY"] = "test_key_491"
+# Part of #471: setdefault, not a plain assignment, and aligned to the
+# literal most test files already use -- a plain assignment here ran
+# unconditionally at import time, permanently overwriting API_SHARED_KEY
+# for every test file collected afterward in the same process (this file
+# and test_issue_492_telegram_and_logs.py previously coordinated on a
+# shared "test_key_491" literal instead, per 3b95eb4, but that only
+# resolved their collision with each other, not with the rest of tests/).
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 os.environ["APP_ENV"] = "DEV"
 os.environ["API_PORT"] = "8099"
 
@@ -119,7 +126,8 @@ class TestWebexServiceControlAPI(unittest.TestCase):
         os.environ["AGENT_CONFIG_FILE"] = config_file
         cls.app = agent_manager.create_api_app()
         cls.client = TestClient(cls.app)
-        cls.auth = {"Authorization": "Bearer shared_test_key_491"}
+        shared_key = os.environ.get("API_SHARED_KEY", "test_key_123")
+        cls.auth = {"Authorization": f"Bearer shared_{shared_key}"}
 
     @classmethod
     def tearDownClass(cls):

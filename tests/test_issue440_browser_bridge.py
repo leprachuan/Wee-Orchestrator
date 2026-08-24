@@ -92,8 +92,8 @@ def test_rejected_native_browser_falls_back_to_playwright(monkeypatch):
 
 
 def test_browser_api_requires_a_real_owned_session(monkeypatch, tmp_path):
-    os.environ["API_SHARED_KEY"] = "issue440"
-    os.environ["APP_ENV"] = "DEV"
+    monkeypatch.setenv("API_SHARED_KEY", "issue440")
+    monkeypatch.setenv("APP_ENV", "DEV")
 
     import agent_manager
     from fastapi.testclient import TestClient
@@ -135,8 +135,8 @@ def test_browser_api_requires_a_real_owned_session(monkeypatch, tmp_path):
 
 
 def test_browser_api_rejects_unauthenticated_registration(monkeypatch, tmp_path):
-    os.environ["API_SHARED_KEY"] = "issue440-auth"
-    os.environ["APP_ENV"] = "DEV"
+    monkeypatch.setenv("API_SHARED_KEY", "issue440-auth")
+    monkeypatch.setenv("APP_ENV", "DEV")
 
     import agent_manager
     from fastapi.testclient import TestClient

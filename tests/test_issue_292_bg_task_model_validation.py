@@ -15,7 +15,12 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-os.environ["API_SHARED_KEY"] = "test_key_292"  # force-override so test is hermetic
+# Part of #471: a plain assignment here is not actually hermetic -- it's a
+# module-level side effect that permanently overwrites API_SHARED_KEY for
+# every test file collected afterward in the same process. setdefault with
+# the value most other test files already use avoids adding to that
+# collision surface while still guaranteeing a known value.
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 os.environ.setdefault("APP_ENV", "DEV")
 os.environ.setdefault("API_PORT", "8099")
 
@@ -60,8 +65,13 @@ class TestIssue292BgTaskModelValidation(unittest.TestCase):
 
         cls.app, cls._patches = _start_app()
         cls.client = TestClient(cls.app)
+        # Read live rather than hardcoding the literal set above: whichever
+        # test file's own API_SHARED_KEY assignment "wins" for the process
+        # (see #471), this always matches whatever create_api_app() above
+        # actually picked up.
+        shared_key = os.environ.get("API_SHARED_KEY", "test_key_123")
         cls.auth = {
-            "Authorization": "Bearer shared_test_key_292",
+            "Authorization": f"Bearer shared_{shared_key}",
             "X-User-Identity": "test_user_292",
             "X-Auth-Channel": "api",
         }

@@ -111,7 +111,13 @@ class TestIssue341RunNowExecutesCommandModeJob(unittest.TestCase):
             results_dir.mkdir()
             jobs_file.write_text('{"jobs": []}')
 
-            os.environ["API_SHARED_KEY"] = "test_key_341"
+            # Part of #471: several test files set API_SHARED_KEY at
+            # module- or function-scope with differing literals and never
+            # restore it, so whichever one runs last in the process wins
+            # for the rest of the suite. Using the canonical value (see
+            # the majority of tests/*.py) and popping it in finally below
+            # avoids adding to that collision surface.
+            os.environ["API_SHARED_KEY"] = "test_key_123"
             os.environ["SCHEDULER_JOBS_FILE"] = str(jobs_file)
             os.environ["SCHEDULER_LOGS_DIR"] = str(logs_dir)
             os.environ["SCHEDULER_RESULTS_DIR"] = str(results_dir)
@@ -173,7 +179,7 @@ class TestIssue341RunNowExecutesCommandModeJob(unittest.TestCase):
                         ):
                             response = await client.post(
                                 "/api/v1/scheduler/jobs/test-cmd-341/run",
-                                headers={"Authorization": "Bearer shared_test_key_341"},
+                                headers={"Authorization": "Bearer shared_test_key_123"},
                             )
                             return response
 
@@ -199,6 +205,7 @@ class TestIssue341RunNowExecutesCommandModeJob(unittest.TestCase):
                 )
 
             finally:
+                os.environ.pop("API_SHARED_KEY", None)
                 os.environ.pop("SCHEDULER_JOBS_FILE", None)
                 os.environ.pop("SCHEDULER_LOGS_DIR", None)
                 os.environ.pop("SCHEDULER_RESULTS_DIR", None)

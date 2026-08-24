@@ -23,13 +23,13 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Deliberately the same literal as test_issue_491_webex_per_agent.py: both
-# files set this module-level env var during pytest's collection phase
-# (before any test executes), so whichever file collects last would silently
-# clobber the other's key for the duration of the run if the values
-# differed -- create_api_app() reads API_SHARED_KEY at setUpClass time, not
-# at each file's own import time. Keeping the literal in sync avoids that.
-os.environ["API_SHARED_KEY"] = "test_key_491"
+# Part of #471: 3b95eb4's fix here only resolved the collision between this
+# file and test_issue_491_webex_per_agent.py (both previously used a shared
+# "test_key_491" literal) -- it was still a plain assignment that clobbered
+# every OTHER test file's expected API_SHARED_KEY if this one collected
+# last. setdefault, aligned to the literal most test files already use,
+# actually closes the collision surface instead of narrowing it to one pair.
+os.environ.setdefault("API_SHARED_KEY", "test_key_123")
 os.environ["APP_ENV"] = "DEV"
 os.environ["API_PORT"] = "8098"
 
@@ -121,7 +121,8 @@ class TestBotServiceControlAndLogsAPI(unittest.TestCase):
         os.environ["AGENT_CONFIG_FILE"] = config_file
         cls.app = agent_manager.create_api_app()
         cls.client = TestClient(cls.app)
-        cls.auth = {"Authorization": "Bearer shared_test_key_491"}
+        shared_key = os.environ.get("API_SHARED_KEY", "test_key_123")
+        cls.auth = {"Authorization": f"Bearer shared_{shared_key}"}
 
     @classmethod
     def tearDownClass(cls):
