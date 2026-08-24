@@ -1920,6 +1920,34 @@ class RuntimeUsageTracker:
         }
 
 
+# Backs SessionManager._slash_schedule's /schedule command. create_api_app()
+# computes its own SCHEDULER_ENABLED and builds its own equivalent
+# _get_scheduler() closure for the /api/v1/scheduler/* HTTP routes, but both
+# are local to that factory function -- unreachable from here. These
+# module-level equivalents exist so /schedule works independently of
+# whether an API app has even been created yet. The two TaskScheduler
+# instances (this one and create_api_app()'s) are independent objects but
+# share the same on-disk jobs.json, so job state stays consistent either way.
+SCHEDULER_ENABLED = os.environ.get(
+    "SCHEDULER_ENABLED", "true"
+).strip().lower() not in ("false", "0", "no")
+_slash_command_task_scheduler = None
+
+
+def _get_scheduler():
+    global _slash_command_task_scheduler
+    if _slash_command_task_scheduler is None:
+        import sys as _sys
+
+        _sched_path = str(Path(__file__).parent)
+        if _sched_path not in _sys.path:
+            _sys.path.insert(0, _sched_path)
+        from scheduler.management import TaskScheduler
+
+        _slash_command_task_scheduler = TaskScheduler()
+    return _slash_command_task_scheduler
+
+
 class SessionManager:
     """Manages AI CLI sessions (Copilot & OpenCode) for N8N integration"""
 
@@ -3258,11 +3286,17 @@ You can mention an agent in your prompt and it will auto-delegate:
 
     def _slash_schedule(self, argument, session_data, n8n_session_id):
         """Handle /schedule slash command."""
-        if not self.SCHEDULER_ENABLED:
+        # SCHEDULER_ENABLED and _get_scheduler are module-level globals
+        # (defined below the class), resolved unqualified here rather than
+        # as self.* -- self.SCHEDULER_ENABLED/self._get_scheduler() never
+        # existed as attributes on this class or any instance of it, so
+        # every /schedule slash command raised AttributeError before it
+        # could even report "scheduler unavailable", let alone do anything.
+        if not SCHEDULER_ENABLED:
             return "⚠️ Scheduler is not enabled on this instance."
 
         try:
-            scheduler = self._get_scheduler()
+            scheduler = _get_scheduler()
         except Exception as e:
             return f"⚠️ Scheduler unavailable: {e}"
 
