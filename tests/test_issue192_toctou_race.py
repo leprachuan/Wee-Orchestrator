@@ -540,6 +540,14 @@ class TestIssue192EndpointConcurrency(unittest.TestCase):
         """
         original_max = BackgroundTaskManager.MAX_TASKS_PER_USER
         BackgroundTaskManager.MAX_TASKS_PER_USER = 1
+        # The "orchestrator" agent in agents.json sets its own max_concurrent
+        # (currently 3), which takes priority over the global
+        # MAX_TASKS_PER_USER at the API endpoint -- remove it for this test
+        # so the endpoint actually exercises the global cap being overridden
+        # above, rather than silently allowing 3 concurrent "running" tasks.
+        agents_cfg = self._am._session_mgr.AGENTS.get("orchestrator", {})
+        had_max_concurrent = "max_concurrent" in agents_cfg
+        original_agent_max_concurrent = agents_cfg.pop("max_concurrent", None)
         try:
             responses = []
             errors = []
@@ -597,6 +605,8 @@ class TestIssue192EndpointConcurrency(unittest.TestCase):
             )
         finally:
             BackgroundTaskManager.MAX_TASKS_PER_USER = original_max
+            if had_max_concurrent:
+                agents_cfg["max_concurrent"] = original_agent_max_concurrent
 
 
 class TestIssue192SlashCommandPerAgentLimit(unittest.TestCase):

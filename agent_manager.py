@@ -6,6 +6,7 @@ Manages session ID mapping between N8N chat sessions and AI backend sessions
 """
 
 import argparse
+import calendar
 import contextvars
 import hashlib
 import inspect
@@ -840,8 +841,11 @@ class BackgroundTaskManager:
     """Manages background task lifecycle: creation, tracking, output capture, cleanup."""  # noqa: E501
 
     MAX_TASKS_PER_USER = int(os.environ.get("BG_MAX_TASKS_PER_USER", "5"))
+    MAX_TOTAL_TASKS = int(os.environ.get("BG_MAX_TOTAL_TASKS", "500"))
     MAX_OUTPUT_LINES = 500
     CLEANUP_AGE_HOURS = int(os.environ.get("BG_CLEANUP_HOURS", "24"))
+    _cleanup_thread_started = False  # class-level default; __init__ overwrites
+    _tasks_cache = None  # class-level default; __init__ overwrites
 
     def __init__(self):
         home = os.path.expanduser("~")
@@ -852,19 +856,100 @@ class BackgroundTaskManager:
         env_suffix = "-dev" if api_port == "8001" else ""
         self._path = os.path.join(copilot_dir, f"background-tasks{env_suffix}.json")
         self._lock = threading.Lock()
+        self._tasks_cache = None  # in-memory cache; avoids disk I/O on every read
         self._bg_events = {}  # {origin_session_id: [event_dicts]}
         self._bg_events_lock = threading.Lock()
+        self._cleanup_thread_started = False
+
+    def _start_cleanup_thread(self):
+        """Start a daemon thread that runs cleanup_old() every 5 minutes."""
+        if self._cleanup_thread_started:
+            return
+        self._cleanup_thread_started = True
+
+        def _cleanup_loop():
+            while True:
+                time.sleep(300)
+                try:
+                    self.cleanup_old()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_cleanup_loop, daemon=True).start()
 
     def _load(self) -> list:
+        """Return the in-memory cache once warm; only touch disk on a cold start."""
+        if self._tasks_cache is not None:
+            return self._tasks_cache
         try:
             with open(self._path, "r") as f:
-                return json.load(f)
+                self._tasks_cache = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            return []
+            self._tasks_cache = []
+        return self._tasks_cache
+
+    def _save_unlocked(self, tasks: list):
+        """Atomic write (temp file + rename) plus cache update. Caller holds the lock."""
+        self._tasks_cache = tasks
+        tmp_path = self._path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(tasks, f, indent=2, default=str)
+            os.replace(tmp_path, self._path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            with open(self._path, "w") as f:
+                json.dump(tasks, f, indent=2, default=str)
 
     def _save(self, tasks: list):
-        with open(self._path, "w") as f:
-            json.dump(tasks, f, indent=2, default=str)
+        self._save_unlocked(tasks)
+
+    def _evict_oldest_terminal(self, tasks: list) -> list:
+        """Evict tasks to make room for one new task, enforcing MAX_TOTAL_TASKS.
+
+        Called pre-append, so trims to MAX_TOTAL_TASKS - 1 rather than
+        MAX_TOTAL_TASKS, ensuring the store never exceeds the cap after
+        append. Terminal tasks (completed/failed/killed) are preferred
+        eviction candidates; when none are available, the oldest queued
+        task is evicted next, then the oldest running task as a last
+        resort, so the cap is always honoured regardless of statuses.
+        """
+        cap = self.MAX_TOTAL_TASKS - 1
+        if len(tasks) <= cap:
+            return tasks
+
+        terminal_statuses = {"completed", "failed", "killed"}
+        terminal_tasks = [
+            (i, t) for i, t in enumerate(tasks) if t.get("status") in terminal_statuses
+        ]
+        evict_count = len(tasks) - cap
+
+        if terminal_tasks:
+            terminal_tasks.sort(
+                key=lambda x: x[1].get("completed_at", "") or x[1].get("created_at", "")
+            )
+            evict_indices = {idx for idx, _ in terminal_tasks[:evict_count]}
+            return [t for i, t in enumerate(tasks) if i not in evict_indices]
+
+        # No terminal tasks: evict oldest queued first, then oldest running.
+        evict_indices = set()
+        remaining = evict_count
+        for priority_status in ("queued", "running"):
+            if remaining <= 0:
+                break
+            candidates = [
+                (i, t)
+                for i, t in enumerate(tasks)
+                if t.get("status") == priority_status and i not in evict_indices
+            ]
+            candidates.sort(key=lambda x: x[1].get("created_at", ""))
+            for idx, _ in candidates[:remaining]:
+                evict_indices.add(idx)
+                remaining -= 1
+        return [t for i, t in enumerate(tasks) if i not in evict_indices]
 
     def _user_key(self, channel: str, identity: str) -> str:
         # Strip channel prefix from identity to avoid double-prefixing
@@ -926,10 +1011,84 @@ class BackgroundTaskManager:
             "actual_model": None,
         }
         with self._lock:
-            tasks = self._load()
+            tasks = self._evict_oldest_terminal(self._load())
             tasks.append(task)
-            self._save(tasks)
+            self._save_unlocked(tasks)
+        self._start_cleanup_thread()
         return task
+
+    def create_task_checked(
+        self,
+        task_id: str,
+        session_id: str,
+        user_identity: str,
+        channel: str,
+        agent: str,
+        runtime: str,
+        model: str,
+        prompt: str,
+        max_concurrent: int,
+        pid: int = 0,
+        timeout: int = None,
+        notify: bool = True,
+        origin_session_id: str = None,
+        permission_mode: str = "restricted",
+        fallback_runtime: str = None,
+        fallback_model: str = None,
+    ) -> tuple:
+        """Atomically check the concurrency limit and create the task (TOCTOU-safe).
+
+        Holds self._lock for the entire check-then-create sequence so no
+        concurrent caller can slip through the same slot window between a
+        count_running() read and a create_task() write.
+
+        Returns (task dict, status string) where status is "running" or "queued".
+        """
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._lock:
+            tasks = self._load()
+            running = sum(
+                1
+                for t in tasks
+                if self._identity_matches(t, channel, user_identity)
+                and (not agent or t.get("agent") == agent)
+                and t["status"] == "running"
+            )
+            status = "queued" if running >= max_concurrent else "running"
+            task = {
+                "task_id": task_id,
+                "session_id": session_id,
+                "user_key": self._user_key(channel, identity=user_identity),
+                "channel": channel,
+                "user_identity": user_identity,
+                "agent": agent,
+                "runtime": runtime,
+                "model": model,
+                "prompt": prompt,
+                "status": status,
+                "pid": pid,
+                "created_at": now,
+                "started_at": now if status == "running" else None,
+                "completed_at": None,
+                "output_lines": [],
+                "tool_calls": [],
+                "final_response": None,
+                "error": None,
+                "timeout": timeout,
+                "notify": notify,
+                "origin_session_id": origin_session_id,
+                "permission_mode": permission_mode,
+                "fallback_runtime": fallback_runtime,
+                "fallback_model": fallback_model,
+                "used_fallback": False,
+                "actual_runtime": None,
+                "actual_model": None,
+            }
+            tasks = self._evict_oldest_terminal(tasks)
+            tasks.append(task)
+            self._save_unlocked(tasks)
+        self._start_cleanup_thread()
+        return task, status
 
     def get_task(self, task_id: str) -> Optional[dict]:
         with self._lock:
@@ -1120,18 +1279,23 @@ class BackgroundTaskManager:
         return False
 
     def cleanup_old(self):
+        """Purge terminal tasks older than CLEANUP_AGE_HOURS and enforce MAX_TOTAL_TASKS."""
         cutoff = time.time() - (self.CLEANUP_AGE_HOURS * 3600)
         with self._lock:
             tasks = self._load()
             kept = []
             for t in tasks:
-                if t["status"] == "running":
+                if t["status"] in ("running", "queued"):
                     kept.append(t)
                     continue
                 completed = t.get("completed_at")
                 if completed:
                     try:
-                        ct = time.mktime(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
+                        # UTC-correct: completed_at is a UTC timestamp (gmtime),
+                        # so it must be parsed with timegm, not mktime (which
+                        # interprets the struct_time as local time and silently
+                        # skews the cutoff comparison on any non-UTC host).
+                        ct = calendar.timegm(time.strptime(completed, "%Y-%m-%dT%H:%M:%SZ"))
                         if ct > cutoff:
                             kept.append(t)
                             continue
@@ -1140,8 +1304,9 @@ class BackgroundTaskManager:
                         continue
                 else:
                     kept.append(t)
+            kept = self._evict_oldest_terminal(kept)
             if len(kept) < len(tasks):
-                self._save(kept)
+                self._save_unlocked(kept)
 
     def reconcile_stale_tasks(self) -> dict:
         """Reconcile orphaned tasks after a service restart.
@@ -3589,10 +3754,6 @@ You can mention an agent in your prompt and it will auto-delegate:
         channel = session_data.get("channel", "webui")
         identity = self._bg_identity or "unknown"
 
-        running = self._bg_task_mgr.count_running(channel, identity)
-        if running >= BackgroundTaskManager.MAX_TASKS_PER_USER:
-            return f"❌ Maximum {BackgroundTaskManager.MAX_TASKS_PER_USER} concurrent background tasks allowed."
-
         # Priority: explicit timeout= > dispatch_config.timeout > default
 
         if bg_timeout_override is not None:
@@ -3601,14 +3762,20 @@ You can mention an agent in your prompt and it will auto-delegate:
 
         else:
 
-            agent_config = self.AGENTS.get(bg_agent, {})
-
             dispatch_config = agent_config.get("dispatch_config", {})
 
             bg_timeout = dispatch_config.get("timeout", get_bg_command_timeout())
         task_id = f"bg_{str(uuid4())[:8]}"
         bg_session_id = f"bg_{str(uuid4())[:8]}"
-        self._bg_task_mgr.create_task(
+        # Resolve per-agent concurrency limit (falls back to the global cap) --
+        # the slash handler used to ignore this and enforce only the global
+        # MAX_TASKS_PER_USER, letting an agent configured with a lower
+        # max_concurrent bypass its own limit via /background.
+        max_concurrent = agent_config.get(
+            "max_concurrent", BackgroundTaskManager.MAX_TASKS_PER_USER
+        )
+        # Atomic check-and-create prevents TOCTOU race (Issue #192)
+        _task, task_status = self._bg_task_mgr.create_task_checked(
             task_id=task_id,
             session_id=bg_session_id,
             user_identity=identity,
@@ -3617,9 +3784,19 @@ You can mention an agent in your prompt and it will auto-delegate:
             runtime=bg_runtime,
             model=bg_model,
             prompt=bg_prompt,
+            max_concurrent=max_concurrent,
             origin_session_id=n8n_session_id,
             permission_mode=bg_permission_mode,
         )
+        if task_status == "queued":
+            return (
+                f"⏳ **Background task queued.**\n\n"
+                f"• **Task ID:** `{task_id}`\n"
+                f"• **Agent:** `{bg_agent}` | Runtime: `{bg_runtime}` | Model: `{bg_model}`\n"
+                f"• **Reason:** Maximum {max_concurrent} concurrent tasks for this agent.\n\n"
+                f"The task will start automatically when a slot opens. "
+                f"Use `/background status {task_id}` to monitor."
+            )
         # Launch in background thread
         import concurrent.futures as _cf
 
@@ -12681,6 +12858,8 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
 
     @app.get("/api/v1/health")
     async def health():
+        # Must not call load_session_map() (blocking disk I/O) -- health
+        # has to respond in constant time regardless of session-store size.
         return {
             "status": "ok",
             "uptime_seconds": time.time() - _start_time,
@@ -12688,7 +12867,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "environment": APP_ENV,
             "agents_loaded": len(session_mgr.AGENTS),
             "scheduler_enabled": SCHEDULER_ENABLED,
-            "active_sessions": len(session_mgr.load_session_map()),
             "remote_api_url": REMOTE_API_URL or None,
         }
 
@@ -15857,8 +16035,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         # (not here at API time) so queued/promoted tasks get fresh context.
         effective_prompt = body.prompt
 
-        # Check concurrent limit — queue instead of rejecting
-        running = bg_task_mgr.count_running(channel, identity, agent)
         agent_config = session_mgr.AGENTS.get(agent, {})
         dispatch_config = agent_config.get("dispatch_config", {})
         # Use primary_runtime/primary_model from agents.json (NOT dispatch_config)
@@ -15892,28 +16068,34 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 )
         if perm_mode not in ("elevated", "restricted", "sandboxed"):
             perm_mode = "restricted"
-        if running >= max_concurrent:
-            # Queue the task — it will be promoted when a running task finishes
-            task = bg_task_mgr.create_task(
-                task_id=task_id,
-                session_id=session_id,
-                user_identity=identity,
-                channel=channel,
-                agent=agent,
-                runtime=runtime,
-                model=model,
-                prompt=effective_prompt,
-                status="queued",
-                timeout=bg_timeout,
-                notify=notify_pref,
-                origin_session_id=body.origin_session_id,
-                fallback_runtime=body.fallback_runtime,
-                fallback_model=body.fallback_model,
-                permission_mode=perm_mode,
-            )
+
+        # Atomically check the concurrency limit and create the task —
+        # TOCTOU-safe (Issue #192). count_running() and create_task() used to
+        # be separate calls with no shared lock, so two simultaneous requests
+        # could both read "under the limit" and both start running.
+        task, task_status = bg_task_mgr.create_task_checked(
+            task_id=task_id,
+            session_id=session_id,
+            user_identity=identity,
+            channel=channel,
+            agent=agent,
+            runtime=runtime,
+            model=model,
+            prompt=effective_prompt,
+            max_concurrent=max_concurrent,
+            timeout=bg_timeout,
+            notify=notify_pref,
+            origin_session_id=body.origin_session_id,
+            permission_mode=perm_mode,
+            fallback_runtime=body.fallback_runtime,
+            fallback_model=body.fallback_model,
+        )
+
+        if task_status == "queued":
             queue_pos = bg_task_mgr.count_queued(channel, identity)
+            running = bg_task_mgr.count_running(channel, identity, agent)
             print(
-                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{BackgroundTaskManager.MAX_TASKS_PER_USER} slots full)"
+                f"[API] Task {task_id} queued (position {queue_pos}, {running}/{max_concurrent} slots full)"
             )
             return {
                 "task_id": task_id,
@@ -15926,25 +16108,6 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 "queue_position": queue_pos,
                 "timeout": bg_timeout,
             }
-
-        # Create task record (running immediately)
-        task = bg_task_mgr.create_task(
-            task_id=task_id,
-            session_id=session_id,
-            user_identity=identity,
-            channel=channel,
-            agent=agent,
-            runtime=runtime,
-            model=model,
-            prompt=effective_prompt,
-            status="running",
-            timeout=bg_timeout,
-            notify=notify_pref,
-            origin_session_id=body.origin_session_id,
-            permission_mode=perm_mode,
-            fallback_runtime=body.fallback_runtime,
-            fallback_model=body.fallback_model,
-        )
 
         # Run in background thread using shared executor
         loop = asyncio.get_running_loop()
