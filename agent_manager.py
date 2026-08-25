@@ -6476,12 +6476,19 @@ You can mention an agent in your prompt and it will auto-delegate:
                         obj = _json_strip.loads(line_stripped)
                         _has_json = True
                         obj_type = obj.get("type", "")
-                        if obj_type == "message" and obj.get("role") == "assistant":
+                        # Gemini CLI uses role="model" per Google's API convention,
+                        # not "assistant" -- both are accepted (Issue #178).
+                        if obj_type == "message" and obj.get("role") in (
+                            "assistant",
+                            "model",
+                        ):
                             content = obj.get("content", "")
                             if content:
                                 _text_parts.append(content)
                         elif obj_type == "result":
-                            pass  # skip stats
+                            err = obj.get("error")
+                            if err:
+                                _text_parts.append(f"[Gemini Error] {err}")
                         elif obj_type in ("tool_use", "tool_result", "init"):
                             pass  # skip tool events and init
                         continue
@@ -7993,10 +8000,15 @@ User Request:
                                     try:
                                         _gobj = _json.loads(_line_stripped)
                                         _gtype = _gobj.get("type", "")
-                                        if (
-                                            _gtype == "message"
-                                            and _gobj.get("role") == "assistant"
-                                        ):
+                                        # Gemini CLI uses role="model" per Google's
+                                        # API convention, not "assistant" -- both are
+                                        # accepted (Issue #178). Any other role on a
+                                        # "message" event (e.g. "user") is a raw echo
+                                        # of the prompt and must be dropped, not
+                                        # pushed as a chunk.
+                                        if _gtype == "message" and _gobj.get(
+                                            "role"
+                                        ) in ("assistant", "model"):
                                             _content = _gobj.get("content", "")
                                             if _content:
                                                 if stream_buffer:
@@ -8009,6 +8021,8 @@ User Request:
                                                         ("chunk", _content),
                                                     )
                                             continue
+                                        elif _gtype == "message":
+                                            continue  # e.g. role="user" -- drop, don't echo
                                         elif _gtype == "tool_use":
                                             _tool_call_counter[0] += 1
                                             tc_event = {
