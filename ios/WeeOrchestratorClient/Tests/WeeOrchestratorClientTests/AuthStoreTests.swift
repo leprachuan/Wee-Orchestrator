@@ -10,6 +10,7 @@ private final class FakeAuthAPI: AuthAPI {
     var verifyPairingResult: Result<PairingVerificationResponse, Error> = .success(
         PairingVerificationResponse(
             token: "session_abc123",
+            tokenId: "token_fake_1",
             expiresIn: 3600,
             absoluteExpiresIn: 86400,
             identity: "123456789",
@@ -19,15 +20,15 @@ private final class FakeAuthAPI: AuthAPI {
     )
 
     private(set) var requestPairingCalls: [(identity: String, channel: String)] = []
-    private(set) var verifyPairingCalls: [(code: String, identity: String)] = []
+    private(set) var verifyPairingCalls: [(code: String, identity: String, deviceName: String?, platform: String?)] = []
 
     func requestPairing(identity: String, channel: String) async throws -> PairingRequestResponse {
         requestPairingCalls.append((identity: identity, channel: channel))
         return try requestPairingResult.get()
     }
 
-    func verifyPairing(code: String, identity: String) async throws -> PairingVerificationResponse {
-        verifyPairingCalls.append((code: code, identity: identity))
+    func verifyPairing(code: String, identity: String, deviceName: String?, platform: String?) async throws -> PairingVerificationResponse {
+        verifyPairingCalls.append((code: code, identity: identity, deviceName: deviceName, platform: platform))
         return try verifyPairingResult.get()
     }
 }

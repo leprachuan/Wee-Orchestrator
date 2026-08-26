@@ -330,10 +330,23 @@ struct PairingRequestResponse: Codable {
 struct PairingVerificationBody: Codable {
     let code: String
     let identity: String
+    /// Shown back to the user in the device-token management UI (Settings,
+    /// WebUI) so they can tell devices apart when revoking. Not security
+    /// sensitive — purely a display label.
+    let deviceName: String?
+    let platform: String?
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case identity
+        case deviceName = "device_name"
+        case platform
+    }
 }
 
 struct PairingVerificationResponse: Codable {
     let token: String
+    let tokenId: String?
     let expiresIn: Int
     let absoluteExpiresIn: Int
     let identity: String
@@ -342,10 +355,44 @@ struct PairingVerificationResponse: Codable {
 
     enum CodingKeys: String, CodingKey {
         case token
+        case tokenId = "token_id"
         case expiresIn = "expires_in"
         case absoluteExpiresIn = "absolute_expires_in"
         case identity
         case channel
         case username
     }
+}
+
+/// One of the caller's own long-lived device tokens/sessions, as returned
+/// by `GET /api/v1/auth/devices`. Metadata only — the API never returns
+/// raw tokens after the initial pairing response.
+struct DeviceToken: Codable, Identifiable {
+    let tokenId: String
+    let deviceName: String
+    let platform: String
+    let channel: String
+    let createdAt: Double?
+    let lastUsed: Double?
+    let expiresAt: Double?
+    let absoluteExpiresAt: Double?
+    let current: Bool
+
+    var id: String { tokenId }
+
+    enum CodingKeys: String, CodingKey {
+        case tokenId = "token_id"
+        case deviceName = "device_name"
+        case platform
+        case channel
+        case createdAt = "created_at"
+        case lastUsed = "last_used"
+        case expiresAt = "expires_at"
+        case absoluteExpiresAt = "absolute_expires_at"
+        case current
+    }
+}
+
+struct DeviceTokensResponse: Codable {
+    let devices: [DeviceToken]
 }
