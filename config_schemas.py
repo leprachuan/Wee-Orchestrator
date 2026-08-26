@@ -303,6 +303,170 @@ def validate_webex_config(data: dict) -> WebEXConfigSchema:
 
 
 # ---------------------------------------------------------------------------
+# router_config.json schema (issue #506 — LLM model router)
+# ---------------------------------------------------------------------------
+
+_ROUTER_BRAIN_KNOWN = {"runtime", "model"}
+
+
+class RouterBrainConfig(BaseModel):
+    """Runtime+model pair used to invoke the router's decision-making LLM."""
+
+    model_config = ConfigDict(extra="allow")
+
+    runtime: str
+    model: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_unknown(cls, values: Any) -> Any:
+        _warn_unknown_keys(values, _ROUTER_BRAIN_KNOWN, "router_config.brain")
+        return values
+
+    @model_validator(mode="after")
+    def no_recursion(self) -> "RouterBrainConfig":
+        if self.runtime == "router":
+            raise ValueError("brain.runtime cannot be 'router' (no recursive routing)")
+        return self
+
+
+_ROUTER_ALLOWLIST_ENTRY_KNOWN = {"runtime", "model", "hint"}
+
+
+class RouterAllowlistEntry(BaseModel):
+    """A single routable runtime+model target."""
+
+    model_config = ConfigDict(extra="allow")
+
+    runtime: str
+    model: str
+    hint: Optional[str] = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_unknown(cls, values: Any) -> Any:
+        _warn_unknown_keys(values, _ROUTER_ALLOWLIST_ENTRY_KNOWN, "router_config.allowlist[]")
+        return values
+
+    @model_validator(mode="after")
+    def no_recursion(self) -> "RouterAllowlistEntry":
+        if self.runtime == "router":
+            raise ValueError("allowlist entries cannot target 'router' itself")
+        return self
+
+
+_ROUTER_FALLBACK_KNOWN = {"runtime", "model"}
+
+
+class RouterFallbackConfig(BaseModel):
+    """Safe fallback pair used when the router brain fails, times out, or
+    returns an invalid/disallowed decision."""
+
+    model_config = ConfigDict(extra="allow")
+
+    runtime: str
+    model: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_unknown(cls, values: Any) -> Any:
+        _warn_unknown_keys(values, _ROUTER_FALLBACK_KNOWN, "router_config.fallback")
+        return values
+
+    @model_validator(mode="after")
+    def no_recursion(self) -> "RouterFallbackConfig":
+        if self.runtime == "router":
+            raise ValueError("fallback.runtime cannot be 'router'")
+        return self
+
+
+_ROUTER_STICKINESS_KNOWN = {"enabled", "prefer_same_runtime", "window_seconds"}
+
+
+class RouterStickinessConfig(BaseModel):
+    """Preference for reusing the previously-routed runtime/model so the
+    underlying runtime's own session (and its prompt cache) is reused."""
+
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    prefer_same_runtime: bool = True
+    window_seconds: int = 900
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_unknown(cls, values: Any) -> Any:
+        _warn_unknown_keys(values, _ROUTER_STICKINESS_KNOWN, "router_config.stickiness")
+        return values
+
+
+_ROUTER_CONFIG_KNOWN = {
+    "enabled",
+    "brain",
+    "timeout_seconds",
+    "prompt_template",
+    "allowlist",
+    "fallback",
+    "stickiness",
+    "cooldown_seconds",
+}
+
+_REQUIRED_ROUTER_TEMPLATE_PLACEHOLDERS = ("{allowlist_table}", "{user_message}")
+
+
+class RouterConfigSchema(BaseModel):
+    """Schema for config/router_config.json (issue #506).
+
+    This is the API-facing validator used by PUT /api/v1/router-config to
+    return structured 422 errors. llm_router.RouterConfig.validate() runs the
+    same checks independently as a defense-in-depth guard for callers that
+    write the file directly (e.g. tests, manual edits) without going through
+    the API.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = False
+    brain: RouterBrainConfig
+    timeout_seconds: float = 30
+    prompt_template: str
+    allowlist: List[RouterAllowlistEntry]
+    fallback: RouterFallbackConfig
+    stickiness: RouterStickinessConfig = Field(default_factory=RouterStickinessConfig)
+    cooldown_seconds: float = 300
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_unknown(cls, values: Any) -> Any:
+        _warn_unknown_keys(values, _ROUTER_CONFIG_KNOWN, "router_config.json")
+        return values
+
+    @model_validator(mode="after")
+    def check_semantics(self) -> "RouterConfigSchema":
+        if not self.allowlist:
+            raise ValueError("allowlist must contain at least one runtime/model pair")
+        for placeholder in _REQUIRED_ROUTER_TEMPLATE_PLACEHOLDERS:
+            if placeholder not in self.prompt_template:
+                raise ValueError(f"prompt_template missing required placeholder {placeholder}")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a positive number")
+        if self.cooldown_seconds < 0:
+            raise ValueError("cooldown_seconds must be a non-negative number")
+        return self
+
+
+def validate_router_config(data: dict) -> RouterConfigSchema:
+    """Validate router_config.json data.
+
+    Raises pydantic.ValidationError on structural or semantic failures
+    (missing brain/allowlist/fallback, recursive 'router' targets, a
+    prompt_template missing required placeholders, non-positive timeouts).
+    Unknown keys produce UserWarnings.
+    """
+    return RouterConfigSchema.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
 # Registry: maps config file basename -> validator function
 # Used by base_connector.BaseConfig._load_config to auto-validate on load.
 # ---------------------------------------------------------------------------
