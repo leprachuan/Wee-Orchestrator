@@ -2740,7 +2740,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `devin` (Devin CLI)\n"
                 "• `cursor` (Cursor Agent CLI)\n"
                 "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)\n"
-                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)"
+                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)\n"
+                "• `router` (LLM Router — picks a runtime/model per message; issue #506)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -2757,11 +2758,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "devin",
                 "cursor",
                 "wee",
+                "router",
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
                     "copilot, copilot-sdk, opencode, claude, claude-sdk, "
-                    "gemini, codex, devin, cursor, or wee."
+                    "gemini, codex, devin, cursor, wee, or router."
+                )
+            if new_runtime == "router" and not check_runtime_available("router"):
+                return (
+                    "Runtime 'router' is not available: routing is disabled or its "
+                    "configured brain runtime is unavailable. Enable it via "
+                    "PUT /api/v1/router-config first."
                 )
 
             # Capture previous session state before any updates
@@ -2848,6 +2856,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
             elif new_runtime == "wee":
                 default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
+            elif new_runtime == "router":
+                default_model = "auto-routed"  # cosmetic only; run_router() ignores it
 
             self.update_session_field(n8n_session_id, "model", default_model)
             if prev_runtime != new_runtime and handoff_prepared:
@@ -13354,6 +13364,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "cursor",
             "wee",
             "ollama",
+            "router",
         }
         if runtime not in known_runtimes:
             return {
@@ -20228,8 +20239,9 @@ Examples:
             "devin",
             "cursor",
             "wee",
+            "router",
         ],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee)",  # noqa: E501
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee, router)",  # noqa: E501
     )
     runtime_group.add_argument(
         "--list-runtimes",
