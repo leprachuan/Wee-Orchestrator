@@ -1,0 +1,232 @@
+/*
+ * RouterSettingsPanel — Leprachuan Glassmorphism
+ * Mirrors AgentSettingsPanel.css's tokens and structure (issue #506).
+ */
+
+/* ── Panel Overlay ───────────────────────────────────────────────────────── */
+.rsp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 8900;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.rsp-panel {
+  margin-top: 4vh;
+  width: 640px;
+  max-width: 96vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg, rgba(18,28,25,0.72));
+  backdrop-filter: var(--glass-blur, blur(24px) saturate(180%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(24px) saturate(180%));
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.12));
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(62,207,142,0.08);
+}
+
+/* ── Header / Footer ─────────────────────────────────────────────────────── */
+.rsp-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--glass-border, rgba(255,255,255,0.10));
+  flex-shrink: 0;
+}
+
+.rsp-title {
+  flex: 1;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary, rgba(255,255,255,0.92));
+  margin: 0;
+}
+
+.rsp-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--glass-border, rgba(255,255,255,0.10));
+  flex-shrink: 0;
+}
+
+/* ── Body ─────────────────────────────────────────────────────────────────── */
+.rsp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.rsp-loading {
+  color: var(--text-secondary, rgba(255,255,255,0.65));
+  padding: 20px 0;
+  text-align: center;
+}
+
+.rsp-section {
+  margin-bottom: 22px;
+}
+
+.rsp-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 10px;
+}
+
+.rsp-hint {
+  font-size: 0.78rem;
+  color: var(--text-secondary, rgba(255,255,255,0.55));
+  margin: 4px 0 10px;
+  line-height: 1.4;
+}
+
+.rsp-hint code {
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.rsp-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* ── Toggle / badge ───────────────────────────────────────────────────────── */
+.rsp-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rsp-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--text-primary, rgba(255,255,255,0.9));
+  cursor: pointer;
+}
+
+.rsp-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.rsp-badge--on {
+  background: rgba(62,207,142,0.18);
+  color: #3ecf8e;
+}
+
+.rsp-badge--off {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-secondary, rgba(255,255,255,0.55));
+}
+
+/* ── Allowlist ────────────────────────────────────────────────────────────── */
+.rsp-allowlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.rsp-allowlist-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.5fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.rsp-allowlist-hint {
+  font-size: 0.85rem;
+}
+
+/* ── Prompt textarea ──────────────────────────────────────────────────────── */
+.rsp-prompt-input {
+  width: 100%;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* ── Test route ───────────────────────────────────────────────────────────── */
+.rsp-test-row {
+  display: flex;
+  gap: 8px;
+}
+
+.rsp-test-input {
+  flex: 1;
+}
+
+.rsp-test-result {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--glass-border, rgba(255,255,255,0.10));
+  font-size: 0.85rem;
+}
+
+.rsp-test-source {
+  color: var(--text-secondary, rgba(255,255,255,0.55));
+  font-size: 0.78rem;
+}
+
+.rsp-test-reason {
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+  margin-top: 4px;
+}
+
+.rsp-test-latency {
+  color: var(--text-secondary, rgba(255,255,255,0.5));
+  font-size: 0.75rem;
+  margin-top: 6px;
+}
+
+/* ── Error banner ─────────────────────────────────────────────────────────── */
+.rsp-error-banner {
+  background: rgba(220,60,60,0.15);
+  border: 1px solid rgba(220,60,60,0.35);
+  color: #ff9b9b;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 0.82rem;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+.rsp-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+.rsp-toast--success { background: rgba(62,207,142,0.92); color: #06231a; }
+.rsp-toast--error { background: rgba(220,60,60,0.92); color: #2a0505; }
+.rsp-toast--warning { background: rgba(230,180,60,0.92); color: #2a1f05; }
