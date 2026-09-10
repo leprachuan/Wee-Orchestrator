@@ -37,6 +37,51 @@ SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
 
 
+def _terminate_process_group(process: subprocess.Popen, grace_seconds: float = 5.0) -> None:
+    """Terminate a background-task child and every process it spawned.
+
+    Background runtimes occasionally leave a quiet child (or grandchild) alive.
+    Killing only the direct process is insufficient and can keep worker slots
+    occupied forever, so background jobs are launched in their own session and
+    cleaned up as a process group.
+    """
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=grace_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _start_background_timeout_watchdog(
+    process: subprocess.Popen, timeout_seconds: float
+) -> Tuple[threading.Event, threading.Event, threading.Thread]:
+    """Start a stdout-independent timeout watchdog for a background process."""
+    finished = threading.Event()
+    timed_out = threading.Event()
+
+    def _watchdog() -> None:
+        if not finished.wait(timeout_seconds) and process.poll() is None:
+            timed_out.set()
+            _terminate_process_group(process)
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
+    return finished, timed_out, watchdog
+
+
 def _model_manifest_runtime_key(runtime: str) -> str:
     """Map runtime aliases onto model-manifest.json `runtimes` keys.
 
@@ -15568,6 +15613,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 env=env,
                 cwd=agent_dir,
                 bufsize=1,
+                start_new_session=(os.name == "posix"),
             )
 
             bg_task_mgr.update_task(task_id, pid=process.pid)
@@ -15587,7 +15633,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             stderr_thread.start()
 
             stdout_lines = []
-            start_time = time.time()
+            _process_finished, _process_timed_out, _timeout_watchdog = (
+                _start_background_timeout_watchdog(process, proc_timeout)
+            )
 
             for line in process.stdout:
                 line_text = line.rstrip("\n\r")
@@ -15716,18 +15764,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if tc:
                     bg_task_mgr.append_tool_call(task_id, tc)
 
-                # Check timeout
-                if time.time() - start_time > proc_timeout:
-                    process.kill()
-                    break
-
+            _process_finished.set()
             process.stdout.close()
             stderr_thread.join(timeout=5)
-            process.wait()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _terminate_process_group(process)
+                process.wait(timeout=5)
 
             output = "".join(stdout_lines).strip()
             if stderr_lines:
                 output += "\n[stderr]\n" + "".join(stderr_lines)
+
+            if _process_timed_out.is_set():
+                output = output or f"Task timed out after {proc_timeout}s"
+                process.returncode = process.returncode or -signal.SIGTERM
 
             if process.returncode == 0:
                 # Strip CLI metadata (tool decoration, stats) from final output
@@ -15815,6 +15867,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         env=_fb_env,
                         cwd=agent_dir,
                         bufsize=1,
+                        start_new_session=(os.name == "posix"),
                     )
                     bg_task_mgr.update_task(task_id, pid=_fb_proc.pid)
 
@@ -15831,7 +15884,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         target=_drain_fb_stderr, daemon=True
                     )
                     _fb_stderr_thread.start()
-                    _fb_start = time.time()
+                    _fb_finished, _fb_timed_out, _fb_watchdog = (
+                        _start_background_timeout_watchdog(_fb_proc, proc_timeout)
+                    )
 
                     for _fl in _fb_proc.stdout:
                         _fb_stdout_lines.append(_fl)
@@ -15842,17 +15897,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if _fb_tc:
                             _fb_tc["runtime"] = _eff_fb_runtime
                             bg_task_mgr.append_tool_call(task_id, _fb_tc)
-                        if time.time() - _fb_start > proc_timeout:
-                            _fb_proc.kill()
-                            break
-
+                    _fb_finished.set()
                     _fb_proc.stdout.close()
                     _fb_stderr_thread.join(timeout=5)
-                    _fb_proc.wait()
+                    try:
+                        _fb_proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        _terminate_process_group(_fb_proc)
+                        _fb_proc.wait(timeout=5)
 
                     _fb_output = "".join(_fb_stdout_lines).strip()
                     if _fb_stderr_lines:
                         _fb_output += "\n[stderr]\n" + "".join(_fb_stderr_lines)
+
+                    if _fb_timed_out.is_set():
+                        _fb_output = _fb_output or f"Task timed out after {proc_timeout}s"
+                        _fb_proc.returncode = _fb_proc.returncode or -signal.SIGTERM
 
                     if _fb_proc.returncode == 0:
                         _fb_final = (
