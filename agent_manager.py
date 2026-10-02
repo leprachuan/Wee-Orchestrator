@@ -1302,6 +1302,38 @@ def find_executable(name: str) -> Optional[str]:
     return None
 
 
+_CODEX_EXEC_AUTO_APPROVAL_ARGS: Dict[str, List[str]] = {}
+
+
+def codex_exec_auto_approval_args(codex_bin: str) -> List[str]:
+    """Return non-elevated Codex exec flags supported by the installed CLI.
+
+    Codex removed ``--full-auto`` before v0.128.0 and introduced
+    ``--approve-for-me`` later. Older CLIs can still grant the necessary
+    workspace access through ``--sandbox workspace-write``.
+    """
+    if codex_bin in _CODEX_EXEC_AUTO_APPROVAL_ARGS:
+        return _CODEX_EXEC_AUTO_APPROVAL_ARGS[codex_bin]
+
+    try:
+        result = subprocess.run(
+            [codex_bin, "exec", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        args = (
+            ["--approve-for-me"]
+            if result.returncode == 0 and "--approve-for-me" in result.stdout
+            else ["--sandbox", "workspace-write"]
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        args = ["--sandbox", "workspace-write"]
+
+    _CODEX_EXEC_AUTO_APPROVAL_ARGS[codex_bin] = args
+    return args
+
+
 # Environment-based configuration
 def get_default_agent() -> str:
     """Get default agent from environment or use orchestrator"""
@@ -9678,8 +9710,8 @@ User Request:
                 file=sys.stderr,
             )
         else:
-            # Start new session — v0.125.0+: --full-auto for normal mode,
-            # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
+            # Start new session — Codex CLI v0.154.0+ uses --approve-for-me
+            # for normal workspace-write mode. Elevated sessions use the sandbox bypass.
             cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
@@ -9687,8 +9719,8 @@ User Request:
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
             else:
-                # Non-elevated: --full-auto enables auto-execution without sandbox bypass
-                cmd.append("--full-auto")
+                # Select an automatic-approval flag compatible with this CLI version.
+                cmd += codex_exec_auto_approval_args(codex_bin)
             if model:
                 cmd += ["-m", model]
             cmd += self._wee_browser_codex_config_args(n8n_session_id)
@@ -15326,7 +15358,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "shell_environment_policy.inherit=all",
                     ])
                 else:
-                    _cmd.append("--full-auto")
+                    _cmd += codex_exec_auto_approval_args(_codex_bin)
                 if mdl:
                     _cmd.extend(["-m", mdl])
                 _cmd.append(ctx_prompt)
@@ -15486,7 +15518,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             ]
                         )
                     else:
-                        _cmd.append("--full-auto")
+                        _cmd += codex_exec_auto_approval_args(_codex_bin)
                     if model:
                         _cmd.extend(["-m", model])
                     _cmd.append(context_prompt)
