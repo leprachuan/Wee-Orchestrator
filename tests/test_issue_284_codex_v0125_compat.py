@@ -127,15 +127,18 @@ class TestCodexCliCompatibility(unittest.TestCase):
         )
         return captured.get("cmd", [])
 
-    def test_new_session_uses_approve_for_me_not_removed_full_auto_flag(self):
-        """Normal sessions use the current automatic-approval flag."""
+    def test_new_session_uses_a_supported_auto_approval_configuration(self):
+        """Normal sessions use a configuration supported by the local CLI."""
         cmd = self._capture_cmd_new_session()
         self.assertNotIn(
             "-p",
             cmd,
             "Old -p flag still present; causes a parse error on current Codex CLI",
         )
-        self.assertIn("--approve-for-me", cmd)
+        self.assertTrue(
+            "--approve-for-me" in cmd
+            or ("--sandbox" in cmd and "workspace-write" in cmd)
+        )
         self.assertNotIn("--full-auto", cmd)
 
     def test_old_codex_cli_falls_back_to_workspace_write_sandbox(self):
