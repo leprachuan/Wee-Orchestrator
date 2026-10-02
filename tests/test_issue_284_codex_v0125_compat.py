@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for issue #284 — Codex CLI v0.125.0 compatibility."""
+"""Regression tests for Codex CLI command-line compatibility."""
 
 import inspect
 import json
@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -14,8 +15,8 @@ import agent_manager  # noqa: E402
 from agent_manager import SessionManager  # noqa: E402
 
 
-class TestIssue284CodexV0125Compat(unittest.TestCase):
-    """Verify Codex CLI v0.125.0 flag changes are correctly handled."""
+class TestCodexCliCompatibility(unittest.TestCase):
+    """Verify Codex CLI command-line changes are correctly handled."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -126,15 +127,30 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         )
         return captured.get("cmd", [])
 
-    def test_new_session_uses_full_auto_not_p_flag(self):
-        """Old -p flag must not appear; --full-auto must be present."""
+    def test_new_session_uses_a_supported_auto_approval_configuration(self):
+        """Normal sessions use a configuration supported by the local CLI."""
         cmd = self._capture_cmd_new_session()
         self.assertNotIn(
             "-p",
             cmd,
-            "Old -p flag still present; causes parse error on v0.125.0",
+            "Old -p flag still present; causes a parse error on current Codex CLI",
         )
-        self.assertIn("--full-auto", cmd, "--full-auto missing from new session cmd")
+        self.assertTrue(
+            "--approve-for-me" in cmd
+            or ("--sandbox" in cmd and "workspace-write" in cmd)
+        )
+        self.assertNotIn("--full-auto", cmd)
+
+    def test_old_codex_cli_falls_back_to_workspace_write_sandbox(self):
+        """CLIs without --approve-for-me retain compatible writable access."""
+        agent_manager._CODEX_EXEC_AUTO_APPROVAL_ARGS.clear()
+        with mock.patch(
+            "agent_manager.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="--sandbox <SANDBOX_MODE>"),
+        ):
+            args = agent_manager.codex_exec_auto_approval_args("codex-old")
+
+        self.assertEqual(args, ["--sandbox", "workspace-write"])
 
     def test_new_session_no_verbose_flag(self):
         """--verbose flag must not appear — removed in v0.125.0."""
@@ -142,7 +158,7 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         self.assertNotIn(
             "--verbose",
             cmd,
-            "--verbose still present; causes parse error on v0.125.0",
+            "--verbose still present; causes a parse error on current Codex CLI",
         )
 
     def test_new_session_has_json_flag(self):
@@ -350,8 +366,8 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
         self.assertFalse(self.mgr.session_exists("not-a-uuid", "codex"))
         self.assertFalse(self.mgr.session_exists("", "codex"))
 
-    def test_background_codex_command_uses_v0125_flags(self):
-        """Background Codex tasks must use the v0.125.0 exec flags too."""
+    def test_background_codex_command_uses_current_exec_flags(self):
+        """Background Codex tasks must use supported current exec flags too."""
         source = inspect.getsource(agent_manager)
         start = source.find("def _build_bg_cmd(")
         self.assertGreater(start, 0, "_build_bg_cmd function not found")
@@ -367,9 +383,18 @@ class TestIssue284CodexV0125Compat(unittest.TestCase):
 
         self.assertIn('"--json"', codex_block)
         self.assertIn('"--skip-git-repo-check"', codex_block)
-        self.assertIn('"--full-auto"', codex_block)
+        self.assertIn("codex_exec_auto_approval_args(_codex_bin)", codex_block)
+        self.assertNotIn('"--full-auto"', codex_block)
         self.assertNotIn('"-p"', codex_block)
         self.assertNotIn('"--verbose"', codex_block)
+
+    def test_all_codex_launch_paths_use_current_auto_approval_flag(self):
+        """Every non-elevated Codex launch path must remain CLI-compatible."""
+        source = inspect.getsource(agent_manager)
+
+        self.assertNotIn('"--full-auto"', source)
+        # One helper definition plus each of the three launch paths.
+        self.assertEqual(source.count("codex_exec_auto_approval_args("), 4)
 
 
 if __name__ == "__main__":

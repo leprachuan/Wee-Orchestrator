@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
+import llm_router
+
 
 # Native Wee tool calls run in-process, so they cannot rely on subprocess
 # environment variables to retain the originating authenticated session.
@@ -33,6 +35,51 @@ _wee_dispatch_context = contextvars.ContextVar("wee_dispatch_context", default=N
 # Dynamically determine the repo base directory (works regardless of where repo is cloned)
 SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_MANIFEST_PATH = Path(SCRIPT_BASE_DIR) / "model-manifest.json"
+
+
+def _terminate_process_group(process: subprocess.Popen, grace_seconds: float = 5.0) -> None:
+    """Terminate a background-task child and every process it spawned.
+
+    Background runtimes occasionally leave a quiet child (or grandchild) alive.
+    Killing only the direct process is insufficient and can keep worker slots
+    occupied forever, so background jobs are launched in their own session and
+    cleaned up as a process group.
+    """
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=grace_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _start_background_timeout_watchdog(
+    process: subprocess.Popen, timeout_seconds: float
+) -> Tuple[threading.Event, threading.Event, threading.Thread]:
+    """Start a stdout-independent timeout watchdog for a background process."""
+    finished = threading.Event()
+    timed_out = threading.Event()
+
+    def _watchdog() -> None:
+        if not finished.wait(timeout_seconds) and process.poll() is None:
+            timed_out.set()
+            _terminate_process_group(process)
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
+    return finished, timed_out, watchdog
 
 
 def _model_manifest_runtime_key(runtime: str) -> str:
@@ -1255,6 +1302,38 @@ def find_executable(name: str) -> Optional[str]:
     return None
 
 
+_CODEX_EXEC_AUTO_APPROVAL_ARGS: Dict[str, List[str]] = {}
+
+
+def codex_exec_auto_approval_args(codex_bin: str) -> List[str]:
+    """Return non-elevated Codex exec flags supported by the installed CLI.
+
+    Codex removed ``--full-auto`` before v0.128.0 and introduced
+    ``--approve-for-me`` later. Older CLIs can still grant the necessary
+    workspace access through ``--sandbox workspace-write``.
+    """
+    if codex_bin in _CODEX_EXEC_AUTO_APPROVAL_ARGS:
+        return _CODEX_EXEC_AUTO_APPROVAL_ARGS[codex_bin]
+
+    try:
+        result = subprocess.run(
+            [codex_bin, "exec", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        args = (
+            ["--approve-for-me"]
+            if result.returncode == 0 and "--approve-for-me" in result.stdout
+            else ["--sandbox", "workspace-write"]
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        args = ["--sandbox", "workspace-write"]
+
+    _CODEX_EXEC_AUTO_APPROVAL_ARGS[codex_bin] = args
+    return args
+
+
 # Environment-based configuration
 def get_default_agent() -> str:
     """Get default agent from environment or use orchestrator"""
@@ -1303,6 +1382,15 @@ def check_runtime_available(runtime: str) -> bool:
         "opencode": "opencode",
         "wee": "copilot",  # Copilot SDK BYOK (OpenAI fallback during migration),
     }
+
+    # Issue #506: the "router" runtime is available only when routing is
+    # enabled (config or WEE_ROUTER_ENABLED) AND its configured brain runtime
+    # is itself available — a router with no working brain is not available.
+    if runtime == "router":
+        if not is_router_enabled():
+            return False
+        brain_runtime = get_router_config().load().get("brain", {}).get("runtime")
+        return bool(brain_runtime) and brain_runtime != "router" and check_runtime_available(brain_runtime)
 
     executable_name = runtime_map.get(runtime)
     if not executable_name:
@@ -1415,6 +1503,44 @@ def get_disabled_runtimes_manager() -> DisabledRuntimesManager:
     return _disabled_runtimes_manager
 
 
+# --- Issue #506: LLM model router ------------------------------------------
+# Singletons mirror the DisabledRuntimesManager pattern above: module-level,
+# lazily constructed, shared across SessionManager instances/threads.
+
+_router_config: "llm_router.RouterConfig | None" = None
+_runtime_cooldown_tracker: "llm_router.RuntimeCooldownTracker | None" = None
+_llm_router: "llm_router.LLMRouter | None" = None
+
+
+def get_router_config() -> "llm_router.RouterConfig":
+    global _router_config
+    if _router_config is None:
+        _router_config = llm_router.RouterConfig()
+    return _router_config
+
+
+def get_runtime_cooldown_tracker() -> "llm_router.RuntimeCooldownTracker":
+    global _runtime_cooldown_tracker
+    if _runtime_cooldown_tracker is None:
+        _runtime_cooldown_tracker = llm_router.RuntimeCooldownTracker()
+    return _runtime_cooldown_tracker
+
+
+def get_llm_router() -> "llm_router.LLMRouter":
+    global _llm_router
+    if _llm_router is None:
+        _llm_router = llm_router.LLMRouter(get_router_config(), get_runtime_cooldown_tracker())
+    return _llm_router
+
+
+def is_router_enabled() -> bool:
+    """WEE_ROUTER_ENABLED env var overrides the config file's 'enabled' flag."""
+    env_override = os.environ.get("WEE_ROUTER_ENABLED")
+    if env_override is not None:
+        return env_override.strip().lower() in ("1", "true", "yes", "on")
+    return bool(get_router_config().load().get("enabled", False))
+
+
 def get_all_runtimes() -> List[Dict[str, str]]:
     """Return all known runtimes regardless of availability or disabled state."""
     return [
@@ -1428,6 +1554,7 @@ def get_all_runtimes() -> List[Dict[str, str]]:
         {"id": "devin", "label": "devin"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
         {"id": "wee", "label": "wee", "icon": "🍀"},
+        {"id": "router", "label": "router", "icon": "🧭"},
     ]
 
 def get_available_runtimes() -> List[Dict[str, str]]:
@@ -1447,6 +1574,7 @@ def get_available_runtimes() -> List[Dict[str, str]]:
         {"id": "devin", "label": "devin"},
         {"id": "cursor", "label": "cursor", "icon": "🖱️"},
         {"id": "wee", "label": "wee", "icon": "🍀"},
+        {"id": "router", "label": "router", "icon": "🧭"},
     ]
 
     available = [rt for rt in all_runtimes if check_runtime_available(rt["id"])]
@@ -2689,7 +2817,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "• `devin` (Devin CLI)\n"
                 "• `cursor` (Cursor Agent CLI)\n"
                 "• `claude-sdk` (Claude Agent SDK — native Python, in-process tools)\n"
-                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)"
+                "• `wee` (Wee Native — OpenAI-compatible API: Ollama, OpenRouter, LM Studio)\n"
+                "• `router` (LLM Router — picks a runtime/model per message; issue #506)"
             )
         elif argument == "current":
             return f"🤖 **Current Runtime:** `{current_runtime}`"
@@ -2706,11 +2835,18 @@ You can mention an agent in your prompt and it will auto-delegate:
                 "devin",
                 "cursor",
                 "wee",
+                "router",
             ]:
                 return (
                     f"Unknown runtime: '{new_runtime}'. Use "
                     "copilot, copilot-sdk, opencode, claude, claude-sdk, "
-                    "gemini, codex, devin, cursor, or wee."
+                    "gemini, codex, devin, cursor, wee, or router."
+                )
+            if new_runtime == "router" and not check_runtime_available("router"):
+                return (
+                    "Runtime 'router' is not available: routing is disabled or its "
+                    "configured brain runtime is unavailable. Enable it via "
+                    "PUT /api/v1/router-config first."
                 )
 
             # Capture previous session state before any updates
@@ -2797,6 +2933,8 @@ You can mention an agent in your prompt and it will auto-delegate:
                 default_model = os.getenv("CURSOR_DEFAULT_MODEL", "auto")
             elif new_runtime == "wee":
                 default_model = os.getenv("WEE_DEFAULT_MODEL", "ollama/gemma4:e4b")
+            elif new_runtime == "router":
+                default_model = "auto-routed"  # cosmetic only; run_router() ignores it
 
             self.update_session_field(n8n_session_id, "model", default_model)
             if prev_runtime != new_runtime and handoff_prepared:
@@ -5050,6 +5188,7 @@ You can mention an agent in your prompt and it will auto-delegate:
             "cursor": self.fetch_cursor_models,
             "wee": self.fetch_wee_models,
             "ollama": self.fetch_ollama_models,
+            "router": self._get_router_pseudo_models,
         }
         fetcher = dispatch.get(runtime)
         if fetcher is None:
@@ -9571,8 +9710,8 @@ User Request:
                 file=sys.stderr,
             )
         else:
-            # Start new session — v0.125.0+: --full-auto for normal mode,
-            # --dangerously-bypass-approvals-and-sandbox for elevated (they are mutually exclusive)
+            # Start new session — Codex CLI v0.154.0+ uses --approve-for-me
+            # for normal workspace-write mode. Elevated sessions use the sandbox bypass.
             cmd = [codex_bin, "exec", "--json", "--skip-git-repo-check"]
             if mode == "elevated":
                 # Bypass all sandbox restrictions (sudo, DNS, network, filesystem)
@@ -9580,8 +9719,8 @@ User Request:
                 # Inherit full shell environment so sudo PATH and DNS resolv.conf are available
                 cmd += ["-c", "shell_environment_policy.inherit=all"]
             else:
-                # Non-elevated: --full-auto enables auto-execution without sandbox bypass
-                cmd.append("--full-auto")
+                # Select an automatic-approval flag compatible with this CLI version.
+                cmd += codex_exec_auto_approval_args(codex_bin)
             if model:
                 cmd += ["-m", model]
             cmd += self._wee_browser_codex_config_args(n8n_session_id)
@@ -11440,6 +11579,229 @@ User Request:
             return None
         return self.describe_missing_agent_workspace(agent, path)
 
+    def _get_router_pseudo_models(self) -> Dict:
+        """Synthetic model list for the 'router' runtime (issue #506): one
+        entry per configured allowlist pair, so UIs that expect a 'model'
+        picker for every runtime have something sensible to show. Whatever
+        is picked here is cosmetic only — run_router() ignores it and
+        chooses the real target purely from routing policy."""
+        cfg = get_router_config().load()
+        entries = []
+        for item in cfg.get("allowlist", []):
+            label = f"{item.get('runtime')}/{item.get('model')}"
+            entries.append((label, item.get("hint") or label, [label]))
+        return {"routed": entries} if entries else {}
+
+    def _agent_primary_pair(self, agent: str) -> Tuple[str, str]:
+        """Last-resort runtime+model pair when routing can't proceed at all
+        (router disabled, or even the configured fallback is unavailable)."""
+        agent_cfg = self.AGENTS.get(agent, self.AGENTS.get("orchestrator", {}))
+        rt = agent_cfg.get("primary_runtime") or get_default_runtime()
+        model = agent_cfg.get("primary_model") or get_default_model(rt)
+        return rt, model
+
+    def _resume_state_for_runtime(
+        self, runtime: str, session_id: Optional[str], n8n_session_id: str
+    ) -> bool:
+        """Compute can_resume for an arbitrary target runtime.
+
+        Mirrors the per-runtime branching in execute() (agent_manager.py,
+        the block starting 'Check if we can resume'), which normally only
+        needs to handle the session's single current_runtime. run_router()
+        needs the same logic for whichever runtime routing just picked, so
+        it's factored out here rather than duplicated inline.
+        """
+        if runtime == "gemini":
+            return True
+        if runtime in ("devin", "cursor"):
+            return (
+                self.session_exists(session_id, runtime, n8n_session_id=n8n_session_id)
+                if session_id
+                else self.session_exists("", runtime, n8n_session_id=n8n_session_id)
+            )
+        if runtime == "wee":
+            return self.session_exists(session_id, runtime, n8n_session_id=n8n_session_id)
+        return self.session_exists(session_id, runtime) if session_id else False
+
+    def _dispatch_router_target(
+        self,
+        target_runtime: str,
+        target_model: str,
+        prompt: str,
+        agent: str,
+        n8n_session_id: str,
+        effective_timeout: int,
+        render_type: str,
+        mode: str,
+        session_data: dict,
+    ) -> str:
+        """Dispatch a router-selected request to its target runtime, resuming
+        that runtime's own sub-session when one exists so repeated routing to
+        the same target reuses its prompt cache (issue #506 stickiness).
+
+        Per-target sub-session ids are tracked in session_data["router_sessions"]
+        (keyed by runtime id) rather than the session's top-level "session_id"
+        field, because several run_* implementations (copilot, claude,
+        claude-sdk, codex) write a freshly-established session id directly into
+        session_data["session_id"] as a side effect. That field is snapshotted
+        before dispatch and restored after, so a router-selected sub-target's
+        session id never leaks into the top-level field an explicit
+        `/runtime <x>` switch would otherwise inherit.
+        """
+        router_sessions = dict(session_data.get("router_sessions") or {})
+        sub_session_id = router_sessions.get(target_runtime)
+        original_session_id = session_data.get("session_id")
+
+        can_resume = self._resume_state_for_runtime(
+            target_runtime, sub_session_id, n8n_session_id
+        )
+
+        output = self._dispatch_single_runtime(
+            target_runtime,
+            prompt,
+            target_model,
+            agent,
+            sub_session_id,
+            can_resume,
+            n8n_session_id,
+            effective_timeout,
+            render_type,
+            mode,
+        )
+
+        fresh_session_data = self.get_or_create_session_data(n8n_session_id)
+        new_sub_id = fresh_session_data.get("session_id")
+        if not can_resume and target_runtime in ("copilot", "opencode", "gemini"):
+            discovered = self.get_most_recent_session_id(target_runtime, agent)
+            if discovered:
+                new_sub_id = discovered
+        if new_sub_id and new_sub_id != original_session_id:
+            router_sessions[target_runtime] = new_sub_id
+            self.update_session_field(n8n_session_id, "router_sessions", router_sessions)
+
+        # Restore the shared field regardless of the branch above — some
+        # run_* implementations write to it unconditionally.
+        self.update_session_field(n8n_session_id, "session_id", original_session_id)
+
+        return output
+
+    def run_router(
+        self,
+        prompt: str,
+        model: str,
+        agent: str,
+        session_id: Optional[str],
+        can_resume: bool,
+        n8n_session_id: str,
+        effective_timeout: int,
+        render_type: str,
+        mode: str = "restricted",
+    ) -> str:
+        """Dispatch via the LLM router (issue #506).
+
+        Picks a runtime+model pair for this request using a small 'brain' LLM
+        call (itself invoked via a full runtime dispatch, per session config),
+        then dispatches the real prompt to that pair. Never raises: every
+        failure path (router disabled, brain timeout/error, invalid/disallowed
+        decision, even a failed fallback) degrades to the agent's configured
+        primary_runtime/primary_model rather than breaking the request.
+        """
+        session_data = self.get_or_create_session_data(n8n_session_id)
+        cfg = get_router_config().load()
+
+        if not is_router_enabled():
+            agent_rt, agent_model = self._agent_primary_pair(agent)
+            print(
+                f"[Router] session={n8n_session_id} disabled -> agent primary "
+                f"{agent_rt}/{agent_model}",
+                file=sys.stderr,
+            )
+            return self._dispatch_router_target(
+                agent_rt, agent_model, prompt, agent, n8n_session_id,
+                effective_timeout, render_type, mode, session_data,
+            )
+
+        router = get_llm_router()
+        disabled_mgr = get_disabled_runtimes_manager()
+
+        def runtime_available(rt: str) -> bool:
+            return check_runtime_available(rt) and not disabled_mgr.is_disabled(rt)
+
+        def invoke_brain(brain_runtime: str, brain_model: str, brain_prompt: str, timeout: float) -> Optional[str]:
+            # One-shot, no history: a fixed (not random) sub-session id per
+            # origin session keeps the brain's own runtime storage tidy
+            # without accumulating routing chatter into the user's actual
+            # conversation history.
+            brain_session_id = f"{n8n_session_id}__router_brain"
+            return self._dispatch_single_runtime(
+                brain_runtime, brain_prompt, brain_model, agent,
+                None, False, brain_session_id, int(timeout), "plain", mode,
+            )
+
+        def resolve_model(name: str, rt: str) -> Optional[str]:
+            return self.get_model_from_name(name, rt)
+
+        last_routed = session_data.get("router_last")
+        decision = router.route(
+            prompt=prompt,
+            last_routed=last_routed,
+            runtime_available=runtime_available,
+            invoke_brain=invoke_brain,
+            resolve_model=resolve_model,
+        )
+
+        if not decision.runtime:
+            agent_rt, agent_model = self._agent_primary_pair(agent)
+            print(
+                f"[Router] session={n8n_session_id} decision=none reason={decision.reason!r} "
+                f"-> agent primary {agent_rt}/{agent_model}",
+                file=sys.stderr,
+            )
+            return self._dispatch_router_target(
+                agent_rt, agent_model, prompt, agent, n8n_session_id,
+                effective_timeout, render_type, mode, session_data,
+            )
+
+        debug = os.environ.get("WEE_ROUTER_DEBUG") == "1"
+        print(
+            f"[Router] session={n8n_session_id} decision={decision.runtime}/{decision.model} "
+            f"source={decision.source} latency_ms={decision.latency_ms}"
+            + (f" reason={decision.reason!r}" if debug else f" reason_len={len(decision.reason)}"),
+            file=sys.stderr,
+        )
+
+        output = self._dispatch_router_target(
+            decision.runtime, decision.model, prompt, agent, n8n_session_id,
+            effective_timeout, render_type, mode, session_data,
+        )
+
+        if llm_router.is_infra_failure_text(output):
+            get_runtime_cooldown_tracker().mark_failure(
+                decision.runtime, "dispatch failure", cfg.get("cooldown_seconds", 300)
+            )
+            fallback = cfg.get("fallback", {})
+            if fallback.get("runtime") and fallback.get("runtime") != decision.runtime:
+                print(
+                    f"[Router] session={n8n_session_id} target {decision.runtime} failed "
+                    f"(infra) -> retrying once with fallback "
+                    f"{fallback['runtime']}/{fallback.get('model')}",
+                    file=sys.stderr,
+                )
+                output = self._dispatch_router_target(
+                    fallback["runtime"], fallback.get("model", ""), prompt, agent,
+                    n8n_session_id, effective_timeout, render_type, mode, session_data,
+                )
+                decision = llm_router.RouteDecision(
+                    runtime=fallback["runtime"], model=fallback.get("model", ""),
+                    reason="post-dispatch infra fallback", source="fallback",
+                )
+
+        self.update_session_field(
+            n8n_session_id, "router_last",
+            {"runtime": decision.runtime, "model": decision.model, "ts": time.time()},
+        )
+        return output
+
     def _dispatch_single_runtime(
         self,
         runtime: str,
@@ -11589,6 +11951,18 @@ User Request:
                 )
             finally:
                 _wee_dispatch_context.reset(context_token)
+        elif runtime == "router":
+            result = self.run_router(
+                prompt,
+                model,
+                agent,
+                session_id,
+                can_resume,
+                n8n_session_id,
+                effective_timeout,
+                render_type,
+                mode,
+            )
         else:
             return f"Error: Unknown runtime '{runtime}'"
 
@@ -11822,23 +12196,24 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         if channel == "telegram":
-            from telegram_connector import (
-                TelegramConnector,
-                _resolve_orchestrator_bot_token,
-            )
+            import telegram_connector
+
+            TelegramConnector = telegram_connector.TelegramConnector
 
             config_path = _telegram_config_path()
             cfg = _load_telegram_config()
             file_token = cfg.get("token")
             if not isinstance(file_token, str):
                 file_token = ""
-            token = (
-                file_token
-                or os.getenv("TELEGRAM_BOT_TOKEN", "")
-                or _resolve_orchestrator_bot_token(
-                    "telegram", os.path.join(script_dir, "agents.json")
+            token = file_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            if not token:
+                resolve_bot_token = getattr(
+                    telegram_connector, "_resolve_orchestrator_bot_token", None
                 )
-            )
+                if callable(resolve_bot_token):
+                    token = resolve_bot_token(
+                        "telegram", os.path.join(script_dir, "agents.json")
+                    )
             if not token:
                 raise RuntimeError("Telegram bot token is not configured")
             connector = TelegramConnector(token, config_file=config_path)
@@ -13067,6 +13442,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             "cursor",
             "wee",
             "ollama",
+            "router",
         }
         if runtime not in known_runtimes:
             return {
@@ -14983,7 +15359,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         "shell_environment_policy.inherit=all",
                     ])
                 else:
-                    _cmd.append("--full-auto")
+                    _cmd += codex_exec_auto_approval_args(_codex_bin)
                 if mdl:
                     _cmd.extend(["-m", mdl])
                 _cmd.append(ctx_prompt)
@@ -15143,7 +15519,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                             ]
                         )
                     else:
-                        _cmd.append("--full-auto")
+                        _cmd += codex_exec_auto_approval_args(_codex_bin)
                     if model:
                         _cmd.extend(["-m", model])
                     _cmd.append(context_prompt)
@@ -15270,6 +15646,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 env=env,
                 cwd=agent_dir,
                 bufsize=1,
+                start_new_session=(os.name == "posix"),
             )
 
             bg_task_mgr.update_task(task_id, pid=process.pid)
@@ -15289,7 +15666,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             stderr_thread.start()
 
             stdout_lines = []
-            start_time = time.time()
+            _process_finished, _process_timed_out, _timeout_watchdog = (
+                _start_background_timeout_watchdog(process, proc_timeout)
+            )
 
             for line in process.stdout:
                 line_text = line.rstrip("\n\r")
@@ -15418,18 +15797,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 if tc:
                     bg_task_mgr.append_tool_call(task_id, tc)
 
-                # Check timeout
-                if time.time() - start_time > proc_timeout:
-                    process.kill()
-                    break
-
+            _process_finished.set()
             process.stdout.close()
             stderr_thread.join(timeout=5)
-            process.wait()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _terminate_process_group(process)
+                process.wait(timeout=5)
 
             output = "".join(stdout_lines).strip()
             if stderr_lines:
                 output += "\n[stderr]\n" + "".join(stderr_lines)
+
+            if _process_timed_out.is_set():
+                output = output or f"Task timed out after {proc_timeout}s"
+                process.returncode = process.returncode or -signal.SIGTERM
 
             if process.returncode == 0:
                 # Strip CLI metadata (tool decoration, stats) from final output
@@ -15517,6 +15900,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         env=_fb_env,
                         cwd=agent_dir,
                         bufsize=1,
+                        start_new_session=(os.name == "posix"),
                     )
                     bg_task_mgr.update_task(task_id, pid=_fb_proc.pid)
 
@@ -15533,7 +15917,9 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         target=_drain_fb_stderr, daemon=True
                     )
                     _fb_stderr_thread.start()
-                    _fb_start = time.time()
+                    _fb_finished, _fb_timed_out, _fb_watchdog = (
+                        _start_background_timeout_watchdog(_fb_proc, proc_timeout)
+                    )
 
                     for _fl in _fb_proc.stdout:
                         _fb_stdout_lines.append(_fl)
@@ -15544,17 +15930,22 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         if _fb_tc:
                             _fb_tc["runtime"] = _eff_fb_runtime
                             bg_task_mgr.append_tool_call(task_id, _fb_tc)
-                        if time.time() - _fb_start > proc_timeout:
-                            _fb_proc.kill()
-                            break
-
+                    _fb_finished.set()
                     _fb_proc.stdout.close()
                     _fb_stderr_thread.join(timeout=5)
-                    _fb_proc.wait()
+                    try:
+                        _fb_proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        _terminate_process_group(_fb_proc)
+                        _fb_proc.wait(timeout=5)
 
                     _fb_output = "".join(_fb_stdout_lines).strip()
                     if _fb_stderr_lines:
                         _fb_output += "\n[stderr]\n" + "".join(_fb_stderr_lines)
+
+                    if _fb_timed_out.is_set():
+                        _fb_output = _fb_output or f"Task timed out after {proc_timeout}s"
+                        _fb_proc.returncode = _fb_proc.returncode or -signal.SIGTERM
 
                     if _fb_proc.returncode == 0:
                         _fb_final = (
@@ -18575,6 +18966,122 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to save .env: {e}")
 
+    @app.get("/api/v1/router-config")
+    async def get_router_config_endpoint(request: Request):
+        """Return the LLM router config (issue #506), plus validation warnings
+        and whether routing is effectively enabled once the WEE_ROUTER_ENABLED
+        env override is applied."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        cfg = get_router_config().load()
+        return {
+            "config": cfg,
+            "enabled_effective": is_router_enabled(),
+            "validation_errors": llm_router.RouterConfig.validate(cfg),
+        }
+
+    @app.put("/api/v1/router-config")
+    async def put_router_config_endpoint(request: Request):
+        """Validate and persist the LLM router config."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        config = body.get("config", body)
+        try:
+            from config_schemas import validate_router_config
+
+            validate_router_config(config)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Invalid router config: {e}")
+
+        try:
+            get_router_config().save(config)
+            return {"saved": True, "config": config}
+        except llm_router.RouterConfigError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save router config: {e}")
+
+    @app.post("/api/v1/router/test")
+    async def test_router_endpoint(request: Request):
+        """Dry-run a routing decision for a prompt, without mutating any
+        session. Lets the router prompt/allowlist be iterated on from the
+        WebUI before enabling routing for real traffic."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        body = await request.json()
+        prompt = body.get("prompt", "")
+        if not prompt or not isinstance(prompt, str):
+            raise HTTPException(status_code=400, detail="prompt is required")
+
+        disabled_mgr = get_disabled_runtimes_manager()
+
+        def runtime_available(rt: str) -> bool:
+            return check_runtime_available(rt) and not disabled_mgr.is_disabled(rt)
+
+        def invoke_brain(brain_runtime, brain_model, brain_prompt, timeout):
+            return session_mgr._dispatch_single_runtime(
+                brain_runtime, brain_prompt, brain_model, "orchestrator",
+                None, False, f"router_test_{uuid4()}", int(timeout), "plain",
+            )
+
+        def resolve_model(name, rt):
+            return session_mgr.get_model_from_name(name, rt)
+
+        router = get_llm_router()
+        cfg = router.config.load()
+        eligible = router.eligible_pairs(cfg.get("allowlist", []), runtime_available)
+        start = time.time()
+        decision = router.route(
+            prompt=prompt,
+            last_routed=None,
+            runtime_available=runtime_available,
+            invoke_brain=invoke_brain,
+            resolve_model=resolve_model,
+        )
+        return {
+            "decision": {
+                "runtime": decision.runtime,
+                "model": decision.model,
+                "reason": decision.reason,
+                "source": decision.source,
+                "latency_ms": decision.latency_ms,
+            },
+            "eligible_pairs": eligible,
+            "total_ms": int((time.time() - start) * 1000),
+        }
+
+    @app.get("/api/v1/router/status")
+    async def get_router_status_endpoint(request: Request):
+        """Router health snapshot: enabled state, brain runtime reachability,
+        and current per-runtime cooldowns (issue #506)."""
+        auth = await authenticate(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_user_identity=request.headers.get("x-user-identity"),
+            x_auth_channel=request.headers.get("x-auth-channel"),
+        )
+        cfg = get_router_config().load()
+        brain_runtime = cfg.get("brain", {}).get("runtime")
+        return {
+            "enabled": is_router_enabled(),
+            "brain": cfg.get("brain"),
+            "brain_available": bool(brain_runtime) and check_runtime_available(brain_runtime),
+            "cooldowns": get_runtime_cooldown_tracker().status(),
+        }
+
     @app.get("/api/v1/settings/model-manifest")
     async def get_model_manifest_settings(request: Request, runtime: str = "claude"):
         """Return the editable model list for a runtime.
@@ -19825,8 +20332,9 @@ Examples:
             "devin",
             "cursor",
             "wee",
+            "router",
         ],
-        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee)",  # noqa: E501
+        help="Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee, router)",  # noqa: E501
     )
     runtime_group.add_argument(
         "--list-runtimes",
