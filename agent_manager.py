@@ -12196,23 +12196,24 @@ def _send_pairing_code(channel: str, identity: str, code: str) -> bool:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         if channel == "telegram":
-            from telegram_connector import (
-                TelegramConnector,
-                _resolve_orchestrator_bot_token,
-            )
+            import telegram_connector
+
+            TelegramConnector = telegram_connector.TelegramConnector
 
             config_path = _telegram_config_path()
             cfg = _load_telegram_config()
             file_token = cfg.get("token")
             if not isinstance(file_token, str):
                 file_token = ""
-            token = (
-                file_token
-                or os.getenv("TELEGRAM_BOT_TOKEN", "")
-                or _resolve_orchestrator_bot_token(
-                    "telegram", os.path.join(script_dir, "agents.json")
+            token = file_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
+            if not token:
+                resolve_bot_token = getattr(
+                    telegram_connector, "_resolve_orchestrator_bot_token", None
                 )
-            )
+                if callable(resolve_bot_token):
+                    token = resolve_bot_token(
+                        "telegram", os.path.join(script_dir, "agents.json")
+                    )
             if not token:
                 raise RuntimeError("Telegram bot token is not configured")
             connector = TelegramConnector(token, config_file=config_path)
