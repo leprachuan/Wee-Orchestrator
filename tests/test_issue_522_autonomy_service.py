@@ -92,3 +92,14 @@ def test_process_safe_writers_do_not_lose_rules(tmp_path):
     with ThreadPoolExecutor(max_workers=12) as pool:
         list(pool.map(lambda i: PolicyStore(path).add(actor='user',approval_id=str(i),agent='a',operation='file.read',host='dev',resource='/tmp/'+str(i),decision='allow'),range(40)))
     assert len(PolicyStore(path).load()['rules'])==40
+
+
+def test_rule_edit_is_atomic_audited_and_does_not_reactivate(tmp_path):
+    s=ApprovalService(tmp_path)
+    old=s.policy.add(actor='web',approval_id='manual',agent='a',operation='file.read',host='dev',resource='/tmp/a',decision='allow')
+    new=s.policy.replace(old.id,actor='mac',agent='a',operation='file.read',host='dev',resource='/tmp/b',decision='ask')
+    rules=s.policy.load()['rules']
+    assert len(rules)==2 and not rules[0].enabled and rules[0].revoked_by=='mac'
+    assert new.source_approval_id=='edit:'+old.id and new.resource=='/tmp/b'
+    with pytest.raises(ValueError):s.policy.replace(old.id,actor='mac',agent='a',operation='file.read',host='dev',resource='/tmp/c',decision='allow')
+    assert len(s.policy.load()['rules'])==2

@@ -8550,3 +8550,7 @@ function _initServiceStatus() {
 }
 
 document.addEventListener('DOMContentLoaded', _initServiceStatus);
+
+import('./autonomy.js?v=20261004').then(({initAutonomy}) => {
+  initAutonomy({request: apiRequest, isAuthenticated: () => Boolean(STATE.token)});
+}).catch(error => console.warn('Approval inbox unavailable:', error.message));
