@@ -224,4 +224,6 @@ Wee's custom bash tool explicitly overrides the SDK's built-in tool, and Wee too
 
 ### Always-On development status
 
-The opt-in Always-On feature is under staged development (#519). The first slice provides disabled policy primitives for canonical actions and scoped allow/ask/deny JSON rules, with audited creation/revocation metadata. It does not enable autonomous execution or change existing chat behavior. See [policy design and execution surfaces](docs/plans/always-on-policy.md) for remaining enforcement and approval work.
+The opt-in Always-On feature is under staged development (#519). The current foundation provides disabled policy primitives, authenticated shared approval/rule endpoints, replayable events and recoverable bounded JSON grants. It does not enable autonomous execution or change existing chat behavior. See [policy design and execution surfaces](docs/plans/always-on-policy.md) for remaining enforcement and approval work.
+
+The next Always-On slice adds isolated durable approval storage (#522): atomic first decisions, expiry, cancellation, replayable owner-filtered events, and single-use reservations. It remains unwired; shared UI approvals and always-allow rule transactions are not yet available.

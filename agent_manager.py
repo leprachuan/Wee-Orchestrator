@@ -13148,6 +13148,12 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         lifespan=_lifespan,
     )
 
+    from autonomy_service import ApprovalService, create_router
+    autonomy_service = ApprovalService(os.environ.get(
+        "WEE_ALWAYS_ON_STATE_DIR", str(Path.home() / ".local/state/wee/autonomy")))
+    app.include_router(create_router(autonomy_service, authenticate))
+    app.state.autonomy_service = autonomy_service
+
     # Expose managers on app.state for testing
     app.state.bg_task_mgr = bg_task_mgr
 
