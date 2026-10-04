@@ -38,7 +38,7 @@ export function initAutonomy({request, isAuthenticated}) {
     const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(input);budgetForm.append(wrapper);
   }
   const budgetSave=document.createElement('button');budgetSave.className='btn btn-primary';budgetSave.textContent='Save model budgets';budgetForm.append(budgetSave);
-  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_runtime:modelFields.routine_runtime.value,escalation_runtime:modelFields.escalation_runtime.value,routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(()=>request('PUT','/autonomy/model-settings',body));};
+  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_runtime:modelFields.routine_runtime.value,escalation_runtime:modelFields.escalation_runtime.value,routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(async()=>{await request('PUT','/autonomy/model-settings',body);modelLoaded=false;});};
   async function loadRuntimeModels(kind) {
     const runtime = modelFields[kind+'_runtime'].value;
     try {
@@ -76,7 +76,7 @@ export function initAutonomy({request, isAuthenticated}) {
     editing = null; editor.reset();
   };
   box.append(heading, close, status, inbox, responsibilities, budgets, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
-  button.onclick = () => { modal.classList.remove('hidden'); close.focus(); refresh(true); };
+  button.onclick = () => { modelLoaded=false; modal.classList.remove('hidden'); close.focus(); refresh(true); };
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
   function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
   async function mutate(call) {
