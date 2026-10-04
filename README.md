@@ -221,3 +221,7 @@ Open **Settings → Favorite Models** in the WebUI or macOS app to star Ollama a
 Preferences are shared by clients connected to the same API instance and stored in `config/model_favorites.json` as `{"version": 1, "models": ["openrouter/openai/gpt-4.1-mini", "ollama/qwen3:8b"]}`. The authenticated `GET /api/v1/model-favorites` and `PUT /api/v1/model-favorites` endpoints read and save the list; PUT accepts `{"models": [...]}`. IDs are qualified by provider, duplicates are removed, and temporarily unavailable favorites remain saved. Saving an empty list clears favorites. Keep the `config/` directory when updating a deployment.
 
 Wee's custom bash tool explicitly overrides the SDK's built-in tool, and Wee tool results are adapted to the current Copilot SDK response contract. OpenRouter execution continues to use credentials from the secure store or service environment.
+
+### Always-On development status
+
+The opt-in Always-On feature is under staged development (#519). The first slice provides disabled policy primitives for canonical actions and scoped allow/ask/deny JSON rules, with audited creation/revocation metadata. It does not enable autonomous execution or change existing chat behavior. See [policy design and execution surfaces](docs/plans/always-on-policy.md) for remaining enforcement and approval work.
