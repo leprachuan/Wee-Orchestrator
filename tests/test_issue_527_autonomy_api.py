@@ -44,10 +44,23 @@ def client(monkeypatch, tmp_path, request):
     calls = []
 
     def initialize(self, *args, **kwargs):
+        kwargs["runtime_completion"] = None
+        kwargs["runtime_catalog"] = None
         kwargs["completion"] = lambda *args: (
             calls.append(args[0]) or '{"report":"API integration report"}',
             {"total_tokens": 50},
         )
+        if getattr(request, "param", None) == "runtime":
+            kwargs["runtime_catalog"] = lambda rt: {
+                "runtimes": [
+                    {**r, "available": True} for r in agent_manager.get_all_runtimes()
+                ],
+                "models": [{"id": "gpt-6-luna", "label": "GPT-6-luna"}],
+            }
+            kwargs["runtime_completion"] = lambda rt, model, *args, **kw: (
+                calls.append((rt, model)) or '{"report":"Selected Codex report"}',
+                {"total_tokens": 50},
+            )
         original(self, *args, **kwargs)
 
     monkeypatch.setattr(autonomy_models.ModelPlanner, "__init__", initialize)
@@ -173,3 +186,40 @@ def test_corrupt_optional_state_disables_autonomy_without_breaking_health(client
     assert c.get("/api/v1/autonomy/approvals").status_code == 401
     assert c.get("/api/v1/autonomy/approvals", headers=HEADERS).status_code == 503
     assert not calls
+
+
+@pytest.mark.parametrize("client", ["runtime"], indirect=True)
+def test_selected_runtime_full_api_worker_and_catalog(client):
+    from dataclasses import asdict
+
+    c, calls = client
+    assert c.get("/api/v1/autonomy/runtime-catalog").status_code == 401
+    catalog = c.get("/api/v1/autonomy/runtime-catalog", headers=HEADERS).json()
+    assert {r["id"] for r in catalog["runtimes"]} == {
+        r["id"] for r in agent_manager.get_all_runtimes()
+    }
+    body = {
+        **asdict(autonomy_models.ModelConfig()),
+        "routine_runtime": "codex",
+        "routine_model": "gpt-6-luna",
+    }
+    assert (
+        c.put("/api/v1/autonomy/model-settings", headers=HEADERS, json=body).status_code
+        == 200
+    )
+    row = c.post(
+        "/api/v1/autonomy/responsibilities",
+        headers=HEADERS,
+        json={"agent": "a", "goal": "Review queue", "interval_seconds": 300},
+    ).json()
+    c.post(
+        "/api/v1/autonomy/responsibilities/" + row["id"] + "/control",
+        headers=HEADERS,
+        json={"command": "resume"},
+    )
+    requests = wait_for(
+        lambda: c.get("/api/v1/autonomy/approvals", headers=HEADERS).json()["requests"],
+        bool,
+    )
+    assert requests[0]["preview"]["details"] == "Selected Codex report"
+    assert calls == [("codex", "gpt-6-luna")]

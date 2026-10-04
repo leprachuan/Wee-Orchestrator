@@ -102,3 +102,43 @@ available. One exclusive worker starts with API lifespan; shutdown waits for its
 bounded adapter call before releasing the lease. Interrupted effects are not
 blindly retried. UI responsibilities begin paused and support resume, pause,
 cancel, goal revision and explicit uncertainty acknowledgement.
+
+## Configurable runtimes and models (#531)
+Settings persist `routine_runtime` / `routine_model` independently from
+`escalation_runtime` / `escalation_models` in server `model-budgets.json`. Existing
+provider-only files migrate to runtime `wee` without losing model choices or
+budgets. macOS, iOS and WebUI offer the authenticated API host's runtime registry
+and model catalog, with manual exact model entry. All Wee runtime entries are
+selectable: Copilot CLI/SDK, Claude CLI/SDK, OpenCode, Gemini, Codex, Cursor,
+Devin, Wee, and Router. Authentication, installed versions, disabled-runtime
+settings and account model access still determine availability. No silent
+substitution is made when a selection cannot execute.
+
+Planning uses dedicated transports in temporary workspaces, not the ordinary
+chat dispatcher. CLI/SDK tool allowlists and permission denials disable actions;
+Codex additionally ignores user configuration/rules, uses read-only mode, a
+stripped model tool catalog, disabled hosted tools and a deny hook. Cursor uses
+ask mode, deny permissions and fail-closed tool hooks. Devin requires an
+advertised plan mode and an acknowledged exact model before prompting, and
+refuses all ACP host tool and permission requests. Older installations lacking
+these controls stop for review. External effects remain limited to the existing
+server-gated report adapter. Vendor-managed remote tool behavior must be validated
+on each installed runtime version before enabling production Always-On there.
+
+Router uses the existing configured router through bounded planning adapters.
+Brain requests consume the same durable budget, recursive routing is forbidden,
+and resolved runtime/model pairs are saved for the current run. Escalation
+approvals bind the resolved pair rather than a generic routing label. Each new
+run returns to the configured routine choice.
+
+CLI/SDK calls have a 90-second wall-clock limit, bounded output, cancellation
+and process-group cleanup. Token caps exposed by providers are enforced; vendor
+CLI/SDK output-token limits are best effort. Such runtimes reserve extra vendor
+framing overhead, reconcile actual usage when available, and stop on overruns.
+Unknown usage and dollar cost are shown honestly.
+
+Dev's currently installed Codex catalog advertises GPT-5.5 and GPT-5.4 variants;
+GPT-6-luna is not advertised by that host/account at this validation checkpoint.
+Selecting GPT-6-luna retains that exact identifier and stops with an availability
+error until the API host's authenticated Codex catalog supports it. It does not
+change this development chat's coding model.

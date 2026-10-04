@@ -33,12 +33,26 @@ export function initAutonomy({request, isAuthenticated}) {
   const budgetForm = document.createElement('form');
   const budgetTitle = document.createElement('h3'); budgetTitle.textContent = 'Routine model and budgets';
   const budgetStatus = document.createElement('p');
-  for (const [key,label] of [['routine_model','Inexpensive routine model (provider-qualified)'],['escalation_models','Permitted escalation models (comma-separated, optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Maximum output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
-    const input=document.createElement('input');input.className='glass-input';input.style.cssText='display:block;width:100%;margin:4px 0 10px';modelFields[key]=input;
+  for (const [key,label] of [['routine_runtime','Routine runtime'],['routine_model','Default model for selected runtime'],['escalation_runtime','Escalation runtime'],['escalation_models','Permitted escalation models (comma-separated, optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Requested output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
+    const input=document.createElement(key.endsWith('_runtime') ? 'select' : 'input');input.className='glass-input';input.style.cssText='display:block;width:100%;margin:4px 0 10px';modelFields[key]=input;
     const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(input);budgetForm.append(wrapper);
   }
   const budgetSave=document.createElement('button');budgetSave.className='btn btn-primary';budgetSave.textContent='Save model budgets';budgetForm.append(budgetSave);
-  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(()=>request('PUT','/autonomy/model-settings',body));};
+  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_runtime:modelFields.routine_runtime.value,escalation_runtime:modelFields.escalation_runtime.value,routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(async()=>{await request('PUT','/autonomy/model-settings',body);modelLoaded=false;});};
+  async function loadRuntimeModels(kind) {
+    const runtime = modelFields[kind+'_runtime'].value;
+    try {
+      const catalog = await request('GET', '/autonomy/runtime-catalog?runtime='+encodeURIComponent(runtime));
+      if (modelFields[kind+'_runtime'].value !== runtime) return;
+      const id = 'autonomy-'+kind+'-models';
+      document.getElementById(id)?.remove();
+      const list = document.createElement('datalist'); list.id=id;
+      for (const model of catalog.models) { const opt=document.createElement('option');opt.value=model.id;list.append(opt); }
+      modelFields[kind === 'routine' ? 'routine_model' : 'escalation_models'].setAttribute('list',id);
+      budgetForm.append(list);
+    } catch(error) { status.textContent=error.message; }
+  }
+  for (const kind of ['routine','escalation']) modelFields[kind+'_runtime'].onchange=()=>loadRuntimeModels(kind);
   budgets.append(budgetTitle,budgetStatus,budgetForm);
   const inputs = {};
   for (const key of ['agent', 'operation', 'host', 'resource']) {
@@ -62,7 +76,7 @@ export function initAutonomy({request, isAuthenticated}) {
     editing = null; editor.reset();
   };
   box.append(heading, close, status, inbox, responsibilities, budgets, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
-  button.onclick = () => { modal.classList.remove('hidden'); close.focus(); refresh(true); };
+  button.onclick = () => { modelLoaded=false; modal.classList.remove('hidden'); close.focus(); refresh(true); };
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
   function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
   async function mutate(call) {
@@ -73,9 +87,14 @@ export function initAutonomy({request, isAuthenticated}) {
     catch (error) { status.textContent = error.message; }
     finally { busy = false; box.querySelectorAll('button').forEach(b => b.disabled = false); await refresh(true); }
   }
-  function render(data, policy, work, models) {
-    if (!modelLoaded) { for (const [key,input] of Object.entries(modelFields)) input.value = key === 'escalation_models' ? models.config[key].join(', ') : models.config[key]; modelLoaded=true; }
-    budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable.`;
+  function render(data, policy, work, models, catalog) {
+    if (!modelLoaded) {
+      for (const key of ['routine_runtime','escalation_runtime']) {
+        modelFields[key].replaceChildren();
+        for (const runtime of catalog.runtimes) { const opt=document.createElement('option');opt.value=runtime.id;opt.textContent=runtime.label+(runtime.available?'':' (unavailable on API host)');modelFields[key].append(opt); }
+      }
+      for (const [key,input] of Object.entries(modelFields)) input.value = key === 'escalation_models' ? models.config[key].join(', ') : models.config[key]; modelLoaded=true; loadRuntimeModels('routine'); loadRuntimeModels('escalation'); }
+    budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable. ${models.cost_note || ""}`;
     responsibilities.replaceChildren();
     text(responsibilities, 'h3', 'Always-On responsibilities');
     text(responsibilities, 'p', 'Opt-in agents draft reports in isolated workspaces. New responsibilities start paused.');
@@ -155,9 +174,9 @@ export function initAutonomy({request, isAuthenticated}) {
       const events = await request('GET', `/autonomy/events?after=${cursor}`);
       const changed = events.cursor !== cursor; cursor = events.cursor;
       if (!force && !changed && last && modal.classList.contains('hidden')) return;
-      const [data, policy, work, models] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings')]);
+      const [data, policy, work, models, catalog] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings'), request('GET','/autonomy/runtime-catalog')]);
       const version = JSON.stringify([data, policy, work, models]);
-      if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models); last = version; }
+      if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models, catalog); last = version; }
     } catch (error) { if (!modal.classList.contains('hidden')) status.textContent = error.message; }
   }
   // Connected delivery and authoritative catch-up after sleep/network interruption.
