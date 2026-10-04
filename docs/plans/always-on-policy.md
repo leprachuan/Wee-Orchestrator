@@ -64,3 +64,41 @@ descriptors without symlink traversal, atomic replacement and private files.
 Rules may grant this exact capability; deny and revocation still take precedence.
 General app connectors and external host actions need separate trusted adapters.
 The model/budget provider and worker lifecycle wiring are the final stage.
+
+## Routine models and budgets (#527)
+`/api/v1/autonomy/model-settings` exposes a private JSON configuration and current
+UTC daily usage. Default routine model: provider-qualified OpenRouter GPT-4.1
+mini; choose a supported inexpensive provider model (including Luna if your
+provider exposes it). OpenRouter, Ollama and LM Studio use the existing Wee
+provider resolver. No external tool execution is available to the model.
+
+Default caps: 3 requests per run, 1024 output tokens, 20 requests and 40000
+conservatively reserved tokens per UTC day across responsibilities. Reservations
+commit before network I/O and are not refunded after ambiguous failures. Missing
+provider usage stays unknown. Dollar cost is explicitly unavailable; provider
+pricing is not assumed. Scheduling, scope, schema, budget and retry checks are
+ordinary deterministic code.
+
+Only two recorded failed report-schema checks can propose escalation to an
+explicitly permitted model. The model change passes the same shared action gate,
+rechecks its allowlist and budget immediately before execution, and affects one
+request. Every new run starts with the routine model again. No allowed model or
+budget means stop for human review. Network/auth failure does not trigger a
+larger model. A revised/cancelled responsibility invalidates stale in-flight plans.
+
+Initial supported activity: observe API agent/queue counts and maintain bounded
+report drafts with persistent prior context. Reports require approval unless an
+explicit file-write rule allows them. General external tools/hosts, arbitrary
+shell, browser, delegation and background iOS push remain unsupported. Clients
+refresh connected state every three seconds; the API also provides bounded
+30-second authenticated SSE connections with durable event IDs for replay.
+Offline clients fetch authoritative state on reconnect. Approval history is capped
+at 10000 records (100 pending), responsibility history at 1000, policies at 1000
+rules and model run audit at 10000; reaching capacity stops new work for operator
+archival instead of silently deleting audit evidence.
+
+Private state failure disables Always-On and leaves ordinary API health/chat
+available. One exclusive worker starts with API lifespan; shutdown waits for its
+bounded adapter call before releasing the lease. Interrupted effects are not
+blindly retried. UI responsibilities begin paused and support resume, pause,
+cancel, goal revision and explicit uncertainty acknowledgement.

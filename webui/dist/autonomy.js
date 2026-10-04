@@ -25,9 +25,21 @@ export function initAutonomy({request, isAuthenticated}) {
   const responsibilities = document.createElement('div');
   const inbox = document.createElement('div');
   const rules = document.createElement('div');
+  const budgets = document.createElement('section');
   const ruleHeading = document.createElement('h3'); ruleHeading.textContent = 'Saved action rules';
   const editor = document.createElement('form');
-  let editing = null, busy = false, last = '', cursor = 0, identityPresent = false;
+  let editing = null, busy = false, last = '', cursor = 0, identityPresent = false, responsibilityForm = null, modelLoaded = false;
+  const modelFields = {};
+  const budgetForm = document.createElement('form');
+  const budgetTitle = document.createElement('h3'); budgetTitle.textContent = 'Routine model and budgets';
+  const budgetStatus = document.createElement('p');
+  for (const [key,label] of [['routine_model','Inexpensive routine model (provider-qualified)'],['escalation_models','Permitted escalation models (comma-separated, optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Maximum output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
+    const input=document.createElement('input');input.className='glass-input';input.style.cssText='display:block;width:100%;margin:4px 0 10px';modelFields[key]=input;
+    const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(input);budgetForm.append(wrapper);
+  }
+  const budgetSave=document.createElement('button');budgetSave.className='btn btn-primary';budgetSave.textContent='Save model budgets';budgetForm.append(budgetSave);
+  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(()=>request('PUT','/autonomy/model-settings',body));};
+  budgets.append(budgetTitle,budgetStatus,budgetForm);
   const inputs = {};
   for (const key of ['agent', 'operation', 'host', 'resource']) {
     const label = document.createElement('label'); label.textContent = key[0].toUpperCase() + key.slice(1);
@@ -49,7 +61,7 @@ export function initAutonomy({request, isAuthenticated}) {
     await mutate(() => request(editing ? 'PUT' : 'POST', '/autonomy/rules' + (editing ? '/' + encodeURIComponent(editing) : ''), body));
     editing = null; editor.reset();
   };
-  box.append(heading, close, status, responsibilities, inbox, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
+  box.append(heading, close, status, inbox, responsibilities, budgets, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
   button.onclick = () => { modal.classList.remove('hidden'); close.focus(); refresh(true); };
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
   function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
@@ -61,7 +73,9 @@ export function initAutonomy({request, isAuthenticated}) {
     catch (error) { status.textContent = error.message; }
     finally { busy = false; box.querySelectorAll('button').forEach(b => b.disabled = false); await refresh(true); }
   }
-  function render(data, policy, work) {
+  function render(data, policy, work, models) {
+    if (!modelLoaded) { for (const [key,input] of Object.entries(modelFields)) input.value = key === 'escalation_models' ? models.config[key].join(', ') : models.config[key]; modelLoaded=true; }
+    budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable.`;
     responsibilities.replaceChildren();
     text(responsibilities, 'h3', 'Always-On responsibilities');
     text(responsibilities, 'p', 'Opt-in agents draft reports in isolated workspaces. New responsibilities start paused.');
@@ -84,6 +98,7 @@ export function initAutonomy({request, isAuthenticated}) {
       }
       responsibilities.append(card);
     }
+    if (!responsibilityForm) {
     const form = document.createElement('form');
     const values = {};
     for (const [key,label,value] of [['agent','Agent name',''],['goal','Responsibility',''],['interval_seconds','Interval in seconds (minimum 300)','3600']]) {
@@ -91,7 +106,8 @@ export function initAutonomy({request, isAuthenticated}) {
       const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(el);form.append(wrapper);values[key]=el;
     }
     const create=document.createElement('button');create.className='btn btn-primary';create.textContent='Create paused responsibility';form.append(create);
-    form.onsubmit=e=>{e.preventDefault();mutate(()=>request('POST','/autonomy/responsibilities',{agent:values.agent.value.trim(),goal:values.goal.value.trim(),interval_seconds:Number(values.interval_seconds.value)}));};responsibilities.append(form);
+    form.onsubmit=e=>{e.preventDefault();mutate(()=>request('POST','/autonomy/responsibilities',{agent:values.agent.value.trim(),goal:values.goal.value.trim(),interval_seconds:Number(values.interval_seconds.value)}));};responsibilityForm=form; }
+    responsibilities.append(responsibilityForm);
     inbox.replaceChildren(); rules.replaceChildren();
     const pending = data.requests.filter(r => ['pending','rule_pending'].includes(r.status));
     button.textContent = `Approvals (${pending.length}) & action rules`;
@@ -131,7 +147,7 @@ export function initAutonomy({request, isAuthenticated}) {
   async function refresh(force = false) {
     if (!isAuthenticated()) {
       if (identityPresent) { inbox.replaceChildren(); rules.replaceChildren(); responsibilities.replaceChildren(); last = ''; cursor = 0; modal.classList.add('hidden'); }
-      identityPresent = false; return;
+      identityPresent = false; modelLoaded=false; return;
     }
     identityPresent = true;
     if (busy) return;
@@ -139,9 +155,9 @@ export function initAutonomy({request, isAuthenticated}) {
       const events = await request('GET', `/autonomy/events?after=${cursor}`);
       const changed = events.cursor !== cursor; cursor = events.cursor;
       if (!force && !changed && last && modal.classList.contains('hidden')) return;
-      const [data, policy, work] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities')]);
-      const version = JSON.stringify([data, policy, work]);
-      if (version !== last) { render(data, policy, work); last = version; }
+      const [data, policy, work, models] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings')]);
+      const version = JSON.stringify([data, policy, work, models]);
+      if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models); last = version; }
     } catch (error) { if (!modal.classList.contains('hidden')) status.textContent = error.message; }
   }
   // Connected delivery and authoritative catch-up after sleep/network interruption.

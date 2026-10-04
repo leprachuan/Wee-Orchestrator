@@ -13133,11 +13133,43 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     _qt.get("permission_mode", "restricted"),
                 )
 
+        from autonomy_coordinator import Coordinator
+        autonomy_worker = Coordinator(autonomy_service, autonomy_responsibilities,
+                                      lambda: session_mgr.AGENTS, autonomy_planner) if autonomy_service is not None else None
+        async def _autonomy_loop():
+            pending = None
+            try:
+                while True:
+                    pending = asyncio.create_task(asyncio.to_thread(autonomy_worker.step))
+                    await asyncio.shield(pending)
+                    pending = None
+                    await asyncio.sleep(5)
+            finally:
+                # Cancellation must not release the lease while a bounded adapter
+                # thread is still running. Process death is reconciled on restart.
+                if pending is not None:
+                    await asyncio.shield(pending)
+                autonomy_worker.close()
+        autonomy_task = None
+        if autonomy_service is not None:
+            try:
+                if autonomy_worker.acquire():
+                    autonomy_task = asyncio.create_task(_autonomy_loop())
+            except Exception as exc:
+                autonomy_worker.close()
+                print(f"[Autonomy] Worker unavailable; execution disabled ({type(exc).__name__})", file=sys.stderr)
+
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
         watcher_task = asyncio.ensure_future(_agents_file_watcher())
         yield
         cleanup_task.cancel()
         watcher_task.cancel()
+        if autonomy_task is not None:
+            autonomy_task.cancel()
+            try:
+                await autonomy_task
+            except asyncio.CancelledError:
+                pass
 
     # ---- FastAPI app ----
     app = FastAPI(
@@ -13148,16 +13180,37 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         lifespan=_lifespan,
     )
 
-    from autonomy_service import ApprovalService, create_router
-    autonomy_service = ApprovalService(os.environ.get(
-        "WEE_ALWAYS_ON_STATE_DIR", str(Path.home() / ".local/state/wee/autonomy")))
-    app.include_router(create_router(autonomy_service, authenticate))
-    app.state.autonomy_service = autonomy_service
-    from autonomy_coordinator import ResponsibilityStore, create_responsibility_router
-    autonomy_responsibilities = ResponsibilityStore(autonomy_service.policy.path.parent)
-    app.include_router(create_responsibility_router(
-        autonomy_responsibilities, autonomy_service, authenticate, lambda: session_mgr.AGENTS))
-    app.state.autonomy_responsibilities = autonomy_responsibilities
+    autonomy_service = autonomy_responsibilities = autonomy_planner = None
+    try:
+        from autonomy_service import ApprovalService, create_router
+        autonomy_service = ApprovalService(os.environ.get(
+            "WEE_ALWAYS_ON_STATE_DIR", str(Path.home() / ".local/state/wee/autonomy")))
+        app.state.autonomy_service = autonomy_service
+        from autonomy_coordinator import ResponsibilityStore, create_responsibility_router
+        autonomy_responsibilities = ResponsibilityStore(autonomy_service.policy.path.parent)
+        app.state.autonomy_responsibilities = autonomy_responsibilities
+        from autonomy_models import ModelSettings, ModelPlanner, create_model_router
+        autonomy_model_settings = ModelSettings(autonomy_service.policy.path.parent)
+        def _autonomy_observations():
+            tasks = bg_task_mgr.list_all_tasks()[:500]
+            return {"available_agents": sorted(session_mgr.AGENTS)[:100],
+                    "queued_tasks": sum(t.get("status") == "queued" for t in tasks),
+                    "running_tasks": sum(t.get("status") == "running" for t in tasks)}
+        autonomy_planner = ModelPlanner(autonomy_service, autonomy_responsibilities,
+                                        autonomy_model_settings, observations=_autonomy_observations)
+        app.include_router(create_router(autonomy_service, authenticate))
+        app.include_router(create_responsibility_router(
+            autonomy_responsibilities, autonomy_service, authenticate, lambda: session_mgr.AGENTS))
+        app.include_router(create_model_router(autonomy_model_settings, autonomy_planner, authenticate))
+    except Exception as exc:
+        # Optional private feature state must not take ordinary chat offline.
+        autonomy_service = autonomy_responsibilities = autonomy_planner = None
+        print(f"[Autonomy] Private state unavailable; feature disabled ({type(exc).__name__})", file=sys.stderr)
+        from fastapi import Depends
+        async def _autonomy_unavailable(path: str, auth=Depends(authenticate)):
+            raise HTTPException(status_code=503, detail="Always-On state unavailable; execution disabled")
+        app.add_api_route("/api/v1/autonomy/{path:path}", _autonomy_unavailable,
+                          methods=["GET", "POST", "PUT", "DELETE"])
 
     # Expose managers on app.state for testing
     app.state.bg_task_mgr = bg_task_mgr
