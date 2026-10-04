@@ -219,6 +219,26 @@ class PolicyStore:
             self._save(data)
             return rule
 
+    def replace(self, rule_id, *, actor, **scope):
+        """Audit an edit as revocation plus replacement in one JSON write."""
+        with self.locked():
+            data = self.load()
+            if len(data['rules']) >= 1000:
+                raise ValueError('Policy rule limit reached')
+            for index, old in enumerate(data['rules']):
+                if old.id == rule_id:
+                    if not old.enabled:
+                        raise ValueError('Revoked rules cannot be edited')
+                    now = datetime.now(timezone.utc).isoformat()
+                    replacement = Rule(str(uuid4()), created_by=_text(actor), created_at=now,
+                                       source_approval_id='edit:' + old.id, **scope)
+                    data['rules'][index] = Rule(**{**asdict(old), 'enabled': False, 'revoked_by': actor, 'revoked_at': now})
+                    data['rules'].append(replacement)
+                    data['revision'] += 1
+                    self._save(data)
+                    return replacement
+            raise KeyError(rule_id)
+
     def revoke(self, rule_id, *, actor):
         with self.locked():
             data = self.load()

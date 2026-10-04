@@ -158,6 +158,15 @@ def create_router(service, authenticate):
             return asdict(service.policy.add(actor=actor, approval_id='manual-rule', **body.model_dump()))
         return guarded(add)
 
+    @router.put('/rules/{rule_id}')
+    def edit_rule(rule_id: str, body: RuleInput, auth=Depends(authenticate)):
+        def edit():
+            _, actor = principal(auth)
+            if body.decision == 'allow' and (body.operation not in _KNOWN or body.operation in _OPAQUE):
+                raise ValueError('Opaque or unknown actions cannot receive permanent grants')
+            return asdict(service.policy.replace(rule_id, actor=actor, **body.model_dump()))
+        return guarded(edit)
+
     @router.delete('/rules/{rule_id}')
     def revoke_rule(rule_id: str, auth=Depends(authenticate)):
         return guarded(lambda: asdict(service.policy.revoke(rule_id, actor=principal(auth)[1])))
