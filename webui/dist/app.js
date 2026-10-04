@@ -7094,6 +7094,7 @@ if (document.readyState !== 'loading') {
     if (!modalSettings) return;
     clearBanners();
     modalSettings.classList.remove('hidden');
+    loadModelFavorites();
     if (btnSettSave) { btnSettSave.disabled = true; btnSettSave.textContent = 'Loading…'; }
     try {
       ASF.config = await apiRequest('GET', '/agents-config');
@@ -7411,6 +7412,129 @@ if (document.readyState !== 'loading') {
   if (btnInstructionsLoad) btnInstructionsLoad.addEventListener('click', () => loadInstructions());
   if (btnInstructionsSave) btnInstructionsSave.addEventListener('click', saveInstructions);
 
+
+  // Shared Wee favorites (#516); all model dropdowns use the ordered API catalog.
+  const favoritesSelected = document.getElementById('model-favorites-selected');
+  const favoritesCandidates = document.getElementById('model-favorites-candidates');
+  const favoritesSearch = document.getElementById('model-favorites-search');
+  const favoritesSave = document.getElementById('model-favorites-save');
+  const favoritesReload = document.getElementById('model-favorites-reload');
+  const favoritesStatus = document.getElementById('model-favorites-status');
+  let favoritesDraft = [];
+  let favoritesCatalog = [];
+  let favoritesLoaded = false;
+
+  function favoritesMessage(message, failed = false) {
+    if (!favoritesStatus) return;
+    favoritesStatus.textContent = message;
+    favoritesStatus.style.color = failed ? 'var(--red, #ff6b6b)' : '';
+  }
+
+  function renderModelFavorites() {
+    if (!favoritesSelected || !favoritesCandidates) return;
+    favoritesSelected.replaceChildren();
+    favoritesCandidates.replaceChildren();
+    function row(id, label, selected, index) {
+      const element = document.createElement('div');
+      element.className = 'model-favorite-row';
+      const text = document.createElement('span');
+      text.textContent = label || id;
+      text.title = id;
+      element.appendChild(text);
+      function button(caption, title, disabled, action) {
+        const control = document.createElement('button');
+        control.className = 'btn btn-ghost btn-xs';
+        control.type = 'button';
+        control.textContent = caption;
+        control.title = title;
+        control.setAttribute('aria-label', title);
+        control.disabled = disabled;
+        control.addEventListener('click', () => { action(); renderModelFavorites(); });
+        element.appendChild(control);
+      }
+      if (selected) {
+        button('↑', 'Move favorite up: ' + id, index === 0, () => {
+          [favoritesDraft[index - 1], favoritesDraft[index]] = [favoritesDraft[index], favoritesDraft[index - 1]];
+        });
+        button('↓', 'Move favorite down: ' + id, index === favoritesDraft.length - 1, () => {
+          [favoritesDraft[index + 1], favoritesDraft[index]] = [favoritesDraft[index], favoritesDraft[index + 1]];
+        });
+        button('★', 'Remove favorite: ' + id, false, () => {
+          favoritesDraft = favoritesDraft.filter(model => model !== id);
+        });
+      } else {
+        button('☆', 'Add favorite: ' + id, favoritesDraft.length >= 100, () => {
+          if (!favoritesDraft.includes(id)) favoritesDraft.push(id);
+        });
+      }
+      return element;
+    }
+    favoritesDraft.forEach((id, index) => {
+      const entry = favoritesCatalog.find(model => model.id === id);
+      favoritesSelected.appendChild(row(id, entry?.label, true, index));
+    });
+    const search = (favoritesSearch?.value || '').toLowerCase().trim();
+    const candidates = favoritesCatalog.filter(model => !favoritesDraft.includes(model.id) && (!search || (model.id + ' ' + model.label).toLowerCase().includes(search)));
+    candidates.slice(0, 50).forEach(model => favoritesCandidates.appendChild(row(model.id, model.label, false)));
+    if (candidates.length > 50) {
+      const hint = document.createElement('p');
+      hint.className = 'asf-hint';
+      hint.textContent = 'Showing 50 models. Search to find more.';
+      favoritesCandidates.appendChild(hint);
+    }
+  }
+
+  async function loadModelFavorites() {
+    if (!favoritesSelected) return;
+    favoritesSave.disabled = true;
+    favoritesMessage('Loading favorites…');
+    try {
+      const [saved, catalog] = await Promise.all([
+        apiRequest('GET', '/model-favorites'),
+        apiRequest('GET', '/models?runtime=wee'),
+      ]);
+      if (catalog.error) throw new Error(catalog.error);
+      favoritesDraft = saved.models || [];
+      favoritesCatalog = catalog.models || [];
+      favoritesLoaded = true;
+      renderModelFavorites();
+      favoritesMessage('');
+    } catch (error) {
+      favoritesLoaded = false;
+      favoritesMessage('Unable to load favorites: ' + error.message, true);
+    } finally {
+      favoritesSave.disabled = !favoritesLoaded;
+    }
+  }
+
+  async function saveModelFavorites() {
+    if (!favoritesLoaded) return;
+    favoritesSave.disabled = true;
+    favoritesMessage('Saving favorites…');
+    try {
+      const saved = await apiRequest('PUT', '/model-favorites', { models: favoritesDraft });
+      favoritesDraft = saved.models || [];
+      renderModelFavorites();
+      favoritesMessage('Favorites saved.');
+      // Refresh any open scheduler model picker without changing its selection.
+      document.querySelectorAll('select[name="model"]').forEach(select => {
+        const container = select.closest('form');
+        const runtime = container?.querySelector('select[name="runtime"]')?.value;
+        if (runtime === 'wee') {
+          select.dataset.current = select.value;
+          populateModelDropdown(container, runtime);
+        }
+      });
+    } catch (error) {
+      favoritesMessage('Unable to save favorites: ' + error.message, true);
+    } finally {
+      favoritesSave.disabled = false;
+    }
+  }
+
+  favoritesSearch?.addEventListener('input', renderModelFavorites);
+  favoritesReload?.addEventListener('click', loadModelFavorites);
+  favoritesSave?.addEventListener('click', saveModelFavorites);
 
   /* ── Mobile Bot Token Settings ─────────────────────────────────────────── */
 

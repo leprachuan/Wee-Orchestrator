@@ -33,6 +33,7 @@ from session_manager_components import (
 )
 
 import llm_router
+from model_favorites import get_model_favorites
 
 
 # Native Wee tool calls run in-process, so they cannot rely on subprocess
@@ -10170,7 +10171,7 @@ User Request:
         """
         try:
             from copilot import Tool
-            from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider
+            from wee_copilot_sdk import execute_wee_copilot, resolve_wee_provider, structured_tool_handler
 
             session_data = self.get_or_create_session_data(n8n_session_id)
             agent_info = (
@@ -10232,7 +10233,7 @@ User Request:
                     },
                     "required": ["agent", "prompt"],
                 },
-                handler=call_agent_handler,
+                handler=structured_tool_handler(call_agent_handler),
             )
 
             async def search_handler(invocation):
@@ -10268,7 +10269,7 @@ User Request:
                     },
                     "required": ["q"],
                 },
-                handler=search_handler,
+                handler=structured_tool_handler(search_handler),
             )
 
             async def browser_handler(invocation):
@@ -10311,7 +10312,7 @@ User Request:
                     },
                     "required": ["action"],
                 },
-                handler=browser_handler,
+                handler=structured_tool_handler(browser_handler),
             )
 
             async def shell_handler(invocation):
@@ -10352,7 +10353,7 @@ User Request:
                     },
                     "required": ["action"],
                 },
-                handler=shell_handler,
+                handler=structured_tool_handler(shell_handler),
             )
 
             # Issue #453: #443 stopped redeclaring shell/file tools on the theory
@@ -10386,6 +10387,7 @@ User Request:
                 native_tools = [
                     Tool(
                         name="bash",
+                        overrides_built_in_tool=True,
                         description=(
                             "Execute a bash shell command on this machine and return its "
                             "output. Use this to read or write files, inspect the system, "
@@ -10402,7 +10404,7 @@ User Request:
                             },
                             "required": ["command"],
                         },
-                        handler=bash_handler,
+                        handler=structured_tool_handler(bash_handler),
                     ),
                     Tool(
                         name="python",
@@ -10421,7 +10423,7 @@ User Request:
                             },
                             "required": ["code"],
                         },
-                        handler=python_handler,
+                        handler=structured_tool_handler(python_handler),
                     ),
                 ]
 
@@ -13659,9 +13661,34 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                         or model_id
                     )
                     models.append({"id": model_id, "label": label, "group": group_name})
+            if runtime == "wee":
+                try:
+                    models = get_model_favorites().prioritize(models)
+                except (ValueError, OSError) as error:
+                    # A damaged preference file must not hide the runtime catalog.
+                    return {"runtime": runtime, "models": models, "favorites_error": str(error)}
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}
+
+    @app.get("/api/v1/model-favorites")
+    async def read_model_favorites(request: Request):
+        await authenticate(request, authorization=request.headers.get("authorization"))
+        try:
+            return get_model_favorites().load()
+        except (ValueError, OSError) as error:
+            raise HTTPException(status_code=500, detail=f"Unable to read model favorites: {error}")
+
+    @app.put("/api/v1/model-favorites")
+    async def write_model_favorites(request: Request):
+        await authenticate(request, authorization=request.headers.get("authorization"))
+        body = await request.json()
+        try:
+            return get_model_favorites().save(body.get("models") if isinstance(body, dict) else None)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        except OSError as error:
+            raise HTTPException(status_code=500, detail=f"Unable to save model favorites: {error}")
 
     @app.get("/api/v1/wee/models")
     async def get_wee_models(force: bool = False):
@@ -13681,6 +13708,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {
                 "runtime": "wee",
                 "providers": enriched,
+                "favorites": get_model_favorites().load()["models"],
                 "host_status": host_status,
             }
         except Exception as e:
