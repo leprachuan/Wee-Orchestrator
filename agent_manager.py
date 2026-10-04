@@ -13196,8 +13196,15 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
             return {"available_agents": sorted(session_mgr.AGENTS)[:100],
                     "queued_tasks": sum(t.get("status") == "queued" for t in tasks),
                     "running_tasks": sum(t.get("status") == "running" for t in tasks)}
+        from autonomy_runtimes import RuntimeCompletion
+        def _autonomy_runtime_available(runtime):
+            return check_runtime_available(runtime) and not get_disabled_runtimes_manager().is_disabled(runtime)
+        autonomy_runtime = RuntimeCompletion(session_mgr, get_all_runtimes,
+                                            _autonomy_runtime_available, find_executable)
         autonomy_planner = ModelPlanner(autonomy_service, autonomy_responsibilities,
-                                        autonomy_model_settings, observations=_autonomy_observations)
+                                        autonomy_model_settings, observations=_autonomy_observations,
+                                        runtime_completion=autonomy_runtime,
+                                        runtime_catalog=autonomy_runtime.catalog)
         app.include_router(create_router(autonomy_service, authenticate))
         app.include_router(create_responsibility_router(
             autonomy_responsibilities, autonomy_service, authenticate, lambda: session_mgr.AGENTS))
