@@ -4,6 +4,7 @@ Only trusted server adapters may construct Actions. A model-supplied label is
 not proof that a shell command is a structured operation. No runtime imports
 this module until the approval service can gate every autonomous tool path.
 """
+
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -18,13 +19,28 @@ from uuid import uuid4
 
 _DECISIONS = {"allow", "ask", "deny"}
 _OPAQUE = {"shell.execute", "python.execute", "browser.execute", "delegate.execute"}
-_KNOWN = _OPAQUE | {"file.read", "file.write", "service.restart", "repository.read",
-                    "repository.modify", "message.send", "release.deploy", "model.escalate"}
+_KNOWN = _OPAQUE | {
+    "file.read",
+    "file.write",
+    "service.restart",
+    "repository.read",
+    "repository.modify",
+    "message.send",
+    "release.deploy",
+    "model.escalate",
+}
 
 
 def _text(value):
-    if not isinstance(value, str) or not value or len(value) > 1024 or any(ord(c) < 32 for c in value):
-        raise ValueError("Expected a nonempty bounded string without control characters")
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 1024
+        or any(ord(c) < 32 for c in value)
+    ):
+        raise ValueError(
+            "Expected a nonempty bounded string without control characters"
+        )
     return value
 
 
@@ -51,7 +67,9 @@ class Action:
         arguments = json.loads(self.arguments_json)
         if not isinstance(arguments, dict):
             raise ValueError("Action arguments must be an object")
-        canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        canonical = json.dumps(
+            arguments, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
         if len(canonical) > 65536:
             raise ValueError("Action arguments exceed limit")
         object.__setattr__(self, "arguments_json", canonical)
@@ -60,7 +78,9 @@ class Action:
 
     @property
     def fingerprint(self):
-        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(asdict(self), sort_keys=True).encode()
+        ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -80,13 +100,28 @@ class Rule:
     revoked_at: str | None = None
 
     def __post_init__(self):
-        for value in (self.id, self.agent, self.operation, self.host, self.resource,
-                      self.created_by, self.created_at, self.source_approval_id):
+        for value in (
+            self.id,
+            self.agent,
+            self.operation,
+            self.host,
+            self.resource,
+            self.created_by,
+            self.created_at,
+            self.source_approval_id,
+        ):
             _text(value)
-        if self.decision not in _DECISIONS or type(self.enabled) is not bool or type(self.path_prefix) is not bool:
+        if (
+            self.decision not in _DECISIONS
+            or type(self.enabled) is not bool
+            or type(self.path_prefix) is not bool
+        ):
             raise ValueError("Invalid rule decision or flags")
         # Literal identifiers only: no implicit broad grants from '*' or regex.
-        if any('*' in value for value in (self.agent, self.operation, self.host, self.resource)):
+        if any(
+            "*" in value
+            for value in (self.agent, self.operation, self.host, self.resource)
+        ):
             raise ValueError("Wildcard scopes are not supported")
         if self.path_prefix:
             if self.operation not in {"file.read", "file.write"}:
@@ -98,14 +133,22 @@ class Rule:
             _text(self.revoked_by)
         if self.revoked_at is not None:
             _text(self.revoked_at)
-        if (self.revoked_by is None) != (self.revoked_at is None) or (self.revoked_at and self.enabled):
+        if (self.revoked_by is None) != (self.revoked_at is None) or (
+            self.revoked_at and self.enabled
+        ):
             raise ValueError("Revocation must include actor/time and disable the rule")
 
     def matches(self, action):
-        if not self.enabled or (self.agent, self.operation, self.host) != (action.agent, action.operation, action.host):
+        if not self.enabled or (self.agent, self.operation, self.host) != (
+            action.agent,
+            action.operation,
+            action.host,
+        ):
             return False
         if self.path_prefix:
-            return PurePosixPath(action.resource).is_relative_to(PurePosixPath(self.resource))
+            return PurePosixPath(action.resource).is_relative_to(
+                PurePosixPath(self.resource)
+            )
         return self.resource == action.resource
 
 
@@ -135,6 +178,7 @@ class PolicyStore:
     Read errors propagate so malformed policies cannot silently become grants.
     Action arguments/credentials are never persisted in the rule file.
     """
+
     def __init__(self, path):
         self.path = Path(path)
         self._lock = threading.RLock()
@@ -168,8 +212,8 @@ class PolicyStore:
             raise ValueError("Expected boolean feature flag")
         with self.locked():
             data = self.load()
-            data['enabled'] = enabled
-            data['revision'] += 1
+            data["enabled"] = enabled
+            data["revision"] += 1
             self._save(data)
             return data
 
@@ -178,13 +222,21 @@ class PolicyStore:
             if not self.path.exists():
                 return {"version": 1, "revision": 0, "enabled": False, "rules": []}
             data = json.loads(self.path.read_text())
-            if set(data) != {"version", "revision", "enabled", "rules"} or type(data['version']) is not int or data['version'] != 1:
+            if (
+                set(data) != {"version", "revision", "enabled", "rules"}
+                or type(data["version"]) is not int
+                or data["version"] != 1
+            ):
                 raise ValueError("Unsupported policy schema")
-            if type(data['revision']) is not int or data['revision'] < 0 or type(data['enabled']) is not bool:
+            if (
+                type(data["revision"]) is not int
+                or data["revision"] < 0
+                or type(data["enabled"]) is not bool
+            ):
                 raise ValueError("Invalid policy revision/flag")
-            if not isinstance(data['rules'], list) or len(data['rules']) > 1000:
+            if not isinstance(data["rules"], list) or len(data["rules"]) > 1000:
                 raise ValueError("Invalid policy rules")
-            rules = [Rule(**item) for item in data['rules']]
+            rules = [Rule(**item) for item in data["rules"]]
             if len({rule.id for rule in rules}) != len(rules):
                 raise ValueError("Duplicate policy rule IDs")
             return {**data, "rules": rules}
@@ -193,29 +245,81 @@ class PolicyStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(mode='w', dir=self.path.parent, delete=False) as handle:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.path.parent, delete=False
+            ) as handle:
                 temporary = handle.name
-                json.dump({**data, "rules": [asdict(rule) for rule in data['rules']]}, handle, indent=2)
-                handle.write('\n'); handle.flush(); os.fsync(handle.fileno())
+                json.dump(
+                    {**data, "rules": [asdict(rule) for rule in data["rules"]]},
+                    handle,
+                    indent=2,
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, self.path)
+            directory_fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
             if temporary and os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def add(self, *, actor, approval_id, agent, operation, host, resource, decision, path_prefix=False, rule_id=None):
+    def add(
+        self,
+        *,
+        actor,
+        approval_id,
+        agent,
+        operation,
+        host,
+        resource,
+        decision,
+        path_prefix=False,
+        rule_id=None,
+    ):
         with self.locked():
             data = self.load()
             if rule_id is not None:
-                for existing in data['rules']:
+                for existing in data["rules"]:
                     if existing.id == rule_id:
-                        if (existing.agent, existing.operation, existing.host, existing.resource, existing.decision, existing.source_approval_id, existing.path_prefix) != (agent, operation, host, resource, decision, approval_id, path_prefix):
-                            raise ValueError('Rule ID belongs to another grant')
+                        if (
+                            existing.agent,
+                            existing.operation,
+                            existing.host,
+                            existing.resource,
+                            existing.decision,
+                            existing.source_approval_id,
+                            existing.path_prefix,
+                        ) != (
+                            agent,
+                            operation,
+                            host,
+                            resource,
+                            decision,
+                            approval_id,
+                            path_prefix,
+                        ):
+                            raise ValueError("Rule ID belongs to another grant")
                         return existing
-            if len(data['rules']) >= 1000:
+            if len(data["rules"]) >= 1000:
                 raise ValueError("Policy rule limit reached")
-            rule = Rule(rule_id or str(uuid4()), agent, operation, host, resource, decision,
-                        _text(actor), datetime.now(timezone.utc).isoformat(), _text(approval_id), path_prefix=path_prefix)
-            data['rules'].append(rule); data['revision'] += 1
+            rule = Rule(
+                rule_id or str(uuid4()),
+                agent,
+                operation,
+                host,
+                resource,
+                decision,
+                _text(actor),
+                datetime.now(timezone.utc).isoformat(),
+                _text(approval_id),
+                path_prefix=path_prefix,
+            )
+            data["rules"].append(rule)
+            data["revision"] += 1
             self._save(data)
             return rule
 
@@ -223,18 +327,30 @@ class PolicyStore:
         """Audit an edit as revocation plus replacement in one JSON write."""
         with self.locked():
             data = self.load()
-            if len(data['rules']) >= 1000:
-                raise ValueError('Policy rule limit reached')
-            for index, old in enumerate(data['rules']):
+            if len(data["rules"]) >= 1000:
+                raise ValueError("Policy rule limit reached")
+            for index, old in enumerate(data["rules"]):
                 if old.id == rule_id:
                     if not old.enabled:
-                        raise ValueError('Revoked rules cannot be edited')
+                        raise ValueError("Revoked rules cannot be edited")
                     now = datetime.now(timezone.utc).isoformat()
-                    replacement = Rule(str(uuid4()), created_by=_text(actor), created_at=now,
-                                       source_approval_id='edit:' + old.id, **scope)
-                    data['rules'][index] = Rule(**{**asdict(old), 'enabled': False, 'revoked_by': actor, 'revoked_at': now})
-                    data['rules'].append(replacement)
-                    data['revision'] += 1
+                    replacement = Rule(
+                        str(uuid4()),
+                        created_by=_text(actor),
+                        created_at=now,
+                        source_approval_id="edit:" + old.id,
+                        **scope,
+                    )
+                    data["rules"][index] = Rule(
+                        **{
+                            **asdict(old),
+                            "enabled": False,
+                            "revoked_by": actor,
+                            "revoked_at": now,
+                        }
+                    )
+                    data["rules"].append(replacement)
+                    data["revision"] += 1
                     self._save(data)
                     return replacement
             raise KeyError(rule_id)
@@ -242,14 +358,19 @@ class PolicyStore:
     def revoke(self, rule_id, *, actor):
         with self.locked():
             data = self.load()
-            for index, rule in enumerate(data['rules']):
+            for index, rule in enumerate(data["rules"]):
                 if rule.id == rule_id:
                     if not rule.enabled:
                         return rule
                     fields = asdict(rule)
-                    fields.update(enabled=False, revoked_by=_text(actor), revoked_at=datetime.now(timezone.utc).isoformat())
+                    fields.update(
+                        enabled=False,
+                        revoked_by=_text(actor),
+                        revoked_at=datetime.now(timezone.utc).isoformat(),
+                    )
                     updated = Rule(**fields)
-                    data['rules'][index] = updated; data['revision'] += 1
+                    data["rules"][index] = updated
+                    data["revision"] += 1
                     self._save(data)
                     return updated
             raise KeyError(rule_id)
