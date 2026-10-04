@@ -13153,6 +13153,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         "WEE_ALWAYS_ON_STATE_DIR", str(Path.home() / ".local/state/wee/autonomy")))
     app.include_router(create_router(autonomy_service, authenticate))
     app.state.autonomy_service = autonomy_service
+    from autonomy_coordinator import ResponsibilityStore, create_responsibility_router
+    autonomy_responsibilities = ResponsibilityStore(autonomy_service.policy.path.parent)
+    app.include_router(create_responsibility_router(
+        autonomy_responsibilities, autonomy_service, authenticate, lambda: session_mgr.AGENTS))
+    app.state.autonomy_responsibilities = autonomy_responsibilities
 
     # Expose managers on app.state for testing
     app.state.bg_task_mgr = bg_task_mgr
