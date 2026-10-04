@@ -55,7 +55,7 @@ class ApprovalService:
                 row, won = self.approvals.resolve(approval_id, owner=owner, actor=actor, decision=decision, fingerprint=fingerprint)
             return {'request': public_record(row), 'won': won}
 
-    def execute(self, action, *, responsibility, intent_key, adapter, approval_id=None, summary):
+    def execute(self, action, *, responsibility, intent_key, adapter, approval_id=None, summary, preflight=lambda: True, details=None):
         """Run a trusted synchronous adapter under current policy and single-use claim.
 
         Adapter must bind the canonical action to the actual operation; no model
@@ -70,11 +70,13 @@ class ApprovalService:
             if verdict == 'deny':
                 return {'status': 'denied', 'reason': reason}
             # Every execution reserves a durable intent, including policy-allowed work.
-            row = self.approvals.create(action, owner=OWNER, responsibility=responsibility, intent_key=intent_key, preview={'summary': summary})
+            row = self.approvals.create(action, owner=OWNER, responsibility=responsibility, intent_key=intent_key, preview=({'summary': summary, 'details': details} if details is not None else {'summary': summary}))
             if approval_id and row['id'] != approval_id:
                 raise ApprovalConflict('Approval does not belong to this intent')
             if verdict == 'allow' and row['status'] == 'pending':
                 self.approvals.resolve(row['id'], owner=OWNER, actor='policy', decision='approve_once', fingerprint=action.fingerprint)
+            if not preflight():
+                return {'status': 'paused', 'approval_id': row['id']}
             if not self.approvals.claim(row['id'], action, owner=OWNER, responsibility=responsibility):
                 return {'status': self.approvals.get(row['id'], owner=OWNER)['status'], 'approval_id': row['id']}
             try:

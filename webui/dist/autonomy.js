@@ -22,6 +22,7 @@ export function initAutonomy({request, isAuthenticated}) {
   const close = document.createElement('button'); close.className = 'btn btn-ghost'; close.textContent = 'Close';
   close.onclick = () => { modal.classList.add('hidden'); button.focus(); };
   const status = document.createElement('p'); status.setAttribute('role', 'status');
+  const responsibilities = document.createElement('div');
   const inbox = document.createElement('div');
   const rules = document.createElement('div');
   const ruleHeading = document.createElement('h3'); ruleHeading.textContent = 'Saved action rules';
@@ -48,7 +49,7 @@ export function initAutonomy({request, isAuthenticated}) {
     await mutate(() => request(editing ? 'PUT' : 'POST', '/autonomy/rules' + (editing ? '/' + encodeURIComponent(editing) : ''), body));
     editing = null; editor.reset();
   };
-  box.append(heading, close, status, inbox, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
+  box.append(heading, close, status, responsibilities, inbox, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
   button.onclick = () => { modal.classList.remove('hidden'); close.focus(); refresh(true); };
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
   function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
@@ -60,7 +61,37 @@ export function initAutonomy({request, isAuthenticated}) {
     catch (error) { status.textContent = error.message; }
     finally { busy = false; box.querySelectorAll('button').forEach(b => b.disabled = false); await refresh(true); }
   }
-  function render(data, policy) {
+  function render(data, policy, work) {
+    responsibilities.replaceChildren();
+    text(responsibilities, 'h3', 'Always-On responsibilities');
+    text(responsibilities, 'p', 'Opt-in agents draft reports in isolated workspaces. New responsibilities start paused.');
+    for (const row of work.responsibilities) {
+      const card = document.createElement('article');
+      text(card, 'h4', row.agent + ' · ' + row.goal);
+      text(card, 'p', row.status + ' · ' + row.phase + ' · every ' + row.interval_seconds + ' seconds');
+      if (row.report) text(card, 'pre', row.report).style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
+      if (row.error) text(card, 'p', row.error);
+      if (row.status !== 'cancelled') {
+        for (const command of ['resume','pause','cancel',...(row.phase === 'attention' ? ['reconcile'] : [])]) {
+          const b = document.createElement('button'); b.className='btn btn-ghost btn-sm'; b.textContent = command;
+          b.onclick = () => {
+            if (command === 'reconcile' && !window.confirm('Acknowledge the interrupted/uncertain run? Inspect the report and action history first. A new run will start paused.')) return;
+            mutate(() => request('POST', '/autonomy/responsibilities/'+encodeURIComponent(row.id)+'/control',{command}));
+          }; card.append(b);
+        }
+        const revise = document.createElement('button'); revise.className='btn btn-ghost btn-sm'; revise.textContent='Revise goal';
+        revise.onclick=()=>{const goal=window.prompt('Revise the responsibility (pauses it and discards its pending plan):',row.goal);if(goal)mutate(()=>request('PUT','/autonomy/responsibilities/'+encodeURIComponent(row.id),{goal}));};card.append(revise);
+      }
+      responsibilities.append(card);
+    }
+    const form = document.createElement('form');
+    const values = {};
+    for (const [key,label,value] of [['agent','Agent name',''],['goal','Responsibility',''],['interval_seconds','Interval in seconds (minimum 300)','3600']]) {
+      const el=document.createElement('input');el.className='glass-input';el.required=true;el.value=value;el.maxLength=1024;
+      const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(el);form.append(wrapper);values[key]=el;
+    }
+    const create=document.createElement('button');create.className='btn btn-primary';create.textContent='Create paused responsibility';form.append(create);
+    form.onsubmit=e=>{e.preventDefault();mutate(()=>request('POST','/autonomy/responsibilities',{agent:values.agent.value.trim(),goal:values.goal.value.trim(),interval_seconds:Number(values.interval_seconds.value)}));};responsibilities.append(form);
     inbox.replaceChildren(); rules.replaceChildren();
     const pending = data.requests.filter(r => ['pending','rule_pending'].includes(r.status));
     button.textContent = `Approvals (${pending.length}) & action rules`;
@@ -68,6 +99,7 @@ export function initAutonomy({request, isAuthenticated}) {
     for (const item of data.requests) {
       const card = document.createElement('article'); card.style.cssText = 'border-bottom:1px solid #8885;padding:12px 0';
       text(card, 'h3', item.preview.summary); text(card, 'p', permanentScope(item));
+      if (item.preview.details) text(card, 'pre', item.preview.details).style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere';
       text(card, 'p', `${item.status} · Expires ${new Date(item.expires_at * 1000).toLocaleString()}`);
       if (item.status === 'pending') {
         for (const [value,label] of [['approve_once','Approve once'],['reject','Reject'],['revise','Request revision'],['approve_always','Approve & always allow']]) {
@@ -98,7 +130,7 @@ export function initAutonomy({request, isAuthenticated}) {
   }
   async function refresh(force = false) {
     if (!isAuthenticated()) {
-      if (identityPresent) { inbox.replaceChildren(); rules.replaceChildren(); last = ''; cursor = 0; modal.classList.add('hidden'); }
+      if (identityPresent) { inbox.replaceChildren(); rules.replaceChildren(); responsibilities.replaceChildren(); last = ''; cursor = 0; modal.classList.add('hidden'); }
       identityPresent = false; return;
     }
     identityPresent = true;
@@ -107,9 +139,9 @@ export function initAutonomy({request, isAuthenticated}) {
       const events = await request('GET', `/autonomy/events?after=${cursor}`);
       const changed = events.cursor !== cursor; cursor = events.cursor;
       if (!force && !changed && last && modal.classList.contains('hidden')) return;
-      const [data, policy] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules')]);
-      const version = JSON.stringify([data, policy]);
-      if (version !== last) { render(data, policy); last = version; }
+      const [data, policy, work] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities')]);
+      const version = JSON.stringify([data, policy, work]);
+      if (version !== last) { render(data, policy, work); last = version; }
     } catch (error) { if (!modal.classList.contains('hidden')) status.textContent = error.message; }
   }
   // Connected delivery and authoritative catch-up after sleep/network interruption.

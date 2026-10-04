@@ -105,9 +105,11 @@ class ApprovalStore:
             raise ValueError("Approval expiry must be 1..86400 seconds")
         # Preview is deliberately supplied by a trusted adapter, never copied from arguments.
         preview = preview or {'summary': action.operation}
-        if not isinstance(preview, dict) or set(preview) != {'summary'}:
+        if not isinstance(preview, dict) or set(preview) not in ({'summary'}, {'summary', 'details'}):
             raise ValueError('Expected a sanitized summary')
         _text(preview['summary'])
+        if 'details' in preview and (not isinstance(preview['details'], str) or len(preview['details']) > 8192):
+            raise ValueError('Preview details exceed limit')
         scope = {key: getattr(action, key) for key in ('agent', 'operation', 'host', 'resource')}
         now = self._now()
         with self._transaction() as db:

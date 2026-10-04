@@ -46,3 +46,21 @@ interrupted claims are uncertain and cannot be automatically replayed. No
 regular chat/CLI/SDK/browser/delegation adapter is enabled for Always-On. The
 feature remains disabled until the coordinator supplies a restricted adapter
 registry and opt-in responsibilities. This is not yet a running Always-On agent.
+
+## Persistent responsibilities (#526)
+The API can create bounded responsibilities for existing agent identities. They
+start paused, with a 5-minute minimum schedule and maximum 20 retained active
+responsibilities. Resume is explicit opt-in; pause/cancel stop pending execution.
+Goal revision pauses and discards the pending plan. Restarted model work or
+claimed actions require human reconciliation, while waiting approvals retain
+the same intent and plan. One worker has an exclusive OS lease; each tick handles
+at most one responsibility without overlap.
+
+Initial adapter scope is deliberately limited to drafting bounded reports in
+private per-responsibility workspaces on the API host. Model output is data, not
+executable commands; there are no regular chat/CLI/SDK/browser/delegation tools.
+The report body is an explicit approval preview. Writes use anchored directory
+descriptors without symlink traversal, atomic replacement and private files.
+Rules may grant this exact capability; deny and revocation still take precedence.
+General app connectors and external host actions need separate trusted adapters.
+The model/budget provider and worker lifecycle wiring are the final stage.
