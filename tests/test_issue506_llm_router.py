@@ -382,6 +382,12 @@ class TestRuntimeRegistration:
         agent_manager._router_config.save(cfg)
         monkeypatch.setenv("WEE_ROUTER_ENABLED", "1")
         monkeypatch.setattr(agent_manager.shutil, "which", lambda name: None)
+        # Availability also searches fixed paths; isolate installed host CLIs.
+        original_exists = agent_manager.Path.exists
+        monkeypatch.setattr(
+            agent_manager.Path, "exists",
+            lambda path: False if path.name == "devin" else original_exists(path),
+        )
 
         assert agent_manager.check_runtime_available("router") is False
 
