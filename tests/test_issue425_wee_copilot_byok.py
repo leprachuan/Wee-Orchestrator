@@ -211,11 +211,13 @@ def test_unusably_short_ollama_sdk_response_triggers_fallback(monkeypatch):
     assert "num_ctx" in message, "must point at the context window"
 
 
-def test_api_wee_runtime_uses_shared_sdk_executor(monkeypatch):
+def test_issue_517_api_wee_runtime_overrides_builtin_bash(monkeypatch):
     from agent_manager import SessionManager
 
     class Tool:
         def __init__(self, **kwargs):
+            if kwargs.get("name") == "bash" and not kwargs.get("overrides_built_in_tool"):
+                raise ValueError('External tool "bash" conflicts with a built-in tool')
             self.kwargs = kwargs
 
     monkeypatch.setitem(sys.modules, "copilot", types.SimpleNamespace(Tool=Tool))
@@ -369,3 +371,24 @@ def test_wee_sdk_dict_tool_event_retains_name_arguments_and_result():
     assert event["input"] == '{"path": "/tmp/example.txt"}'
     assert event["output"] == '{"contents": "hello"}'
     assert event["status"] == "complete"
+
+
+@pytest.mark.parametrize("value,result_type", [("WEE_OPENROUTER_TOOL_OK", "success"), ("Error: denied", "failure"), (None, "failure")])
+def test_issue_517_tools_return_sdk_tool_result(monkeypatch, value, result_type):
+    from dataclasses import dataclass
+
+    @dataclass
+    class ToolResult:
+        text_result_for_llm: str
+        result_type: str
+        error: str = None
+
+    monkeypatch.setitem(sys.modules, "copilot", types.SimpleNamespace(ToolResult=ToolResult))
+
+    async def handler(invocation):
+        return value
+
+    result = asyncio.run(wee_copilot_sdk.structured_tool_handler(handler)(object()))
+    assert isinstance(result, ToolResult)
+    assert result.result_type == result_type
+    assert result.text_result_for_llm == (value or "Tool returned no result.")

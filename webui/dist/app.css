@@ -7814,3 +7814,9 @@ html, body {
 /* Escalate as the window fills; thresholds mirror the macOS client. */
 .meta-context[data-level="warn"]   { color: var(--wee-gold, #ffc247); }
 .meta-context[data-level="danger"] { color: var(--wee-danger, #ff636e); }
+
+/* Shared model favorites settings (#516). */
+.model-favorites-list { max-height: 230px; overflow-y: auto; margin: 10px 0; }
+.model-favorite-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.model-favorite-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#model-favorites-selected .model-favorite-row { color: var(--gold, #e6c76e); }

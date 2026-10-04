@@ -213,3 +213,11 @@ here now lives in the following focused references.
 
 Open an issue before starting a feature or bug fix, keep credentials out of
 source control, and run the relevant tests before submitting changes.
+
+### Favorite Wee models
+
+Open **Settings → Favorite Models** in the WebUI or macOS app to star Ollama and OpenRouter models, remove favorites, and change their order. Favorites appear in a **Favorites** group before provider groups in Wee model pickers. The selected model is unchanged when favorites are edited.
+
+Preferences are shared by clients connected to the same API instance and stored in `config/model_favorites.json` as `{"version": 1, "models": ["openrouter/openai/gpt-4.1-mini", "ollama/qwen3:8b"]}`. The authenticated `GET /api/v1/model-favorites` and `PUT /api/v1/model-favorites` endpoints read and save the list; PUT accepts `{"models": [...]}`. IDs are qualified by provider, duplicates are removed, and temporarily unavailable favorites remain saved. Saving an empty list clears favorites. Keep the `config/` directory when updating a deployment.
+
+Wee's custom bash tool explicitly overrides the SDK's built-in tool, and Wee tool results are adapted to the current Copilot SDK response contract. OpenRouter execution continues to use credentials from the secure store or service environment.

@@ -171,6 +171,27 @@ def resolve_wee_provider(
     )
 
 
+def structured_tool_handler(handler):
+    """Adapt Wee's text-returning tools to the current SDK ToolResult contract."""
+    async def invoke(invocation):
+        import inspect
+        from copilot import ToolResult
+
+        result = handler(invocation)
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, ToolResult):
+            return result
+        text = "" if result is None else str(result)
+        failed = result is None or text.lower().startswith("error")
+        return ToolResult(
+            text_result_for_llm=text or "Tool returned no result.",
+            result_type="failure" if failed else "success",
+            error=text if failed else None,
+        )
+    return invoke
+
+
 def copilot_sdk_enabled() -> bool:
     return os.environ.get("WEE_COPILOT_SDK_ENABLED", "1").lower() not in {
         "0",

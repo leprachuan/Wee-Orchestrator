@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=202606240001" />
+  <link rel="stylesheet" href="app.css?v=20261003favorites" />
   <link rel="stylesheet" href="themes.css?v=202605010046" />
 </head>
 <body>
@@ -868,6 +868,20 @@
           </div>
         </div>
 
+        <div class="asf-section" id="model-favorites-panel">
+          <div class="asf-section-title">⭐ Favorite Models</div>
+          <p class="asf-hint">Pin Ollama and OpenRouter models to the top of Wee model lists. Shared with macOS Settings for this API.</p>
+          <div id="model-favorites-selected" class="model-favorites-list"></div>
+          <label class="asf-label" for="model-favorites-search">Find a model</label>
+          <input id="model-favorites-search" class="glass-input asf-input" type="search" placeholder="Search model name or provider" />
+          <div id="model-favorites-candidates" class="model-favorites-list"></div>
+          <div class="asf-env-toolbar">
+            <button id="model-favorites-reload" class="btn btn-ghost btn-xs">Reload</button>
+            <button id="model-favorites-save" class="btn btn-primary btn-xs">Save Favorites</button>
+          </div>
+          <div id="model-favorites-status" class="asf-env-status" role="status" aria-live="polite"></div>
+        </div>
+
         <!-- Model Catalog Editor -->
         <div class="asf-section">
           <div class="asf-section-title">🧠 Model Catalog</div>
@@ -939,7 +953,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-  <script src="app.js?v=202606240001" type="module"></script>
+  <script src="app.js?v=20261003favorites" type="module"></script>
 
     <!-- Skills slide-over panel (right side, below canvas) -->
     <aside id="skills-panel" class="skills-panel skills-hidden">
