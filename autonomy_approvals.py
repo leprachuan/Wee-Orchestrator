@@ -6,6 +6,7 @@ results. Runtime wiring remains disabled until API authorization and action
 policy revalidation are implemented.
 """
 from contextlib import contextmanager
+import json
 import math
 import os
 from pathlib import Path
@@ -34,7 +35,7 @@ class ApprovalStore:
             raise ValueError("Approval database must be private to the service user")
         with self._transaction() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ValueError("Unsupported approval schema")
             db.execute('''CREATE TABLE IF NOT EXISTS approvals (
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, responsibility TEXT NOT NULL,
@@ -48,7 +49,12 @@ class ApprovalStore:
                 kind TEXT NOT NULL, actor TEXT, occurred_at REAL NOT NULL)''')
             db.execute('CREATE INDEX IF NOT EXISTS approvals_owner ON approvals(owner, created_at)')
             db.execute('CREATE INDEX IF NOT EXISTS events_owner ON approval_events(owner, sequence)')
-            db.execute('PRAGMA user_version=1')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(approvals)')}
+            if 'preview_json' not in columns:
+                db.execute("ALTER TABLE approvals ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}'")
+                db.execute("ALTER TABLE approvals ADD COLUMN scope_json TEXT NOT NULL DEFAULT '{}'")
+            db.execute('CREATE TABLE IF NOT EXISTS approval_rule_outbox (approval_id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, actor TEXT NOT NULL, scope_json TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0)')
+            db.execute('PRAGMA user_version=2')
 
     @contextmanager
     def _transaction(self):
@@ -90,13 +96,19 @@ class ApprovalStore:
             self._event(db, row, 'expired', now)
         return row
 
-    def create(self, action, *, owner, responsibility, intent_key, ttl_seconds=3600):
+    def create(self, action, *, owner, responsibility, intent_key, ttl_seconds=3600, preview=None):
         if not isinstance(action, Action):
             raise ValueError("Expected a trusted canonical Action")
         for value in (owner, responsibility, intent_key):
             _text(value)
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 86400:
             raise ValueError("Approval expiry must be 1..86400 seconds")
+        # Preview is deliberately supplied by a trusted adapter, never copied from arguments.
+        preview = preview or {'summary': action.operation}
+        if not isinstance(preview, dict) or set(preview) != {'summary'}:
+            raise ValueError('Expected a sanitized summary')
+        _text(preview['summary'])
+        scope = {key: getattr(action, key) for key in ('agent', 'operation', 'host', 'resource')}
         now = self._now()
         with self._transaction() as db:
             existing = db.execute('SELECT * FROM approvals WHERE owner=? AND intent_key=?', (owner, intent_key)).fetchone()
@@ -110,6 +122,7 @@ class ApprovalStore:
                 (id, owner, responsibility, intent_key, fingerprint, created_at, expires_at, status)
                 VALUES(?,?,?,?,?,?,?, 'pending')''',
                 (approval_id, owner, responsibility, intent_key, action.fingerprint, now, now + ttl_seconds))
+            db.execute('UPDATE approvals SET preview_json=?, scope_json=? WHERE id=?', (json.dumps(preview), json.dumps(scope), approval_id))
             row = self._row(db, approval_id, owner)
             self._event(db, row, 'created', now)
             return row
@@ -178,6 +191,72 @@ class ApprovalStore:
             db.execute("UPDATE approvals SET status='claimed' WHERE id=?", (approval_id,))
             self._event(db, row, 'claimed', now)
             return True
+
+    def list(self, *, owner, limit=100):
+        _text(owner)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('Invalid list limit')
+        with self._transaction() as db:
+            # Expire all eligible rows, including those beyond the visible page.
+            now = self._now()
+            for row in db.execute("SELECT * FROM approvals WHERE owner=? AND status IN ('pending','approved') AND expires_at<=?", (owner, now)).fetchall():
+                self._expire(db, dict(row), now)
+            return [dict(row) for row in db.execute('SELECT * FROM approvals WHERE owner=? ORDER BY created_at DESC LIMIT ?', (owner, limit))]
+
+    def resolve_always(self, approval_id, *, owner, actor, fingerprint):
+        """Commit decision and durable rule intent together; publish before approving.
+
+        JSON publication is recoverable and idempotent, not falsely described as
+        an atomic transaction with SQLite. A pending publication cannot execute.
+        """
+        from autonomy_policy import _KNOWN, _OPAQUE
+        for value in (owner, actor, fingerprint):
+            _text(value)
+        with self._transaction() as db:
+            now = self._now()
+            row = self._expire(db, self._row(db, approval_id, owner), now)
+            if row['fingerprint'] != fingerprint:
+                raise ApprovalConflict('Reviewed action fingerprint does not match')
+            scope = json.loads(row['scope_json'])
+            if scope.get('operation') not in _KNOWN or scope['operation'] in _OPAQUE:
+                raise ValueError('Opaque or unknown actions cannot receive permanent grants')
+            if row['status'] != 'pending':
+                return row, False
+            db.execute("UPDATE approvals SET status='rule_pending', decided_by=?, decided_at=?, decision='approve_always' WHERE id=?", (actor, now, approval_id))
+            db.execute('INSERT INTO approval_rule_outbox(approval_id, rule_id, actor, scope_json) VALUES(?,?,?,?)', (approval_id, str(uuid4()), actor, row['scope_json']))
+            row = self._row(db, approval_id, owner)
+            self._event(db, row, 'rule_pending', now, actor)
+            return row, True
+
+    def publish_rules(self, policy):
+        # All integration operations acquire policy before the SQLite lock.
+        with policy.locked(), self._transaction() as db:
+            for intent in db.execute('SELECT * FROM approval_rule_outbox WHERE published=0').fetchall():
+                row = self._row(db, intent['approval_id'], db.execute('SELECT owner FROM approvals WHERE id=?', (intent['approval_id'],)).fetchone()[0])
+                rule = policy.add(actor=intent['actor'], approval_id=row['id'], decision='allow', rule_id=intent['rule_id'], **json.loads(intent['scope_json']))
+                db.execute('UPDATE approval_rule_outbox SET published=1 WHERE approval_id=?', (row['id'],))
+                # Revocation during crash recovery must never recreate or reactivate a grant.
+                status = 'approved' if rule.enabled and row['expires_at'] > self._now() else 'expired'
+                if row['status'] == 'rule_pending':
+                    db.execute('UPDATE approvals SET status=? WHERE id=?', (status, row['id']))
+                    self._event(db, row, status, self._now(), intent['actor'])
+
+    def finish(self, approval_id, *, owner, outcome):
+        if outcome not in ('succeeded', 'failed', 'uncertain'):
+            raise ValueError('Invalid execution outcome')
+        with self._transaction() as db:
+            row = self._row(db, approval_id, owner)
+            if row['status'] != 'claimed':
+                raise ApprovalConflict('Only claimed work can finish')
+            db.execute('UPDATE approvals SET status=? WHERE id=?', (outcome, approval_id))
+            self._event(db, row, outcome, self._now())
+
+    def recover_claims(self):
+        """On exclusive worker startup, abandon uncertain reservations; never replay."""
+        with self._transaction() as db:
+            for row in db.execute("SELECT * FROM approvals WHERE status='claimed'").fetchall():
+                db.execute("UPDATE approvals SET status='uncertain' WHERE id=?", (row['id'],))
+                self._event(db, dict(row), 'uncertain', self._now())
 
     def events(self, *, owner, after=0, limit=100):
         """Owner-filtered replay cursor; no raw action arguments in event data."""

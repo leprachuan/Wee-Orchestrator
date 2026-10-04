@@ -68,7 +68,7 @@ def test_failed_atomic_write_preserves_rules(tmp_path, monkeypatch):
     monkeypatch.setattr('autonomy_policy.os.replace', fail)
     with pytest.raises(OSError): store.add(**options)
     assert store.path.read_bytes() == previous
-    assert len(list(tmp_path.iterdir())) == 1
+    assert {item.name for item in tmp_path.iterdir()} == {'policy.json', 'policy.json.lock'}
 
 
 @pytest.mark.parametrize('changes', [dict(host='*'), dict(agent='*'), dict(resource='*'), dict(path_prefix=True), dict(enabled='true')])

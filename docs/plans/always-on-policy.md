@@ -23,3 +23,26 @@ ApprovalStore is an isolated SQLite backend. Requests bind an owner, responsibil
 A claimed request cannot be automatically replayed after a restart. Claiming is only a reservation; it does not prove a side effect happened and does not replace current policy authorization. A real executor must revalidate identity, policy, scope and request state at the side-effect boundary, record completion/uncertain outcomes, and reconcile an ambiguous external result before any retry.
 
 Next bounded slice: authenticated owner/approver mapping, request lists and sanitized immutable review previews, reconnectable events, bounded always-allow rule transactions and process-safe coordination with JSON policies. Always-allow is explicitly rejected by the current storage interface until that transaction exists. A transactional outbox/recovery protocol is needed across SQLite and JSON; do not treat separate DB and JSON writes as atomic. Expiry currently advances when a request is accessed; the API/coordinator must sweep and notify waiting requests. Retention controls and schema migration paths are required before deployment. No public endpoints, live UI delivery or runtime wiring are enabled yet.
+
+## Shared approval contract (#522)
+`/api/v1/autonomy/approvals`, `/approvals/{id}`, `/approvals/{id}/decision`,
+`/events?after=N`, and `/rules` require the existing API bearer authentication.
+All validated paired/session and shared-key clients belong to this API account;
+header-supplied identities cannot grant authority or forge the audited actor.
+Events support durable cursor replay; clients refresh authoritative requests on
+reconnect. Clients must submit the immutable fingerprint they reviewed.
+
+Always-allow is an exact agent/operation/host/resource grant. Opaque/unknown
+operations cannot get permanent grants. A SQLite outbox records the winning
+intent; JSON publication uses private process-safe locks and idempotent IDs.
+Execution remains blocked while publication is incomplete. Reconciliation never
+reactivates a revoked grant. Rule management supports bounded explicit grants
+and revocation. Runtime state defaults to ~/.local/state/wee/autonomy, or the
+private WEE_ALWAYS_ON_STATE_DIR; no credentials belong in these files.
+
+The sole Always-On execution boundary revalidates policy and reserves every
+intent before calling a trusted structured adapter. Side-effect failures and
+interrupted claims are uncertain and cannot be automatically replayed. No
+regular chat/CLI/SDK/browser/delegation adapter is enabled for Always-On. The
+feature remains disabled until the coordinator supplies a restricted adapter
+registry and opt-in responsibilities. This is not yet a running Always-On agent.

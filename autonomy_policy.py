@@ -6,6 +6,8 @@ this module until the approval service can gate every autonomous tool path.
 """
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -128,7 +130,7 @@ def evaluate(action, rules, *, enabled=False):
 
 
 class PolicyStore:
-    """Single API-process writer. Multi-process locking is required before use.
+    """Process-safe JSON policy writer with private advisory locks.
 
     Read errors propagate so malformed policies cannot silently become grants.
     Action arguments/credentials are never persisted in the rule file.
@@ -136,9 +138,43 @@ class PolicyStore:
     def __init__(self, path):
         self.path = Path(path)
         self._lock = threading.RLock()
+        self._depth = threading.local()
+
+    @contextmanager
+    def locked(self):
+        """Serialize read/modify/write across service processes, including nested calls."""
+        with self._lock:
+            depth = getattr(self._depth, "value", 0)
+            if depth:
+                self._depth.value += 1
+                try:
+                    yield
+                finally:
+                    self._depth.value -= 1
+                return
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(str(self.path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                self._depth.value = 1
+                yield
+            finally:
+                self._depth.value = 0
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+    def set_enabled(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError("Expected boolean feature flag")
+        with self.locked():
+            data = self.load()
+            data['enabled'] = enabled
+            data['revision'] += 1
+            self._save(data)
+            return data
 
     def load(self):
-        with self._lock:
+        with self.locked():
             if not self.path.exists():
                 return {"version": 1, "revision": 0, "enabled": False, "rules": []}
             data = json.loads(self.path.read_text())
@@ -166,19 +202,25 @@ class PolicyStore:
             if temporary and os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def add(self, *, actor, approval_id, agent, operation, host, resource, decision, path_prefix=False):
-        with self._lock:
+    def add(self, *, actor, approval_id, agent, operation, host, resource, decision, path_prefix=False, rule_id=None):
+        with self.locked():
             data = self.load()
+            if rule_id is not None:
+                for existing in data['rules']:
+                    if existing.id == rule_id:
+                        if (existing.agent, existing.operation, existing.host, existing.resource, existing.decision, existing.source_approval_id, existing.path_prefix) != (agent, operation, host, resource, decision, approval_id, path_prefix):
+                            raise ValueError('Rule ID belongs to another grant')
+                        return existing
             if len(data['rules']) >= 1000:
                 raise ValueError("Policy rule limit reached")
-            rule = Rule(str(uuid4()), agent, operation, host, resource, decision,
+            rule = Rule(rule_id or str(uuid4()), agent, operation, host, resource, decision,
                         _text(actor), datetime.now(timezone.utc).isoformat(), _text(approval_id), path_prefix=path_prefix)
             data['rules'].append(rule); data['revision'] += 1
             self._save(data)
             return rule
 
     def revoke(self, rule_id, *, actor):
-        with self._lock:
+        with self.locked():
             data = self.load()
             for index, rule in enumerate(data['rules']):
                 if rule.id == rule_id:
