@@ -415,7 +415,7 @@ class TestWeeRuntimeValidation(unittest.TestCase):
         import inspect
 
         source = inspect.getsource(SessionManager)
-        self.assertIn("cursor, or wee", source)
+        self.assertIn("cursor, wee, or router", source)
 
     def test_wee_in_session_id_validation(self):
         """Session ID validation should include wee."""

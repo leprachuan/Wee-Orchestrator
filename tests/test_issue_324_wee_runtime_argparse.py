@@ -44,7 +44,7 @@ class TestIssue324WeeRuntimeArgparse(unittest.TestCase):
                      "wee should be in the argparse choices list")
         
         # Check that the help text includes wee
-        self.assertIn('Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee)',
+        self.assertIn('Set the runtime to use (choices: copilot, copilot-sdk, opencode, claude, claude-sdk, gemini, codex, devin, cursor, wee, router)',
                      content,
                      "Help text should include wee in the available choices")
 
