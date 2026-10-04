@@ -33,7 +33,7 @@ export function initAutonomy({request, isAuthenticated}) {
   const budgetForm = document.createElement('form');
   const budgetTitle = document.createElement('h3'); budgetTitle.textContent = 'Routine model and budgets';
   const budgetStatus = document.createElement('p');
-  for (const [key,label] of [['routine_runtime','Routine runtime'],['routine_model','Default model for selected runtime'],['escalation_runtime','Escalation runtime'],['escalation_models','Permitted escalation models (comma-separated, optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Maximum output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
+  for (const [key,label] of [['routine_runtime','Routine runtime'],['routine_model','Default model for selected runtime'],['escalation_runtime','Escalation runtime'],['escalation_models','Permitted escalation models (comma-separated, optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Requested output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
     const input=document.createElement(key.endsWith('_runtime') ? 'select' : 'input');input.className='glass-input';input.style.cssText='display:block;width:100%;margin:4px 0 10px';modelFields[key]=input;
     const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(input);budgetForm.append(wrapper);
   }
@@ -94,7 +94,7 @@ export function initAutonomy({request, isAuthenticated}) {
         for (const runtime of catalog.runtimes) { const opt=document.createElement('option');opt.value=runtime.id;opt.textContent=runtime.label+(runtime.available?'':' (unavailable on API host)');modelFields[key].append(opt); }
       }
       for (const [key,input] of Object.entries(modelFields)) input.value = key === 'escalation_models' ? models.config[key].join(', ') : models.config[key]; modelLoaded=true; loadRuntimeModels('routine'); loadRuntimeModels('escalation'); }
-    budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable.`;
+    budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable. ${models.cost_note || ""}`;
     responsibilities.replaceChildren();
     text(responsibilities, 'h3', 'Always-On responsibilities');
     text(responsibilities, 'p', 'Opt-in agents draft reports in isolated workspaces. New responsibilities start paused.');
