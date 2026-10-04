@@ -90,3 +90,14 @@ def test_issue_516_http_auth_roundtrip_and_catalog_order(client):
 @pytest.mark.parametrize("body", [[], {"models": ["bad"]}, {"models": None}])
 def test_issue_516_http_invalid_update_is_rejected(client, body):
     assert client.put("/api/v1/model-favorites", headers=HEADERS, json=body).status_code == 422
+
+
+def test_issue_516_corrupt_preferences_do_not_hide_models(client):
+    store = agent_manager.get_model_favorites()
+    store.path.write_text("[]")
+    assert client.get("/api/v1/model-favorites", headers=HEADERS).status_code == 500
+    response = client.get("/api/v1/models?runtime=wee", headers=HEADERS)
+    assert response.status_code == 200
+    assert len(response.json()["models"]) == 2
+    assert "favorites_error" in response.json()
+    assert store.path.read_text() == "[]"

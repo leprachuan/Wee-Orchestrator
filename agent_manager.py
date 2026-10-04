@@ -13662,7 +13662,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                     )
                     models.append({"id": model_id, "label": label, "group": group_name})
             if runtime == "wee":
-                models = get_model_favorites().prioritize(models)
+                try:
+                    models = get_model_favorites().prioritize(models)
+                except (ValueError, OSError) as error:
+                    # A damaged preference file must not hide the runtime catalog.
+                    return {"runtime": runtime, "models": models, "favorites_error": str(error)}
             return {"runtime": runtime, "models": models}
         except Exception as e:
             return {"runtime": runtime, "models": [], "error": str(e)}

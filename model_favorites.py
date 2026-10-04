@@ -34,6 +34,8 @@ class ModelFavorites:
             if not self.path.exists():
                 return {"version": 1, "models": []}
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("Favorites JSON must be an object")
             return {"version": 1, "models": self.validate(data.get("models"))}
 
     def save(self, models):
