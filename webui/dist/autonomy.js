@@ -121,6 +121,11 @@ export function initAutonomy({request, isAuthenticated}) {
         const revise = document.createElement('button'); revise.className='btn btn-ghost btn-sm'; revise.textContent='Revise goal';
         revise.onclick=()=>{const goal=window.prompt('Revise the responsibility (pauses it and discards its pending plan):',row.goal);if(goal)mutate(()=>request('PUT','/autonomy/responsibilities/'+encodeURIComponent(row.id),{goal}));};card.append(revise);
       }
+      if (row.status === 'cancelled') {
+        const remove = document.createElement('button'); remove.className='btn btn-ghost btn-sm'; remove.textContent='Delete goal';
+        remove.onclick=()=>{if(window.confirm('Remove this cancelled goal from the list? Its action history is retained.')) mutate(()=>request('DELETE','/autonomy/responsibilities/'+encodeURIComponent(row.id)));};
+        card.append(remove);
+      }
       responsibilities.append(card);
     }
     if (!responsibilityForm) {

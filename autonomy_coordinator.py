@@ -29,6 +29,19 @@ class ResponsibilityStore:
                 run_number INTEGER NOT NULL DEFAULT 0, checkpoint TEXT NOT NULL DEFAULT '{}',
                 report TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '')""")
 
+            columns = {r[1] for r in db.execute("PRAGMA table_info(responsibilities)")}
+            if "deleted_at" not in columns:
+                db.execute("ALTER TABLE responsibilities ADD COLUMN deleted_at REAL")
+
+    def delete(self, key, owner=OWNER):
+        """Hide cancelled work without erasing its durable audit or checkpoints."""
+        with self.db._transaction() as db:
+            row = self._get(db, key, owner)
+            if row["status"] != "cancelled":
+                raise ValueError("Cancel the responsibility before deleting it")
+            db.execute("UPDATE responsibilities SET deleted_at=COALESCE(deleted_at, ?) WHERE id=?", (self.clock(), key))
+            return self._get(db, key, owner)
+
     def create(self, *, agent, goal, interval_seconds, owner=OWNER):
         _text(agent)
         _text(goal)
@@ -74,7 +87,7 @@ class ResponsibilityStore:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT * FROM responsibilities WHERE owner=? ORDER BY next_at",
+                    "SELECT * FROM responsibilities WHERE owner=? AND deleted_at IS NULL ORDER BY next_at",
                     (owner,),
                 )
             ]
@@ -465,6 +478,16 @@ def create_responsibility_router(store, service, authenticate, agents):
             return public_responsibility(store.create(owner=owner, **body.model_dump()))
 
         return guarded(add)
+
+    @router.delete("/responsibilities/{key}")
+    def delete(key: str, agent: str = "", auth=Depends(authenticate)):
+        def remove():
+            owner, _ = principal(auth)
+            if agent and store.get(key, owner)["agent"] != agent:
+                raise KeyError(key)
+            with service.policy.locked():
+                return public_responsibility(store.delete(key, owner))
+        return guarded(remove)
 
     @router.put("/responsibilities/{key}")
     def revise(key: str, body: Revise, agent: str = "", auth=Depends(authenticate)):
