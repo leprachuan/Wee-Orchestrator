@@ -6900,6 +6900,13 @@ if (document.readyState !== 'loading') {
     };
   }
 
+  document.getElementById('asf-always-on')?.addEventListener('click', () => {
+    if (!ASF.selectedName || !ASF.config?.agents.some(a => a.name === ASF.selectedName)) {
+      showErr('Save the agent before configuring Always-On.'); return;
+    }
+    window.dispatchEvent(new CustomEvent('wee:agent-always-on', {detail: {agent: ASF.selectedName}}));
+  });
+
   /* ── Banner helpers ─────────────────────────────────────────────────────── */
   function showErr(msg) {
     if (!asfError) return;
@@ -8551,6 +8558,6 @@ function _initServiceStatus() {
 
 document.addEventListener('DOMContentLoaded', _initServiceStatus);
 
-import('./autonomy.js?v=20261004').then(({initAutonomy}) => {
+import('./autonomy.js?v=20261004-agent533').then(({initAutonomy}) => {
   initAutonomy({request: apiRequest, isAuthenticated: () => Boolean(STATE.token)});
 }).catch(error => console.warn('Approval inbox unavailable:', error.message));

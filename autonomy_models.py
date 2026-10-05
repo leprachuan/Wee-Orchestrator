@@ -78,39 +78,66 @@ class ModelSettings:
         self.path = Path(directory) / "model-budgets.json"
         self.lock = PolicyStore(self.path)
 
-    def load(self):
-        with self.lock.locked():
-            if not self.path.exists():
-                return ModelConfig()
-            data = json.loads(self.path.read_text())
-            fields = set(asdict(ModelConfig()))
-            legacy = fields - {"routine_runtime", "escalation_runtime"}
-            if set(data) not in (fields, legacy):
-                raise ValueError("Unsupported model settings")
-            return ModelConfig(**data)
+    @staticmethod
+    def _agent(agent):
+        if agent:
+            _text(agent)
+            if len(agent) > 128 or any(not (c.isalnum() or c in "-_") for c in agent):
+                raise ValueError("Invalid agent identifier")
+        return agent
 
-    def save(self, data):
+    def _read(self):
+        data = json.loads(self.path.read_text()) if self.path.exists() else asdict(ModelConfig())
+        if set(data) == {"version", "defaults", "agents"}:
+            if data["version"] != 2 or not isinstance(data["agents"], dict) or len(data["agents"]) > 1000:
+                raise ValueError("Unsupported agent model settings")
+            ModelConfig(**data["defaults"])
+            for agent, config in data["agents"].items():
+                self._agent(agent)
+                ModelConfig(**config)
+            return data
+        fields = set(asdict(ModelConfig()))
+        if set(data) not in (fields, fields - {"routine_runtime", "escalation_runtime"}):
+            raise ValueError("Unsupported model settings")
+        return {"version": 2, "defaults": asdict(ModelConfig(**data)), "agents": {}}
+
+    def _write(self, data):
+        name = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.path.parent, delete=False) as f:
+                name = f.name
+                json.dump(data, f, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(name, self.path)
+            fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            if name and os.path.exists(name):
+                os.unlink(name)
+
+    def load(self, agent=""):
+        self._agent(agent)
+        with self.lock.locked():
+            data = self._read()
+            return ModelConfig(**data["agents"].get(agent, data["defaults"]))
+
+    def save(self, data, agent=""):
+        self._agent(agent)
         config = ModelConfig(**data)
         with self.lock.locked():
-            name = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", dir=self.path.parent, delete=False
-                ) as f:
-                    name = f.name
-                    json.dump(asdict(config), f, indent=2)
-                    f.write("\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(name, self.path)
-                fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-            finally:
-                if name and os.path.exists(name):
-                    os.unlink(name)
+            stored = self._read()
+            if agent:
+                if agent not in stored["agents"] and len(stored["agents"]) >= 1000:
+                    raise ValueError("Agent settings capacity reached")
+                stored["agents"][agent] = asdict(config)
+            else:
+                stored["defaults"] = asdict(config)
+            self._write(stored)
         return config
 
 
@@ -172,6 +199,8 @@ class ModelPlanner:
                 "CREATE TABLE IF NOT EXISTS model_usage (day TEXT PRIMARY KEY, requests INTEGER NOT NULL, reserved_tokens INTEGER NOT NULL, actual_tokens INTEGER NOT NULL, unknown_usage INTEGER NOT NULL)"
             )
 
+            db.execute("CREATE TABLE IF NOT EXISTS agent_model_usage (agent TEXT, day TEXT, requests INTEGER NOT NULL, reserved_tokens INTEGER NOT NULL, actual_tokens INTEGER NOT NULL, unknown_usage INTEGER NOT NULL, PRIMARY KEY(agent,day))")
+
     def _state(self, key, run):
         with self.store.db._transaction() as db:
             exists = db.execute(
@@ -193,23 +222,17 @@ class ModelPlanner:
                 ).fetchone()
             )
 
-    def usage(self):
-        day = (
-            datetime.fromtimestamp(self.store.clock(), timezone.utc).date().isoformat()
-        )
+    def usage(self, agent=""):
+        ModelSettings._agent(agent)
+        day = datetime.fromtimestamp(self.store.clock(), timezone.utc).date().isoformat()
         with self.store.db._transaction() as db:
-            row = db.execute("SELECT * FROM model_usage WHERE day=?", (day,)).fetchone()
-            return (
-                dict(row)
-                if row
-                else {
-                    "day": day,
-                    "requests": 0,
-                    "reserved_tokens": 0,
-                    "actual_tokens": 0,
-                    "unknown_usage": 0,
-                }
-            )
+            legacy = db.execute("SELECT * FROM model_usage WHERE day=?", (day,)).fetchone()
+            rows = db.execute("SELECT * FROM agent_model_usage WHERE day=?" + (" AND agent=?" if agent else ""), (day, agent) if agent else (day,)).fetchall()
+            result = {"day": day, "requests": 0, "reserved_tokens": 0, "actual_tokens": 0, "unknown_usage": 0}
+            for row in ([legacy] if legacy else []) + list(rows):
+                for field in ("requests", "reserved_tokens", "actual_tokens", "unknown_usage"):
+                    result[field] += row[field]
+            return result
 
     def _resolve_pair(self, row, runtime, model, messages, config, kind):
         if runtime != "router":
@@ -264,10 +287,12 @@ class ModelPlanner:
         )
         self._state(row["id"], row["run_number"])
         with self.store.db._transaction() as db:
-            db.execute("INSERT OR IGNORE INTO model_usage VALUES(?,0,0,0,0)", (day,))
-            used = dict(
-                db.execute("SELECT * FROM model_usage WHERE day=?", (day,)).fetchone()
-            )
+            db.execute("INSERT OR IGNORE INTO agent_model_usage VALUES(?,?,0,0,0,0)", (row["agent"], day))
+            used = dict(db.execute("SELECT * FROM agent_model_usage WHERE agent=? AND day=?", (row["agent"], day)).fetchone())
+            legacy = db.execute("SELECT * FROM model_usage WHERE day=?", (day,)).fetchone()
+            if legacy:
+                for field in ("requests", "reserved_tokens", "actual_tokens", "unknown_usage"):
+                    used[field] += legacy[field]
             run = dict(
                 db.execute(
                     "SELECT * FROM model_runs WHERE responsibility=? AND run=?",
@@ -282,8 +307,8 @@ class ModelPlanner:
                 raise BudgetExceeded("Daily or per-run model budget reached")
             # Reserve before network I/O. Failures/restarts never refund uncertain spend.
             db.execute(
-                "UPDATE model_usage SET requests=requests+1,reserved_tokens=reserved_tokens+?,unknown_usage=unknown_usage+1 WHERE day=?",
-                (reserved, day),
+                "UPDATE agent_model_usage SET requests=requests+1,reserved_tokens=reserved_tokens+?,unknown_usage=unknown_usage+1 WHERE agent=? AND day=?",
+                (reserved, row["agent"], day),
             )
             db.execute(
                 "UPDATE model_runs SET requests=requests+1 WHERE responsibility=? AND run=?",
@@ -308,13 +333,13 @@ class ModelPlanner:
         if type(actual) is int and actual >= 0:
             with self.store.db._transaction() as db:
                 db.execute(
-                    "UPDATE model_usage SET actual_tokens=actual_tokens+?,unknown_usage=unknown_usage-1 WHERE day=?",
-                    (actual, day),
+                    "UPDATE agent_model_usage SET actual_tokens=actual_tokens+?,unknown_usage=unknown_usage-1 WHERE agent=? AND day=?",
+                    (actual, row["agent"], day),
                 )
                 if actual > reserved:
                     db.execute(
-                        "UPDATE model_usage SET reserved_tokens=reserved_tokens+? WHERE day=?",
-                        (actual - reserved, day),
+                        "UPDATE agent_model_usage SET reserved_tokens=reserved_tokens+? WHERE agent=? AND day=?",
+                        (actual - reserved, row["agent"], day),
                     )
             if actual > reserved:
                 raise BudgetExceeded(
@@ -344,7 +369,7 @@ class ModelPlanner:
         return plan
 
     def __call__(self, row):
-        config = self.settings.load()
+        config = self.settings.load(row["agent"])
         context = {
             "agent": row["agent"],
             "responsibility": row["goal"],
@@ -449,7 +474,7 @@ class ModelPlanner:
         )
 
 
-def create_model_router(settings, planner, authenticate):
+def create_model_router(settings, planner, authenticate, agents=None):
     from fastapi import APIRouter, Depends, HTTPException
     from pydantic import BaseModel, ConfigDict
 
@@ -466,6 +491,15 @@ def create_model_router(settings, planner, authenticate):
         daily_requests: int = 20
         daily_token_budget: int = 40000
 
+    def checked_agent(agent):
+        try:
+            ModelSettings._agent(agent)
+            if agent and agents is not None and agent not in agents():
+                raise HTTPException(404, "Unknown agent")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return agent
+
     @router.get("/runtime-catalog")
     def catalog(runtime: str = "", auth=Depends(authenticate)):
         principal(auth)
@@ -477,17 +511,17 @@ def create_model_router(settings, planner, authenticate):
             raise HTTPException(400, str(exc))
 
     @router.get("/model-settings")
-    def get_settings(auth=Depends(authenticate)):
+    def get_settings(agent: str = "", auth=Depends(authenticate)):
         principal(auth)
         return {
-            "config": asdict(settings.load()),
-            "usage": planner.usage(),
+            "config": asdict(settings.load(checked_agent(agent))),
+            "usage": planner.usage(agent),
             "cost_usd": None,
             "cost_note": "Provider pricing is not assumed. Requests and reserved tokens are capped. CLI/SDK output token limits are best effort; time/report bounds are enforced and actual usage is reconciled when reported. Missing usage remains unknown.",
         }
 
     @router.put("/model-settings")
-    def save_settings(body: Settings, auth=Depends(authenticate)):
+    def save_settings(body: Settings, agent: str = "", auth=Depends(authenticate)):
         principal(auth)
         try:
             data = body.model_dump()
@@ -498,9 +532,9 @@ def create_model_router(settings, planner, authenticate):
                     or data["escalation_runtime"] not in known
                 ):
                     raise ValueError("Choose a runtime supported by this Wee API")
-            settings.save(data)
+            settings.save(data, checked_agent(agent))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        return get_settings(auth)
+        return get_settings(agent, auth)
 
     return router

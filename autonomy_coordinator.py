@@ -445,19 +445,21 @@ def create_responsibility_router(store, service, authenticate, agents):
             raise HTTPException(400, str(exc))
 
     @router.get("/responsibilities")
-    def listing(auth=Depends(authenticate)):
+    def listing(agent: str = "", auth=Depends(authenticate)):
         return guarded(
             lambda: {
                 "responsibilities": [
-                    public_responsibility(r) for r in store.list(principal(auth)[0])
+                    public_responsibility(r) for r in store.list(principal(auth)[0]) if not agent or r["agent"] == agent
                 ]
             }
         )
 
     @router.post("/responsibilities")
-    def create(body: Create, auth=Depends(authenticate)):
+    def create(body: Create, agent: str = "", auth=Depends(authenticate)):
         def add():
             owner, _ = principal(auth)
+            if agent and body.agent != agent:
+                raise ValueError("Responsibility belongs to a different agent")
             if body.agent not in agents():
                 raise ValueError("Unknown agent")
             return public_responsibility(store.create(owner=owner, **body.model_dump()))
@@ -465,18 +467,22 @@ def create_responsibility_router(store, service, authenticate, agents):
         return guarded(add)
 
     @router.put("/responsibilities/{key}")
-    def revise(key: str, body: Revise, auth=Depends(authenticate)):
+    def revise(key: str, body: Revise, agent: str = "", auth=Depends(authenticate)):
         def change():
             owner, _ = principal(auth)
+            if agent and store.get(key, owner)["agent"] != agent:
+                raise KeyError(key)
             with service.policy.locked():
                 return public_responsibility(store.revise(key, body.goal, owner))
 
         return guarded(change)
 
     @router.post("/responsibilities/{key}/control")
-    def control(key: str, body: Control, auth=Depends(authenticate)):
+    def control(key: str, body: Control, agent: str = "", auth=Depends(authenticate)):
         def change():
             owner, actor = principal(auth)
+            if agent and store.get(key, owner)["agent"] != agent:
+                raise KeyError(key)
             with service.policy.locked():
                 row = store.control(key, body.command, owner)
                 if body.command == "resume":

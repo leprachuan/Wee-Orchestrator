@@ -86,7 +86,7 @@
       <div id="bg-sidebar-list" class="sessions-list bg-sidebar-list hidden"></div>
       <div id="sched-sidebar-list" class="sessions-list sched-sidebar-list hidden"></div>
       <div class="sidebar-toolbar">
-        <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agent Settings">⚙️ Settings</button>
+        <button id="btn-settings" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Agents">☘ Agents</button>
         <button id="btn-nav-secrets" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Secret Manager">🔐 Secrets</button>
         <button id="btn-logs" class="btn btn-ghost btn-sm sidebar-tool-btn" title="Service Logs">📋 Logs</button>
         <div class="theme-picker-wrap">
@@ -555,7 +555,7 @@
       <!-- Header -->
       <div class="modal-header">
         <div class="asf-header-left">
-          <h3 style="margin:0;font-size:1rem;">☘ Agent Settings</h3>
+          <h3 style="margin:0;font-size:1rem;">☘ Agents</h3>
           <span id="asf-dirty-dot" class="asf-dirty-dot hidden">unsaved</span>
           <select id="asf-agent-selector" class="glass-input glass-select asf-selector" title="Select agent to edit"></select>
           <button id="btn-settings-add-agent" class="asf-add-agent-btn" title="Add new agent">+</button>
@@ -569,6 +569,12 @@
 
       <!-- Scrollable form body -->
       <div class="modal-body asf-body">
+
+        <div class="asf-section">
+          <div class="asf-section-title">Always-On</div>
+          <p class="asf-hint">Responsibilities, runtime/model, budgets, approvals and action rules for the selected agent.</p>
+          <button id="asf-always-on" type="button" class="btn btn-primary">Configure Always-On</button>
+        </div>
 
         <!-- Basic Info -->
         <div class="asf-section">

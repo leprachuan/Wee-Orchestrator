@@ -7,20 +7,19 @@ export function canAlwaysAllow(request) {
   return !['shell.execute', 'python.execute', 'browser.execute', 'delegate.execute'].includes(request.scope.operation);
 }
 export function initAutonomy({request, isAuthenticated}) {
-  const button = document.createElement('button');
-  button.className = 'btn btn-ghost btn-sm sidebar-tool-btn';
-  button.textContent = 'Approvals & action rules';
-  document.querySelector('.sidebar-toolbar').prepend(button);
+  let selectedAgent = '', generation = 0;
+  const rawRequest = request;
+  request = (method, path, body) => rawRequest(method, path + (path.includes('?') ? '&' : '?') + 'agent=' + encodeURIComponent(selectedAgent), body);
   const modal = document.createElement('div');
   modal.className = 'modal-overlay hidden';
   const box = document.createElement('section');
   box.className = 'modal-box glass-panel';
   box.style.cssText = 'max-width:800px;max-height:90vh;overflow:auto;padding:20px;width:95%;';
   box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
-  box.setAttribute('aria-label', 'Shared approvals and action rules');
-  const heading = document.createElement('h2'); heading.textContent = 'Approvals & action rules';
+  box.setAttribute('aria-label', 'Agent Always-On');
+  const heading = document.createElement('h2'); heading.textContent = 'Always-On';
   const close = document.createElement('button'); close.className = 'btn btn-ghost'; close.textContent = 'Close';
-  close.onclick = () => { modal.classList.add('hidden'); button.focus(); };
+  close.onclick = () => { modal.classList.add('hidden'); document.getElementById('asf-always-on')?.focus(); };
   const status = document.createElement('p'); status.setAttribute('role', 'status');
   const responsibilities = document.createElement('div');
   const inbox = document.createElement('div');
@@ -40,10 +39,10 @@ export function initAutonomy({request, isAuthenticated}) {
   const budgetSave=document.createElement('button');budgetSave.className='btn btn-primary';budgetSave.textContent='Save model budgets';budgetForm.append(budgetSave);
   budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_runtime:modelFields.routine_runtime.value,escalation_runtime:modelFields.escalation_runtime.value,routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(async()=>{await request('PUT','/autonomy/model-settings',body);modelLoaded=false;});};
   async function loadRuntimeModels(kind) {
-    const runtime = modelFields[kind+'_runtime'].value;
+    const runtime = modelFields[kind+'_runtime'].value; const opened = generation;
     try {
       const catalog = await request('GET', '/autonomy/runtime-catalog?runtime='+encodeURIComponent(runtime));
-      if (modelFields[kind+'_runtime'].value !== runtime) return;
+      if (opened !== generation || modelFields[kind+'_runtime'].value !== runtime) return;
       const id = 'autonomy-'+kind+'-models';
       document.getElementById(id)?.remove();
       const list = document.createElement('datalist'); list.id=id;
@@ -59,13 +58,13 @@ export function initAutonomy({request, isAuthenticated}) {
     const label = document.createElement('label'); label.textContent = key[0].toUpperCase() + key.slice(1);
     const input = document.createElement('input'); input.required = true; input.maxLength = 1024;
     input.className = 'glass-input'; input.style.cssText = 'display:block;width:100%;margin:4px 0 10px';
-    inputs[key] = input; label.append(input); editor.append(label);
+    if (key === 'agent') input.readOnly=true; inputs[key] = input; label.append(input); editor.append(label);
   }
   const decision = document.createElement('select');
   for (const value of ['ask','allow','deny']) { const opt = document.createElement('option'); opt.value = value; opt.textContent = value; decision.append(opt); }
   const save = document.createElement('button'); save.className = 'btn btn-primary'; save.textContent = 'Save explicit rule';
   const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'btn btn-ghost'; reset.textContent = 'New rule';
-  reset.onclick = () => { editing = null; editor.reset(); };
+  reset.onclick = () => { editing = null; editor.reset(); inputs.agent.value=selectedAgent; };
   editor.append(decision, save, reset);
   editor.onsubmit = async e => {
     e.preventDefault();
@@ -73,10 +72,17 @@ export function initAutonomy({request, isAuthenticated}) {
     for (const [key,input] of Object.entries(inputs)) body[key] = input.value.trim();
     if (!window.confirm(`Save this exact ${body.decision} rule?\n${body.agent} · ${body.operation} · ${body.host} · ${body.resource}`)) return;
     await mutate(() => request(editing ? 'PUT' : 'POST', '/autonomy/rules' + (editing ? '/' + encodeURIComponent(editing) : ''), body));
-    editing = null; editor.reset();
+    editing = null; editor.reset(); inputs.agent.value=selectedAgent;
   };
   box.append(heading, close, status, inbox, responsibilities, budgets, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
-  button.onclick = () => { modelLoaded=false; modal.classList.remove('hidden'); close.focus(); refresh(true); };
+  window.addEventListener('wee:agent-always-on', e => {
+    if (busy || !e.detail?.agent) return;
+    selectedAgent = e.detail.agent; generation++; modelLoaded=false; last=''; cursor=0;
+    responsibilityForm=null; editing=null; editor.reset(); inputs.agent.value=selectedAgent;
+    heading.textContent=selectedAgent+' · Always-On'; status.textContent='';
+    inbox.replaceChildren(); rules.replaceChildren(); responsibilities.replaceChildren();
+    modal.classList.remove('hidden'); close.focus(); refresh(true);
+  });
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
   function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
   async function mutate(call) {
@@ -121,7 +127,7 @@ export function initAutonomy({request, isAuthenticated}) {
     const form = document.createElement('form');
     const values = {};
     for (const [key,label,value] of [['agent','Agent name',''],['goal','Responsibility',''],['interval_seconds','Interval in seconds (minimum 300)','3600']]) {
-      const el=document.createElement('input');el.className='glass-input';el.required=true;el.value=value;el.maxLength=1024;
+      const el=document.createElement('input');el.className='glass-input';el.required=true;el.value=key==='agent'?selectedAgent:value;el.readOnly=key==='agent';el.maxLength=1024;
       const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(el);form.append(wrapper);values[key]=el;
     }
     const create=document.createElement('button');create.className='btn btn-primary';create.textContent='Create paused responsibility';form.append(create);
@@ -129,7 +135,7 @@ export function initAutonomy({request, isAuthenticated}) {
     responsibilities.append(responsibilityForm);
     inbox.replaceChildren(); rules.replaceChildren();
     const pending = data.requests.filter(r => ['pending','rule_pending'].includes(r.status));
-    button.textContent = `Approvals (${pending.length}) & action rules`;
+    text(inbox, 'h3', `Approvals for ${selectedAgent} (${pending.length} pending)`);
     if (!pending.length) text(inbox, 'p', 'No pending approvals.');
     for (const item of data.requests) {
       const card = document.createElement('article'); card.style.cssText = 'border-bottom:1px solid #8885;padding:12px 0';
@@ -149,7 +155,7 @@ export function initAutonomy({request, isAuthenticated}) {
       }
       inbox.append(card);
     }
-    text(rules, 'p', policy.enabled ? 'Always-On policy is enabled.' : 'Always-On execution is currently disabled.');
+    text(rules, 'p', 'Rules apply only to this agent. Resume a responsibility to start it; pause or cancel to stop it.');
     for (const rule of policy.rules) {
       const card = document.createElement('article');
       text(card, 'p', `${rule.enabled ? rule.decision : 'revoked'} · ${permanentScope({scope:rule})}${rule.path_prefix ? ' (path prefix)' : ''}`);
@@ -164,6 +170,8 @@ export function initAutonomy({request, isAuthenticated}) {
     }
   }
   async function refresh(force = false) {
+    if (!selectedAgent || modal.classList.contains('hidden')) return;
+    const opened = generation;
     if (!isAuthenticated()) {
       if (identityPresent) { inbox.replaceChildren(); rules.replaceChildren(); responsibilities.replaceChildren(); last = ''; cursor = 0; modal.classList.add('hidden'); }
       identityPresent = false; modelLoaded=false; return;
@@ -175,6 +183,7 @@ export function initAutonomy({request, isAuthenticated}) {
       const changed = events.cursor !== cursor; cursor = events.cursor;
       if (!force && !changed && last && modal.classList.contains('hidden')) return;
       const [data, policy, work, models, catalog] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings'), request('GET','/autonomy/runtime-catalog')]);
+      if (opened !== generation || modal.classList.contains('hidden')) return;
       const version = JSON.stringify([data, policy, work, models]);
       if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models, catalog); last = version; }
     } catch (error) { if (!modal.classList.contains('hidden')) status.textContent = error.message; }
@@ -183,5 +192,5 @@ export function initAutonomy({request, isAuthenticated}) {
   setInterval(() => refresh(), 3000);
   window.addEventListener('online', () => refresh(true));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
-  refresh(true);
+  document.getElementById('asf-agent-selector')?.addEventListener('change', () => { generation++; modal.classList.add('hidden'); });
 }

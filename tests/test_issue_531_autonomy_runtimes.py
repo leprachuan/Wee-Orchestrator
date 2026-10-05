@@ -42,7 +42,7 @@ def test_settings_migrate_old_json_and_preserve_provider(tmp_path):
     loaded = cfg.load()
     assert loaded.routine_runtime == "wee" and loaded.routine_model == "ollama/llama3.2"
     cfg.save(asdict(loaded))
-    assert json.loads(cfg.path.read_text())["routine_runtime"] == "wee"
+    assert json.loads(cfg.path.read_text())["defaults"]["routine_runtime"] == "wee"
 
 
 @pytest.mark.parametrize("runtime", RUNTIMES)
@@ -61,7 +61,7 @@ def test_every_wee_runtime_selectable_and_persistent(tmp_path, runtime):
                 "models": [{"id": "gpt-6-luna", "label": "GPT-6-luna"}],
             }
         )
-        usage = staticmethod(lambda: {})
+        usage = staticmethod(lambda agent="": {})
 
     app = FastAPI()
     app.include_router(create_model_router(cfg, Planner(), auth))
