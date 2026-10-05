@@ -170,7 +170,8 @@ def create_router(service, authenticate):
 
     def guarded(call):
         try:
-            return call()
+            with service.policy.locked():
+                return call()
         except KeyError:
             raise HTTPException(404, "Not found")
         except ApprovalConflict as exc:
@@ -178,31 +179,42 @@ def create_router(service, authenticate):
         except (ValueError, PermissionError) as exc:
             raise HTTPException(400, str(exc))
 
+    def scoped_record(approval_id, auth, agent):
+        row = service.approvals.get(approval_id, owner=principal(auth)[0])
+        if agent and json.loads(row["scope_json"]).get("agent") != agent:
+            raise KeyError(approval_id)
+        return row
+
+    def scoped_rule(rule_id, agent):
+        if agent and not any(r.id == rule_id and r.agent == agent for r in service.policy.load()["rules"]):
+            raise KeyError(rule_id)
+
     @router.get("/approvals")
-    def approvals(auth=Depends(authenticate)):
+    def approvals(agent: str = "", auth=Depends(authenticate)):
         def read():
             owner, _ = principal(auth)
             service.recover_rules()
             return {
                 "requests": [
                     public_record(row) for row in service.approvals.list(owner=owner)
+                    if not agent or json.loads(row["scope_json"]).get("agent") == agent
                 ]
             }
 
         return guarded(read)
 
     @router.get("/approvals/{approval_id}")
-    def approval(approval_id: str, auth=Depends(authenticate)):
+    def approval(approval_id: str, agent: str = "", auth=Depends(authenticate)):
         return guarded(
             lambda: public_record(
-                service.approvals.get(approval_id, owner=principal(auth)[0])
+                scoped_record(approval_id, auth, agent)
             )
         )
 
     @router.post("/approvals/{approval_id}/decision")
-    def decide(approval_id: str, body: Decision, auth=Depends(authenticate)):
+    def decide(approval_id: str, body: Decision, agent: str = "", auth=Depends(authenticate)):
         return guarded(
-            lambda: service.decide(approval_id, auth, body.decision, body.fingerprint)
+            lambda: (scoped_record(approval_id, auth, agent), service.decide(approval_id, auth, body.decision, body.fingerprint))[1]
         )
 
     @router.get("/events")
@@ -247,18 +259,20 @@ def create_router(service, authenticate):
         )
 
     @router.get("/rules")
-    def rules(auth=Depends(authenticate)):
+    def rules(agent: str = "", auth=Depends(authenticate)):
         def read():
             principal(auth)
             data = service.policy.load()
-            return {**data, "rules": [asdict(rule) for rule in data["rules"]]}
+            return {**data, "rules": [asdict(rule) for rule in data["rules"] if not agent or rule.agent == agent]}
 
         return guarded(read)
 
     @router.post("/rules")
-    def add_rule(body: RuleInput, auth=Depends(authenticate)):
+    def add_rule(body: RuleInput, agent: str = "", auth=Depends(authenticate)):
         def add():
             _, actor = principal(auth)
+            if agent and body.agent != agent:
+                raise ValueError("Rule belongs to a different agent")
             if body.decision == "allow" and (
                 body.operation not in _KNOWN or body.operation in _OPAQUE
             ):
@@ -274,9 +288,12 @@ def create_router(service, authenticate):
         return guarded(add)
 
     @router.put("/rules/{rule_id}")
-    def edit_rule(rule_id: str, body: RuleInput, auth=Depends(authenticate)):
+    def edit_rule(rule_id: str, body: RuleInput, agent: str = "", auth=Depends(authenticate)):
         def edit():
+            scoped_rule(rule_id, agent)
             _, actor = principal(auth)
+            if agent and body.agent != agent:
+                raise ValueError("Rule belongs to a different agent")
             if body.decision == "allow" and (
                 body.operation not in _KNOWN or body.operation in _OPAQUE
             ):
@@ -290,9 +307,9 @@ def create_router(service, authenticate):
         return guarded(edit)
 
     @router.delete("/rules/{rule_id}")
-    def revoke_rule(rule_id: str, auth=Depends(authenticate)):
+    def revoke_rule(rule_id: str, agent: str = "", auth=Depends(authenticate)):
         return guarded(
-            lambda: asdict(service.policy.revoke(rule_id, actor=principal(auth)[1]))
+            lambda: (scoped_rule(rule_id, agent), asdict(service.policy.revoke(rule_id, actor=principal(auth)[1])))[1]
         )
 
     return router

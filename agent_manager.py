@@ -13208,7 +13208,7 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         app.include_router(create_router(autonomy_service, authenticate))
         app.include_router(create_responsibility_router(
             autonomy_responsibilities, autonomy_service, authenticate, lambda: session_mgr.AGENTS))
-        app.include_router(create_model_router(autonomy_model_settings, autonomy_planner, authenticate))
+        app.include_router(create_model_router(autonomy_model_settings, autonomy_planner, authenticate, lambda: session_mgr.AGENTS))
     except Exception as exc:
         # Optional private feature state must not take ordinary chat offline.
         autonomy_service = autonomy_responsibilities = autonomy_planner = None

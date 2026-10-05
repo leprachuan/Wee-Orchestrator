@@ -142,3 +142,7 @@ GPT-6-luna is not advertised by that host/account at this validation checkpoint.
 Selecting GPT-6-luna retains that exact identifier and stops with an availability
 error until the API host's authenticated Codex catalog supports it. It does not
 change this development chat's coding model.
+
+## Agent-owned configuration (#533)
+
+Use Agents → selected agent → Always-On on all clients. All autonomy data routes accept an `agent` query scope; wrong-agent mutations return404 (or400 for mismatched create input), retaining the API account authorization boundary. Runtime/model settings and new daily usage reservations are independent per agent. The private0600 model-budgets.json format is `{version:2, defaults:ModelConfig, agents:{name:ModelConfig}}`; legacy settings migrate on save without discarding defaults. Historical unattributed usage remains a conservative debit for each agent until its UTC day ends. Omitting agent remains a compatibility endpoint for older clients and does not grant additional account authority. Responsibility resume remains explicit, and pause/cancel/recovery are per responsibility. Global policy enablement is an internal safety gate, not agent configuration. Rules and approval scopes always bind the agent; approval delivery and first-decision atomicity remain shared across authorized clients.
