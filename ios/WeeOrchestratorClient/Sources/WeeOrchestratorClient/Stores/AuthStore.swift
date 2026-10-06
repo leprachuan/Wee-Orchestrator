@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// State of the Telegram/WebEx pairing login flow, mirroring the WebUI's
 /// auth overlay states (`IDLE` / `CODE_SENT` / `LOGGED_IN`) plus explicit
@@ -40,6 +43,28 @@ final class AuthStore: ObservableObject {
     private var pendingIdentity: String?
 
     private var cancellables = Set<AnyCancellable>()
+
+    /// Display label sent to `verify-pairing` and shown back in the
+    /// server's device-token management UI, e.g. "Foster's iPhone".
+    static var currentDeviceName: String {
+        #if canImport(UIKit)
+        return UIDevice.current.name
+        #else
+        return Host.current().localizedName ?? "Mac"
+        #endif
+    }
+
+    /// Coarse platform label for the device-token list, not used for any
+    /// security decision.
+    static var currentPlatform: String {
+        #if os(iOS)
+        return "iOS"
+        #elseif os(macOS)
+        return "macOS"
+        #else
+        return "unknown"
+        #endif
+    }
 
     enum Keys {
         static let identity = "wee.auth.identity"
@@ -137,7 +162,12 @@ final class AuthStore: ObservableObject {
         defer { isVerifyingCode = false }
 
         do {
-            let response = try await client.verifyPairing(code: trimmed, identity: identity)
+            let response = try await client.verifyPairing(
+                code: trimmed,
+                identity: identity,
+                deviceName: AuthStore.currentDeviceName,
+                platform: AuthStore.currentPlatform
+            )
             settings.bearerToken = response.token
             defaults.set(response.identity, forKey: Keys.identity)
             defaults.set(response.channel, forKey: Keys.channel)

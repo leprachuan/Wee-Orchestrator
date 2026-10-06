@@ -156,13 +156,52 @@ final class APIClient: NSObject {
         return try await send(request)
     }
 
-    /// Exchanges a pairing code for a session bearer token, mirroring the
-    /// WebUI's "Verify" step. No bearer token is required for this call.
-    func verifyPairing(code: String, identity: String) async throws -> PairingVerificationResponse {
-        let body = PairingVerificationBody(code: code, identity: identity)
+    /// Exchanges a pairing code for a per-device session bearer token,
+    /// mirroring the WebUI's "Verify" step. No bearer token is required for
+    /// this call. `deviceName`/`platform` are display-only metadata shown
+    /// back in the device-token management UI.
+    func verifyPairing(code: String, identity: String, deviceName: String? = nil, platform: String? = nil) async throws -> PairingVerificationResponse {
+        let body = PairingVerificationBody(code: code, identity: identity, deviceName: deviceName, platform: platform)
         let encoded = try JSONEncoder().encode(body)
         let request = try makeRequest(path: "/api/v1/auth/verify-pairing", method: "POST", body: encoded)
         return try await send(request)
+    }
+
+    // MARK: - Device token management
+
+    /// Lists the caller's own long-lived device tokens/sessions. Server
+    /// enforces that only the authenticated identity's own devices are
+    /// returned.
+    func fetchDeviceTokens() async throws -> [DeviceToken] {
+        let request = try makeRequest(path: "/api/v1/auth/devices")
+        let response: DeviceTokensResponse = try await send(request)
+        return response.devices
+    }
+
+    /// Revokes one of the caller's own device tokens by id.
+    func revokeDeviceToken(tokenId: String) async throws {
+        let request = try makeRequest(path: "/api/v1/auth/devices/\(tokenId)", method: "DELETE")
+        let _: RevokeDeviceResponse = try await send(request)
+    }
+
+    /// Signs the caller out of every device, including the one making the
+    /// call.
+    func revokeAllDeviceTokens() async throws -> Int {
+        let request = try makeRequest(path: "/api/v1/auth/devices/revoke-all", method: "POST")
+        let response: RevokeAllDevicesResponse = try await send(request)
+        return response.revokedCount
+    }
+}
+
+private struct RevokeDeviceResponse: Decodable {
+    let revoked: String
+}
+
+private struct RevokeAllDevicesResponse: Decodable {
+    let revokedCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case revokedCount = "revoked_count"
     }
 }
 
@@ -182,10 +221,18 @@ extension APIClient: AppStateAPI {}
 
 protocol AuthAPI {
     func requestPairing(identity: String, channel: String) async throws -> PairingRequestResponse
-    func verifyPairing(code: String, identity: String) async throws -> PairingVerificationResponse
+    func verifyPairing(code: String, identity: String, deviceName: String?, platform: String?) async throws -> PairingVerificationResponse
 }
 
 extension APIClient: AuthAPI {}
+
+protocol DeviceManagementAPI {
+    func fetchDeviceTokens() async throws -> [DeviceToken]
+    func revokeDeviceToken(tokenId: String) async throws
+    func revokeAllDeviceTokens() async throws -> Int
+}
+
+extension APIClient: DeviceManagementAPI {}
 
 extension APIClient: URLSessionDelegate {
     func urlSession(

@@ -105,11 +105,11 @@ class TestIssue376ConfigurableTTLs(unittest.TestCase):
             session_token_absolute_ttl=172800,
         )
         code = mgr.generate_pairing_code("test_identity", "telegram")
-        token = mgr.verify_pairing_code(code, "test_identity")
-        self.assertIsNotNone(token)
-        result = mgr.validate_session_token(token)
+        issued = mgr.verify_pairing_code(code, "test_identity")
+        self.assertIsNotNone(issued)
+        result = mgr.validate_session_token(issued["token"])
         self.assertIsNotNone(result)
-        entry = mgr.session_tokens[token]
+        entry = mgr.session_tokens[issued["token_id"]]
         now = time.time()
         self.assertAlmostEqual(entry["expires_at"], now + 14400, delta=2)
         self.assertAlmostEqual(entry["absolute_expires_at"], now + 172800, delta=2)
