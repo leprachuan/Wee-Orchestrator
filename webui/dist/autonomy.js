@@ -92,7 +92,7 @@ export function initAutonomy({request, isAuthenticated}) {
     modal.classList.remove('hidden'); close.focus(); refresh(true);
   });
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
-  function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
+  function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; if(['h3','h4'].includes(tag))el.style.margin='12px 0 6px';if(tag==='p')el.style.margin='6px 0';parent.append(el); return el; }
   async function mutate(call) {
     if (busy) return;
     busy = true;
@@ -122,19 +122,19 @@ export function initAutonomy({request, isAuthenticated}) {
       repositoryForm.onsubmit=e=>{e.preventDefault();const enabled=repos.value.split(/\s+/).filter(Boolean);const disabled=repositories.repositories.filter(r=>!r.enabled && !enabled.includes(r.repository));mutate(()=>request('PUT','/autonomy/repositories',{repositories:[...enabled.map(repository=>({repository,enabled:true})),...disabled],default_repository:defaultRepo.value.trim()}));};
     }
     responsibilities.append(repositoryForm);
-    for(const issue of repositories.attention||[]){const el=text(responsibilities,'p',issue.title+' · Needs attention: '+issue.reason);const a=document.createElement('a');a.href='https://github.com/'+issue.repo+'/issues/'+issue.number;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' '+issue.repo+' #'+issue.number;el.append(a);}
+    for(const issue of repositories.attention||[]){const el=text(responsibilities,'p',issue.title+' · Needs attention: '+issue.reason);const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href='https://github.com/'+issue.repo+'/issues/'+issue.number;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' '+issue.repo+' #'+issue.number;el.append(a);}
     for(const repo of repositories.repositories){if(repo.sync?.error)text(responsibilities,'p',repo.repository+' · '+repo.sync.error);}
     const sync=document.createElement('button');sync.className='btn btn-ghost';sync.textContent='Sync GitHub goals';sync.onclick=()=>mutate(()=>request('POST','/autonomy/repositories/sync'));responsibilities.append(sync);
     const central=document.createElement('button');central.className='btn btn-ghost';central.textContent='View goals across all agents';
-    central.onclick=async()=>{try{const all=await rawRequest('GET','/autonomy/responsibilities');const pane=document.createElement('div');text(pane,'h4','All agents · tracked goals');for(const row of all.responsibilities){text(pane,'p',row.agent+' · '+row.goal+' · '+row.status);if(row.source){const a=document.createElement('a');a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number;pane.append(a);}}central.replaceWith(pane);}catch(error){status.textContent=error.message;}};responsibilities.append(central);
-    for(const op of operations.operations){const el=text(responsibilities,'p',op.kind+' · '+op.repo+' · '+op.status+(op.status==='pending'?' · Review shared approvals below':''));if(op.error)text(el,'span',' · '+op.error);if(op.result.url){const a=document.createElement('a');a.href=op.result.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' Open issue';el.append(a);}}
+    central.onclick=async()=>{try{const all=await rawRequest('GET','/autonomy/responsibilities');const pane=document.createElement('div');text(pane,'h4','All agents · tracked goals');for(const row of all.responsibilities){text(pane,'p',row.agent+' · '+row.goal+' · '+row.status);if(row.source){const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number;pane.append(a);}}central.replaceWith(pane);}catch(error){status.textContent=error.message;}};responsibilities.append(central);
+    for(const op of operations.operations){const el=text(responsibilities,'p',op.kind+' · '+op.repo+' · '+op.status+(op.status==='pending'?' · Review shared approvals below':''));if(op.error)text(el,'span',' · '+op.error);if(op.result.url){const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=op.result.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' Open issue';el.append(a);}}
 
     for (const row of work.responsibilities) {
-      const card = document.createElement('article');
+      const card = document.createElement('article');card.style.cssText='border-bottom:1px solid #8885;padding:12px 0;margin:8px 0';
       text(card, 'h4', row.agent + ' · ' + row.goal);
       text(card, 'p', row.status + ' · ' + row.phase + ' · every ' + row.interval_seconds + ' seconds');
       if(row.source){
-        const a=document.createElement('a');a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number+' · '+row.source.mode;card.append(a);
+        const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number+' · '+row.source.mode;card.append(a);
         text(card,'p','Next run: '+new Date(row.next_at*1000).toLocaleString()+' · Last sync: '+new Date(row.source.sync_at*1000).toLocaleString());
         if(row.source.sync_error)text(card,'p',row.source.sync_error);
         text(card,'pre',row.source.body).style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
