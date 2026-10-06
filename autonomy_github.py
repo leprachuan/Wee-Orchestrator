@@ -558,6 +558,22 @@ class RepositoryGoals:
                 not source or source["repo"] != repo or source["mode"] != "finite"
             ):
                 raise ValueError("Only a linked finite goal can be completed")
+            if kind == "complete":
+                with self.store.db._transaction() as db:
+                    previous = db.execute(
+                        "SELECT payload FROM goal_repo_operations WHERE id=?",
+                        (request_id,),
+                    ).fetchone()
+                snapshot = json.loads(previous["payload"]) if previous else {}
+                payload = {
+                    **payload,
+                    "expected_issue_id": snapshot.get(
+                        "expected_issue_id", source["issue_id"]
+                    ),
+                    "expected_revision": snapshot.get(
+                        "expected_revision", source["revision"]
+                    ),
+                }
             if kind in ("create", "link") and source:
                 raise ValueError("Goal is already linked")
         elif kind == "complete":
@@ -657,6 +673,18 @@ class RepositoryGoals:
                                 or current["status"] == "cancelled"
                             ):
                                 return False
+                        if row["kind"] == "complete":
+                            if not self.validate(payload["responsibility"]):
+                                return False
+                            current_source = self.source(payload["responsibility"])
+                            if (
+                                current_source["issue_id"],
+                                current_source["revision"],
+                            ) != (
+                                payload["expected_issue_id"],
+                                payload["expected_revision"],
+                            ):
+                                return False
                         return True
                     except (ValueError, KeyError):
                         return False
@@ -668,6 +696,14 @@ class RepositoryGoals:
                     if args["kind"] == "complete":
                         if not self.validate(args["responsibility"]):
                             raise ValueError("Issue is no longer eligible")
+                        current_source = self.source(args["responsibility"])
+                        if (current_source["issue_id"], current_source["revision"]) != (
+                            args["expected_issue_id"],
+                            args["expected_revision"],
+                        ):
+                            raise ValueError(
+                                "Issue changed since completion was requested"
+                            )
                         issue = self.github.request(
                             "PATCH", resource, {"state": "closed"}
                         )

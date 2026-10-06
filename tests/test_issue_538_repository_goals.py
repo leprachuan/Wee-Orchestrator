@@ -466,3 +466,24 @@ def test_issue_changed_during_planning_does_not_submit_old_plan(system):
         assert not s.approvals.list(owner=OWNER)
     finally:
         worker.close()
+
+
+def test_changed_issue_invalidates_pending_completion_approval(system):
+    s, store, remote, goals, _ = system
+    row = goals.ingest("owner/work", remote.issue("owner/work", 1), mode="finite")
+    op = goals.submit(
+        agent="a",
+        repo="owner/work",
+        kind="complete",
+        payload={"responsibility": row["id"]},
+        request_id=str(uuid4()),
+    )
+    approve(s)
+    remote.data["owner/work", 1]["body"] = "A different finite goal"
+    goals.process_operations()
+    assert remote.data["owner/work", 1]["state"] == "open"
+    assert not remote.writes
+    assert (
+        next(r for r in goals.operations() if r["id"] == op["id"])["status"]
+        == "invalidated"
+    )
