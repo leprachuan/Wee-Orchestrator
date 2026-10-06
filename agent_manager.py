@@ -13189,6 +13189,11 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         from autonomy_coordinator import ResponsibilityStore, create_responsibility_router
         autonomy_responsibilities = ResponsibilityStore(autonomy_service.policy.path.parent)
         app.state.autonomy_responsibilities = autonomy_responsibilities
+        from autonomy_github import RepositoryGoals, create_repository_router
+        autonomy_repository_goals = RepositoryGoals(autonomy_responsibilities, autonomy_service, lambda: session_mgr.AGENTS)
+        autonomy_responsibilities.repository_goals = autonomy_repository_goals
+        app.state.autonomy_repository_goals = autonomy_repository_goals
+        app.include_router(create_repository_router(autonomy_repository_goals, authenticate))
         from autonomy_models import ModelSettings, ModelPlanner, create_model_router
         autonomy_model_settings = ModelSettings(autonomy_service.policy.path.parent)
         def _autonomy_observations():

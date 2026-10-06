@@ -177,7 +177,7 @@ class ResponsibilityStore:
 
 
 def public_responsibility(row):
-    return {
+    result = {
         key: row[key]
         for key in (
             "id",
@@ -192,6 +192,11 @@ def public_responsibility(row):
             "error",
         )
     }
+
+    if "source" in row:
+        result["source"] = row["source"]
+        result["tracking"] = row["tracking"]
+    return result
 
 
 class Coordinator:
@@ -293,6 +298,10 @@ class Coordinator:
     def step(self):
         if self.lock_fd is None:
             raise RuntimeError("Exclusive worker lease required")
+        sources = getattr(self.store, "repository_goals", None)
+        if sources:
+            sources.process_operations()
+            sources.sync()
         # One responsibility per tick; no unbounded dispatch/overlap.
         if not self.service.policy.load()["enabled"]:
             return
@@ -307,6 +316,12 @@ class Coordinator:
                 continue
             key = row["id"]
             self.last_key = key
+            if sources and sources.source(key):
+                if not sources.validate(key):
+                    return
+                row = self.store.get(key)
+                if row["status"] != "active":
+                    return
             if row["agent"] not in self.agents():
                 self.store.update(
                     key, phase="attention", error="Agent no longer available"
@@ -330,7 +345,10 @@ class Coordinator:
                     row = self.store.get(key)
                     if row["run_number"] != run:
                         return
-                    plan = self.planner(row)
+                    context = dict(row)
+                    if sources:
+                        context["source"] = sources.source(key)
+                    plan = self.planner(context)
                     if (
                         not isinstance(plan, dict)
                         or set(plan) != {"report"}
@@ -346,6 +364,14 @@ class Coordinator:
                     ):
                         return
                     row = self.store.get(key)
+                    # Planning can take time; refresh canonical intent again before
+                    # submitting its report action, even when a saved rule allows it.
+                    if sources and sources.source(key):
+                        if not sources.validate(key):
+                            return
+                        row = self.store.get(key)
+                        if row["run_number"] != run:
+                            return
                 if row["status"] != "active":
                     return
                 plan = json.loads(row["checkpoint"])
@@ -457,12 +483,16 @@ def create_responsibility_router(store, service, authenticate, agents):
         except (ValueError, PermissionError) as exc:
             raise HTTPException(400, str(exc))
 
+    sources = getattr(store, "repository_goals", None)
+    def public(row):
+        return public_responsibility(sources.enrich(row) if sources else row)
+
     @router.get("/responsibilities")
     def listing(agent: str = "", auth=Depends(authenticate)):
         return guarded(
             lambda: {
                 "responsibilities": [
-                    public_responsibility(r) for r in store.list(principal(auth)[0]) if not agent or r["agent"] == agent
+                    public(r) for r in store.list(principal(auth)[0]) if not agent or r["agent"] == agent
                 ]
             }
         )
@@ -475,7 +505,7 @@ def create_responsibility_router(store, service, authenticate, agents):
                 raise ValueError("Responsibility belongs to a different agent")
             if body.agent not in agents():
                 raise ValueError("Unknown agent")
-            return public_responsibility(store.create(owner=owner, **body.model_dump()))
+            return public(store.create(owner=owner, **body.model_dump()))
 
         return guarded(add)
 
@@ -486,7 +516,7 @@ def create_responsibility_router(store, service, authenticate, agents):
             if agent and store.get(key, owner)["agent"] != agent:
                 raise KeyError(key)
             with service.policy.locked():
-                return public_responsibility(store.delete(key, owner))
+                return public(store.delete(key, owner))
         return guarded(remove)
 
     @router.put("/responsibilities/{key}")
@@ -495,8 +525,10 @@ def create_responsibility_router(store, service, authenticate, agents):
             owner, _ = principal(auth)
             if agent and store.get(key, owner)["agent"] != agent:
                 raise KeyError(key)
+            if sources and sources.source(key):
+                raise ValueError("Revise this goal in its linked GitHub issue, then sync")
             with service.policy.locked():
-                return public_responsibility(store.revise(key, body.goal, owner))
+                return public(store.revise(key, body.goal, owner))
 
         return guarded(change)
 
@@ -506,7 +538,11 @@ def create_responsibility_router(store, service, authenticate, agents):
             owner, actor = principal(auth)
             if agent and store.get(key, owner)["agent"] != agent:
                 raise KeyError(key)
+            if body.command == "resume" and sources and not sources.validate(key):
+                raise ValueError("Linked issue must be open, flagged always-on, and assigned to exactly one available agent")
             with service.policy.locked():
+                if agent and store.get(key, owner)["agent"] != agent:
+                    raise KeyError(key)
                 row = store.control(key, body.command, owner)
                 if body.command == "resume":
                     service.policy.set_enabled(True)
@@ -521,7 +557,7 @@ def create_responsibility_router(store, service, authenticate, agents):
                         ]
                     for approval_id in ids:
                         service.approvals.cancel(approval_id, owner=owner, actor=actor)
-                return public_responsibility(row)
+                return public(row)
 
         return guarded(change)
 
