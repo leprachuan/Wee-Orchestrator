@@ -1,3 +1,11 @@
+// UUIDs also work on HTTP dev hosts where randomUUID requires a secure context.
+export function newOperationId() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(v => v.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
 // Shared API inbox: all authenticated clients read the same durable requests.
 export function permanentScope(request) {
   const {agent, operation, host, resource} = request.scope;
@@ -27,7 +35,7 @@ export function initAutonomy({request, isAuthenticated}) {
   const budgets = document.createElement('section');
   const ruleHeading = document.createElement('h3'); ruleHeading.textContent = 'Saved action rules';
   const editor = document.createElement('form');
-  let editing = null, busy = false, last = '', cursor = 0, identityPresent = false, responsibilityForm = null, modelLoaded = false;
+  let editing = null, busy = false, last = '', cursor = 0, identityPresent = false, responsibilityForm = null, repositoryForm = null, modelLoaded = false;
   const modelFields = {};
   const budgetForm = document.createElement('form');
   const budgetTitle = document.createElement('h3'); budgetTitle.textContent = 'Routine model and budgets';
@@ -78,13 +86,13 @@ export function initAutonomy({request, isAuthenticated}) {
   window.addEventListener('wee:agent-always-on', e => {
     if (busy || !e.detail?.agent) return;
     selectedAgent = e.detail.agent; generation++; modelLoaded=false; last=''; cursor=0;
-    responsibilityForm=null; editing=null; editor.reset(); inputs.agent.value=selectedAgent;
+    responsibilityForm=null; repositoryForm=null; editing=null; editor.reset(); inputs.agent.value=selectedAgent;
     heading.textContent=selectedAgent+' · Always-On'; status.textContent='';
     inbox.replaceChildren(); rules.replaceChildren(); responsibilities.replaceChildren();
     modal.classList.remove('hidden'); close.focus(); refresh(true);
   });
   modal.addEventListener('keydown', e => { if (e.key === 'Escape') close.click(); });
-  function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; parent.append(el); return el; }
+  function text(parent, tag, value) { const el = document.createElement(tag); el.textContent = value; if(['h3','h4'].includes(tag))el.style.margin='12px 0 6px';if(tag==='p')el.style.margin='6px 0';parent.append(el); return el; }
   async function mutate(call) {
     if (busy) return;
     busy = true;
@@ -93,7 +101,7 @@ export function initAutonomy({request, isAuthenticated}) {
     catch (error) { status.textContent = error.message; }
     finally { busy = false; box.querySelectorAll('button').forEach(b => b.disabled = false); await refresh(true); }
   }
-  function render(data, policy, work, models, catalog) {
+  function render(data, policy, work, models, catalog, repositories, operations) {
     if (!modelLoaded) {
       for (const key of ['routine_runtime','escalation_runtime']) {
         modelFields[key].replaceChildren();
@@ -103,11 +111,39 @@ export function initAutonomy({request, isAuthenticated}) {
     budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable. ${models.cost_note || ""}`;
     responsibilities.replaceChildren();
     text(responsibilities, 'h3', 'Always-On responsibilities');
-    text(responsibilities, 'p', 'Opt-in agents draft reports in isolated workspaces. New responsibilities start paused.');
+    text(responsibilities, 'p', 'Track goals as GitHub issues labeled always-on and agent:'+selectedAgent+'. New and changed goals start paused. Runs retain the existing approvals and budgets.');
+    if (!repositoryForm) {
+      repositoryForm=document.createElement('form');
+      text(repositoryForm,'h4','Work repositories');
+      const repos=document.createElement('textarea');repos.className='glass-input';repos.rows=3;repos.placeholder='owner/repository, one per line';repos.value=repositories.repositories.filter(r=>r.enabled).map(r=>r.repository).join('\n');
+      const defaultRepo=document.createElement('input');defaultRepo.className='glass-input';defaultRepo.placeholder='Default repository for '+selectedAgent;defaultRepo.value=repositories.default_repository;
+      const saveRepos=document.createElement('button');saveRepos.className='btn btn-primary';saveRepos.textContent='Save repositories and agent default';
+      repositoryForm.append(repos,defaultRepo,saveRepos);
+      repositoryForm.onsubmit=e=>{e.preventDefault();const enabled=repos.value.split(/\s+/).filter(Boolean);const disabled=repositories.repositories.filter(r=>!r.enabled && !enabled.includes(r.repository));mutate(()=>request('PUT','/autonomy/repositories',{repositories:[...enabled.map(repository=>({repository,enabled:true})),...disabled],default_repository:defaultRepo.value.trim()}));};
+    }
+    responsibilities.append(repositoryForm);
+    for(const issue of repositories.attention||[]){const el=text(responsibilities,'p',issue.title+' · Needs attention: '+issue.reason);const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href='https://github.com/'+issue.repo+'/issues/'+issue.number;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' '+issue.repo+' #'+issue.number;el.append(a);}
+    for(const repo of repositories.repositories){if(repo.sync?.error)text(responsibilities,'p',repo.repository+' · '+repo.sync.error);}
+    const sync=document.createElement('button');sync.className='btn btn-ghost';sync.textContent='Sync GitHub goals';sync.onclick=()=>mutate(()=>request('POST','/autonomy/repositories/sync'));responsibilities.append(sync);
+    const central=document.createElement('button');central.className='btn btn-ghost';central.textContent='View goals across all agents';
+    central.onclick=async()=>{try{const all=await rawRequest('GET','/autonomy/responsibilities');const pane=document.createElement('div');text(pane,'h4','All agents · tracked goals');for(const row of all.responsibilities){text(pane,'p',row.agent+' · '+row.goal+' · '+row.status);if(row.source){const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number;pane.append(a);}}central.replaceWith(pane);}catch(error){status.textContent=error.message;}};responsibilities.append(central);
+    for(const op of operations.operations){const el=text(responsibilities,'p',op.kind+' · '+op.repo+' · '+op.status+(op.status==='pending'?' · Review shared approvals below':''));if(op.error)text(el,'span',' · '+op.error);if(op.result.url){const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=op.result.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' Open issue';el.append(a);}}
+
     for (const row of work.responsibilities) {
-      const card = document.createElement('article');
+      const card = document.createElement('article');card.style.cssText='border-bottom:1px solid #8885;padding:12px 0;margin:8px 0';
       text(card, 'h4', row.agent + ' · ' + row.goal);
       text(card, 'p', row.status + ' · ' + row.phase + ' · every ' + row.interval_seconds + ' seconds');
+      if(row.source){
+        const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number+' · '+row.source.mode;card.append(a);
+        text(card,'p','Next run: '+new Date(row.next_at*1000).toLocaleString()+' · Last sync: '+new Date(row.source.sync_at*1000).toLocaleString());
+        if(row.source.sync_error)text(card,'p',row.source.sync_error);
+        text(card,'pre',row.source.body).style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
+        if(row.source.mode==='finite' && row.source.eligible && row.status!=='cancelled'){
+          const done=document.createElement('button');done.className='btn btn-ghost btn-sm';done.textContent='Request completion (closes issue)';done.onclick=()=>mutate(()=>request('POST','/autonomy/repository-operations',{agent:selectedAgent,repository:row.source.repo,kind:'complete',request_id:newOperationId(),responsibility:row.id}));card.append(done);
+        }
+      }else{
+        text(card,'p','Unlinked legacy goal');const link=document.createElement('button');link.className='btn btn-ghost btn-sm';link.textContent='Link to GitHub issue';link.onclick=()=>{const repository=window.prompt('Configured owner/repository:',repositories.default_repository);if(!repository)return;const number=window.prompt('Existing open issue number:');if(!number)return;mutate(()=>request('POST','/autonomy/repository-operations',{agent:selectedAgent,repository,number:Number(number),kind:'link',request_id:newOperationId(),responsibility:row.id,interval_seconds:row.interval_seconds}));};if(row.status!=='cancelled')card.append(link);
+      }
       if (row.report) text(card, 'pre', row.report).style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
       if (row.error) text(card, 'p', row.error);
       if (row.status !== 'cancelled') {
@@ -119,7 +155,7 @@ export function initAutonomy({request, isAuthenticated}) {
           }; card.append(b);
         }
         const revise = document.createElement('button'); revise.className='btn btn-ghost btn-sm'; revise.textContent='Revise goal';
-        revise.onclick=()=>{const goal=window.prompt('Revise the responsibility (pauses it and discards its pending plan):',row.goal);if(goal)mutate(()=>request('PUT','/autonomy/responsibilities/'+encodeURIComponent(row.id),{goal}));};card.append(revise);
+        revise.onclick=()=>{const goal=window.prompt('Revise the responsibility (pauses it and discards its pending plan):',row.goal);if(goal)mutate(()=>request('PUT','/autonomy/responsibilities/'+encodeURIComponent(row.id),{goal}));};if(!row.source)card.append(revise);
       }
       if (row.status === 'cancelled') {
         const remove = document.createElement('button'); remove.className='btn btn-ghost btn-sm'; remove.textContent='Delete goal';
@@ -131,12 +167,12 @@ export function initAutonomy({request, isAuthenticated}) {
     if (!responsibilityForm) {
     const form = document.createElement('form');
     const values = {};
-    for (const [key,label,value] of [['agent','Agent name',''],['goal','Responsibility',''],['interval_seconds','Interval in seconds (minimum 300)','3600']]) {
-      const el=document.createElement('input');el.className='glass-input';el.required=true;el.value=key==='agent'?selectedAgent:value;el.readOnly=key==='agent';el.maxLength=1024;
+    for (const [key,label,value] of [['agent','Agent name',''],['repository','Configured owner/repository',repositories.default_repository],['title','New issue title',''],['body','Issue description and task checklist',''],['number','Existing issue number (optional; leave empty to create)',''],['interval_seconds','Interval in seconds (minimum 300)','3600']]) {
+      const el=document.createElement(key==='body'?'textarea':'input');el.className='glass-input';el.required=!['body','number'].includes(key);el.value=key==='agent'?selectedAgent:value;el.readOnly=key==='agent';el.maxLength=key==='body'?48000:key==='title'?256:1024;el.style.cssText='display:block;width:100%;margin:4px 0 10px';
       const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(el);form.append(wrapper);values[key]=el;
     }
-    const create=document.createElement('button');create.className='btn btn-primary';create.textContent='Create paused responsibility';form.append(create);
-    form.onsubmit=e=>{e.preventDefault();mutate(()=>request('POST','/autonomy/responsibilities',{agent:values.agent.value.trim(),goal:values.goal.value.trim(),interval_seconds:Number(values.interval_seconds.value)}));};responsibilityForm=form; }
+    const mode=document.createElement('select');for(const name of ['recurring','finite']){const option=document.createElement('option');option.value=name;option.textContent=name;mode.append(option);}form.append(mode);const create=document.createElement('button');create.className='btn btn-primary';create.textContent='Request create / link issue (starts paused)';form.append(create);
+    let requestId=null;form.onsubmit=e=>{e.preventDefault();requestId ||= newOperationId();const number=values.number.value.trim();const body={agent:selectedAgent,repository:values.repository.value.trim(),kind:number?'link':'create',request_id:requestId,title:values.title.value.trim(),body:values.body.value,interval_seconds:Number(values.interval_seconds.value),mode:mode.value};if(number)body.number=Number(number);mutate(async()=>{await request('POST','/autonomy/repository-operations',body);requestId=null;values.title.value='';values.body.value='';values.number.value='';values.title.required=true;});};values.number.oninput=()=>{values.title.required=!values.number.value.trim();};form.addEventListener('input',()=>{requestId=null;});responsibilityForm=form; }
     responsibilities.append(responsibilityForm);
     inbox.replaceChildren(); rules.replaceChildren();
     const pending = data.requests.filter(r => ['pending','rule_pending'].includes(r.status));
@@ -187,10 +223,10 @@ export function initAutonomy({request, isAuthenticated}) {
       const events = await request('GET', `/autonomy/events?after=${cursor}`);
       const changed = events.cursor !== cursor; cursor = events.cursor;
       if (!force && !changed && last && modal.classList.contains('hidden')) return;
-      const [data, policy, work, models, catalog] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings'), request('GET','/autonomy/runtime-catalog')]);
+      const [data, policy, work, models, catalog, repositories, operations] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings'), request('GET','/autonomy/runtime-catalog'),request('GET','/autonomy/repositories'),request('GET','/autonomy/repository-operations')]);
       if (opened !== generation || modal.classList.contains('hidden')) return;
-      const version = JSON.stringify([data, policy, work, models]);
-      if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models, catalog); last = version; }
+      const version = JSON.stringify([data, policy, work, models, repositories, operations]);
+      if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models, catalog, repositories, operations); last = version; }
     } catch (error) { if (!modal.classList.contains('hidden')) status.textContent = error.message; }
   }
   // Connected delivery and authoritative catch-up after sleep/network interruption.

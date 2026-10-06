@@ -229,3 +229,7 @@ The opt-in Always-On implementation (#519) provides durable responsibilities, se
 Shared durable approvals, atomic resolution, approve-and-always-allow rule persistence and revocation are wired into the restricted worker. Production promotion still requires the validated release workflow.
 
 Always-On setup lives under **Agents → selected agent → Always-On** in WebUI, macOS and iOS. Routine/escalation runtime and model, daily budgets, responsibilities, approvals and saved rules belong to that agent. Approved requests remain shared across authorized connected clients. Agent choices persist in version 2 of `model-budgets.json` under `agents`, with legacy global settings retained as defaults; legacy usage is conservatively debited until its UTC day ends.
+
+### Repository-backed Always-On goals
+
+Track recurring responsibilities and finite goals as GitHub issues in configured work repositories, labeled `always-on` and `agent:<name>`. Agent Always-On panels provide repo defaults, create/link requests, explicit legacy migration and a view across agents. See [setup and lifecycle](docs/always-on-repository-goals.md).
