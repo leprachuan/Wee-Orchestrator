@@ -87,9 +87,17 @@ class ModelSettings:
         return agent
 
     def _read(self):
-        data = json.loads(self.path.read_text()) if self.path.exists() else asdict(ModelConfig())
+        data = (
+            json.loads(self.path.read_text())
+            if self.path.exists()
+            else asdict(ModelConfig())
+        )
         if set(data) == {"version", "defaults", "agents"}:
-            if data["version"] != 2 or not isinstance(data["agents"], dict) or len(data["agents"]) > 1000:
+            if (
+                data["version"] != 2
+                or not isinstance(data["agents"], dict)
+                or len(data["agents"]) > 1000
+            ):
                 raise ValueError("Unsupported agent model settings")
             ModelConfig(**data["defaults"])
             for agent, config in data["agents"].items():
@@ -97,14 +105,19 @@ class ModelSettings:
                 ModelConfig(**config)
             return data
         fields = set(asdict(ModelConfig()))
-        if set(data) not in (fields, fields - {"routine_runtime", "escalation_runtime"}):
+        if set(data) not in (
+            fields,
+            fields - {"routine_runtime", "escalation_runtime"},
+        ):
             raise ValueError("Unsupported model settings")
         return {"version": 2, "defaults": asdict(ModelConfig(**data)), "agents": {}}
 
     def _write(self, data):
         name = None
         try:
-            with tempfile.NamedTemporaryFile(mode="w", dir=self.path.parent, delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.path.parent, delete=False
+            ) as f:
                 name = f.name
                 json.dump(data, f, indent=2)
                 f.write("\n")
@@ -199,7 +212,9 @@ class ModelPlanner:
                 "CREATE TABLE IF NOT EXISTS model_usage (day TEXT PRIMARY KEY, requests INTEGER NOT NULL, reserved_tokens INTEGER NOT NULL, actual_tokens INTEGER NOT NULL, unknown_usage INTEGER NOT NULL)"
             )
 
-            db.execute("CREATE TABLE IF NOT EXISTS agent_model_usage (agent TEXT, day TEXT, requests INTEGER NOT NULL, reserved_tokens INTEGER NOT NULL, actual_tokens INTEGER NOT NULL, unknown_usage INTEGER NOT NULL, PRIMARY KEY(agent,day))")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS agent_model_usage (agent TEXT, day TEXT, requests INTEGER NOT NULL, reserved_tokens INTEGER NOT NULL, actual_tokens INTEGER NOT NULL, unknown_usage INTEGER NOT NULL, PRIMARY KEY(agent,day))"
+            )
 
     def _state(self, key, run):
         with self.store.db._transaction() as db:
@@ -224,13 +239,32 @@ class ModelPlanner:
 
     def usage(self, agent=""):
         ModelSettings._agent(agent)
-        day = datetime.fromtimestamp(self.store.clock(), timezone.utc).date().isoformat()
+        day = (
+            datetime.fromtimestamp(self.store.clock(), timezone.utc).date().isoformat()
+        )
         with self.store.db._transaction() as db:
-            legacy = db.execute("SELECT * FROM model_usage WHERE day=?", (day,)).fetchone()
-            rows = db.execute("SELECT * FROM agent_model_usage WHERE day=?" + (" AND agent=?" if agent else ""), (day, agent) if agent else (day,)).fetchall()
-            result = {"day": day, "requests": 0, "reserved_tokens": 0, "actual_tokens": 0, "unknown_usage": 0}
+            legacy = db.execute(
+                "SELECT * FROM model_usage WHERE day=?", (day,)
+            ).fetchone()
+            rows = db.execute(
+                "SELECT * FROM agent_model_usage WHERE day=?"
+                + (" AND agent=?" if agent else ""),
+                (day, agent) if agent else (day,),
+            ).fetchall()
+            result = {
+                "day": day,
+                "requests": 0,
+                "reserved_tokens": 0,
+                "actual_tokens": 0,
+                "unknown_usage": 0,
+            }
             for row in ([legacy] if legacy else []) + list(rows):
-                for field in ("requests", "reserved_tokens", "actual_tokens", "unknown_usage"):
+                for field in (
+                    "requests",
+                    "reserved_tokens",
+                    "actual_tokens",
+                    "unknown_usage",
+                ):
                     result[field] += row[field]
             return result
 
@@ -287,11 +321,26 @@ class ModelPlanner:
         )
         self._state(row["id"], row["run_number"])
         with self.store.db._transaction() as db:
-            db.execute("INSERT OR IGNORE INTO agent_model_usage VALUES(?,?,0,0,0,0)", (row["agent"], day))
-            used = dict(db.execute("SELECT * FROM agent_model_usage WHERE agent=? AND day=?", (row["agent"], day)).fetchone())
-            legacy = db.execute("SELECT * FROM model_usage WHERE day=?", (day,)).fetchone()
+            db.execute(
+                "INSERT OR IGNORE INTO agent_model_usage VALUES(?,?,0,0,0,0)",
+                (row["agent"], day),
+            )
+            used = dict(
+                db.execute(
+                    "SELECT * FROM agent_model_usage WHERE agent=? AND day=?",
+                    (row["agent"], day),
+                ).fetchone()
+            )
+            legacy = db.execute(
+                "SELECT * FROM model_usage WHERE day=?", (day,)
+            ).fetchone()
             if legacy:
-                for field in ("requests", "reserved_tokens", "actual_tokens", "unknown_usage"):
+                for field in (
+                    "requests",
+                    "reserved_tokens",
+                    "actual_tokens",
+                    "unknown_usage",
+                ):
                     used[field] += legacy[field]
             run = dict(
                 db.execute(
@@ -350,7 +399,7 @@ class ModelPlanner:
         return content
 
     @staticmethod
-    def _verify(content):
+    def _verify(content, adaptive=False):
         # Some CLI/SDK runtimes wrap a valid machine response in one Markdown
         # fence. Accept only that exact wrapper, never extract embedded objects.
         content = content.strip()
@@ -361,11 +410,77 @@ class ModelPlanner:
         plan = json.loads(content)
         if (
             not isinstance(plan, dict)
-            or set(plan) != {"report"}
+            or (not adaptive and set(plan) != {"report"})
+            or (
+                adaptive
+                and set(plan)
+                - {
+                    "report",
+                    "next_delay_seconds",
+                    "scheduling_reason",
+                    "actions",
+                    "steering_questions",
+                }
+            )
             or not isinstance(plan["report"], str)
             or not 1 <= len(plan["report"]) <= 4096
         ):
             raise ValueError("Invalid report schema")
+        if adaptive:
+            actions = plan.get("actions", [])
+            questions = plan.get("steering_questions", [])
+            if (
+                not isinstance(actions, list)
+                or len(actions) > 3
+                or not isinstance(questions, list)
+                or len(questions) > 3
+            ):
+                raise ValueError("At most three actions/questions per heartbeat")
+            for item in actions:
+                if (
+                    not isinstance(item, dict)
+                    or set(item)
+                    - {"goal_id", "kind", "payload", "permission", "instruction_quote"}
+                    or item.get("kind")
+                    not in ("save_note", "issue_comment", "issue_checklist")
+                    or item.get("permission", "ask") not in ("ask", "autonomous")
+                ):
+                    raise ValueError("Unsupported goal action")
+                if "goal_id" in item and not isinstance(item["goal_id"], str):
+                    raise ValueError("Invalid goal id")
+                payload = item.get("payload")
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid action payload")
+                if item["kind"] == "issue_checklist":
+                    if (
+                        set(payload) != {"items"}
+                        or not isinstance(payload["items"], list)
+                        or not 1 <= len(payload["items"]) <= 20
+                    ):
+                        raise ValueError("Invalid checklist changes")
+                    for change in payload["items"]:
+                        if (
+                            set(change) != {"text", "completed"}
+                            or not isinstance(change["text"], str)
+                            or len(change["text"]) > 1024
+                            or type(change["completed"]) is not bool
+                        ):
+                            raise ValueError("Invalid checklist item")
+                elif (
+                    set(payload) != {"content"}
+                    or not isinstance(payload["content"], str)
+                    or not 1 <= len(payload["content"]) <= 4096
+                ):
+                    raise ValueError("Invalid bounded content")
+                if (
+                    not isinstance(item.get("instruction_quote", ""), str)
+                    or len(item.get("instruction_quote", "")) > 8000
+                ):
+                    raise ValueError("Invalid instruction citation")
+            if any(
+                not isinstance(q, str) or not 1 <= len(q) <= 2000 for q in questions
+            ):
+                raise ValueError("Invalid steering question")
         return plan
 
     def __call__(self, row):
@@ -378,9 +493,18 @@ class ModelPlanner:
         }
         if row.get("source"):
             source = row["source"]
-            context["tracked_issue"] = {"url": source["url"], "title": source["title"], "body": source["body"].encode()[:4096].decode("utf-8", errors="ignore"), "body_truncated": len(source["body"].encode()) > 4096, "mode": source["mode"]}
+            context["tracked_issue"] = {
+                "url": source["url"],
+                "title": source["title"],
+                "body": source["body"].encode()[:4096].decode("utf-8", errors="ignore"),
+                "body_truncated": len(source["body"].encode()) > 4096,
+                "mode": source["mode"],
+            }
+        if row.get("agent_context"):
+            context["agent_context"] = row["agent_context"]
+            context["current_goal_id"] = row["id"]
         text = json.dumps(context, ensure_ascii=False)
-        if len(text.encode()) > 12288:
+        if len(text.encode()) > (262144 if row.get("agent_context") else 12288):
             raise ValueError("Routine context exceeds bound")
         messages = [
             {
@@ -389,6 +513,13 @@ class ModelPlanner:
             },
             {"role": "user", "content": text},
         ]
+        if row.get("agent_context"):
+            messages[0]["content"] = messages[0]["content"].replace(
+                'with one string field "report"', 'with a string field "report"'
+            )
+            messages[0][
+                "content"
+            ] += " You are conducting one agent heartbeat across the listed goals. Prioritize useful work, blocked goals and deadlines fairly. Return report plus next_delay_seconds (300..14400, measured after this run), scheduling_reason, up to three actions and up to three steering_questions. Actions: {goal_id,kind,payload,permission,instruction_quote}; kind save_note or issue_comment with payload {content}, or issue_checklist with payload {items:[{text,completed}]}. Permission is autonomous only when explicitly allowed by that goal’s user-authored allowed_autonomously instructions; cite exact text in instruction_quote. ask_permission_first overrides allowances. Unknown authority requires permission ask. Questions are strings. Choose the next cadence based on actual useful work and waiting, not a fixed formula or goal count. These are proposals; the server gates execution."
         routine_runtime, routine_model = self._resolve_pair(
             row,
             config.routine_runtime,
@@ -403,7 +534,7 @@ class ModelPlanner:
                 row, routine_model, messages, config, routine_runtime
             )
             try:
-                return self._verify(content)
+                return self._verify(content, adaptive=bool(row.get("agent_context")))
             except (ValueError, TypeError):
                 with self.store.db._transaction() as db:
                     db.execute(
@@ -452,7 +583,8 @@ class ModelPlanner:
             ):
                 raise PermissionError("Escalation model no longer permitted")
             return self._verify(
-                self._request(row, model, messages, current, escalation_runtime)
+                self._request(row, model, messages, current, escalation_runtime),
+                adaptive=bool(row.get("agent_context")),
             )
 
         result = self.service.execute(

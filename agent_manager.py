@@ -13159,9 +13159,25 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
                 autonomy_worker.close()
                 print(f"[Autonomy] Worker unavailable; execution disabled ({type(exc).__name__})", file=sys.stderr)
 
+        async def _inbox_relay_loop():
+            while True:
+                for operation in (autonomy_responsibilities.request_relay.tick,
+                                  autonomy_responsibilities.inbox_push.tick):
+                    try:
+                        await asyncio.to_thread(operation)
+                    except Exception as exc:
+                        print(f"[Autonomy] Inbox delivery retry ({type(exc).__name__})", file=sys.stderr)
+                await asyncio.sleep(5)
+        relay_task = asyncio.create_task(_inbox_relay_loop()) if autonomy_service is not None else None
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
         watcher_task = asyncio.ensure_future(_agents_file_watcher())
         yield
+        if relay_task is not None:
+            relay_task.cancel()
+            try:
+                await relay_task
+            except asyncio.CancelledError:
+                pass
         cleanup_task.cancel()
         watcher_task.cancel()
         if autonomy_task is not None:
@@ -13189,6 +13205,16 @@ def create_api_app():  # noqa: C901 – factory kept in one place intentionally
         from autonomy_coordinator import ResponsibilityStore, create_responsibility_router
         autonomy_responsibilities = ResponsibilityStore(autonomy_service.policy.path.parent)
         app.state.autonomy_responsibilities = autonomy_responsibilities
+        from autonomy_heartbeat import Heartbeats, create_heartbeat_router
+        autonomy_heartbeats = Heartbeats(autonomy_responsibilities, autonomy_service, lambda: session_mgr.AGENTS)
+        autonomy_responsibilities.heartbeats = autonomy_heartbeats
+        from autonomy_relay import RequestRelay, create_relay_router
+        autonomy_responsibilities.request_relay = RequestRelay(autonomy_heartbeats)
+        from autonomy_push import InboxPush, create_push_router
+        autonomy_responsibilities.inbox_push = InboxPush(autonomy_responsibilities.request_relay)
+        app.include_router(create_push_router(autonomy_responsibilities.inbox_push, authenticate))
+        app.include_router(create_relay_router(autonomy_responsibilities.request_relay, authenticate))
+        app.include_router(create_heartbeat_router(autonomy_heartbeats, authenticate))
         from autonomy_github import RepositoryGoals, create_repository_router
         autonomy_repository_goals = RepositoryGoals(autonomy_responsibilities, autonomy_service, lambda: session_mgr.AGENTS)
         autonomy_responsibilities.repository_goals = autonomy_repository_goals

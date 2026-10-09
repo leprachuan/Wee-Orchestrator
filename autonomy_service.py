@@ -93,6 +93,7 @@ class ApprovalService:
         summary,
         preflight=lambda: True,
         details=None,
+        goal_decision=None,
     ):
         """Run a trusted synchronous adapter under current policy and single-use claim.
 
@@ -107,6 +108,10 @@ class ApprovalService:
             verdict, reason = evaluate(action, data["rules"], enabled=data["enabled"])
             if verdict == "deny":
                 return {"status": "denied", "reason": reason}
+            if goal_decision == "ask":
+                verdict = "ask"
+            elif goal_decision == "allow" and reason != "matching_approval_rule":
+                verdict = "allow"
             # Every execution reserves a durable intent, including policy-allowed work.
             row = self.approvals.create(
                 action,
@@ -186,7 +191,9 @@ def create_router(service, authenticate):
         return row
 
     def scoped_rule(rule_id, agent):
-        if agent and not any(r.id == rule_id and r.agent == agent for r in service.policy.load()["rules"]):
+        if agent and not any(
+            r.id == rule_id and r.agent == agent for r in service.policy.load()["rules"]
+        ):
             raise KeyError(rule_id)
 
     @router.get("/approvals")
@@ -196,7 +203,8 @@ def create_router(service, authenticate):
             service.recover_rules()
             return {
                 "requests": [
-                    public_record(row) for row in service.approvals.list(owner=owner)
+                    public_record(row)
+                    for row in service.approvals.list(owner=owner)
                     if not agent or json.loads(row["scope_json"]).get("agent") == agent
                 ]
             }
@@ -205,16 +213,17 @@ def create_router(service, authenticate):
 
     @router.get("/approvals/{approval_id}")
     def approval(approval_id: str, agent: str = "", auth=Depends(authenticate)):
-        return guarded(
-            lambda: public_record(
-                scoped_record(approval_id, auth, agent)
-            )
-        )
+        return guarded(lambda: public_record(scoped_record(approval_id, auth, agent)))
 
     @router.post("/approvals/{approval_id}/decision")
-    def decide(approval_id: str, body: Decision, agent: str = "", auth=Depends(authenticate)):
+    def decide(
+        approval_id: str, body: Decision, agent: str = "", auth=Depends(authenticate)
+    ):
         return guarded(
-            lambda: (scoped_record(approval_id, auth, agent), service.decide(approval_id, auth, body.decision, body.fingerprint))[1]
+            lambda: (
+                scoped_record(approval_id, auth, agent),
+                service.decide(approval_id, auth, body.decision, body.fingerprint),
+            )[1]
         )
 
     @router.get("/events")
@@ -263,7 +272,14 @@ def create_router(service, authenticate):
         def read():
             principal(auth)
             data = service.policy.load()
-            return {**data, "rules": [asdict(rule) for rule in data["rules"] if not agent or rule.agent == agent]}
+            return {
+                **data,
+                "rules": [
+                    asdict(rule)
+                    for rule in data["rules"]
+                    if not agent or rule.agent == agent
+                ],
+            }
 
         return guarded(read)
 
@@ -288,7 +304,9 @@ def create_router(service, authenticate):
         return guarded(add)
 
     @router.put("/rules/{rule_id}")
-    def edit_rule(rule_id: str, body: RuleInput, agent: str = "", auth=Depends(authenticate)):
+    def edit_rule(
+        rule_id: str, body: RuleInput, agent: str = "", auth=Depends(authenticate)
+    ):
         def edit():
             scoped_rule(rule_id, agent)
             _, actor = principal(auth)
@@ -309,7 +327,10 @@ def create_router(service, authenticate):
     @router.delete("/rules/{rule_id}")
     def revoke_rule(rule_id: str, agent: str = "", auth=Depends(authenticate)):
         return guarded(
-            lambda: (scoped_rule(rule_id, agent), asdict(service.policy.revoke(rule_id, actor=principal(auth)[1])))[1]
+            lambda: (
+                scoped_rule(rule_id, agent),
+                asdict(service.policy.revoke(rule_id, actor=principal(auth)[1])),
+            )[1]
         )
 
     return router

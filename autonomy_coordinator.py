@@ -39,7 +39,10 @@ class ResponsibilityStore:
             row = self._get(db, key, owner)
             if row["status"] != "cancelled":
                 raise ValueError("Cancel the responsibility before deleting it")
-            db.execute("UPDATE responsibilities SET deleted_at=COALESCE(deleted_at, ?) WHERE id=?", (self.clock(), key))
+            db.execute(
+                "UPDATE responsibilities SET deleted_at=COALESCE(deleted_at, ?) WHERE id=?",
+                (self.clock(), key),
+            )
             return self._get(db, key, owner)
 
     def create(self, *, agent, goal, interval_seconds, owner=OWNER):
@@ -193,6 +196,14 @@ def public_responsibility(row):
         )
     }
 
+    for field in (
+        "autonomous_instructions",
+        "permission_required_instructions",
+        "instruction_version",
+        "heartbeat",
+    ):
+        if field in row:
+            result[field] = row[field]
     if "source" in row:
         result["source"] = row["source"]
         result["tracking"] = row["tracking"]
@@ -270,7 +281,10 @@ class Coordinator:
         path = Path(action.resource)
         root = self.workspace(args["responsibility"])
         relative = PurePosixPath(path).relative_to(PurePosixPath(root))
-        if len(relative.parts) != 1 or relative.name != "report.md":
+        if len(relative.parts) != 1 or relative.name not in (
+            "report.md",
+            "progress.md",
+        ):
             raise PermissionError("Unsupported report destination")
         fd = self._workspace_fd(args["responsibility"])
         temporary = "." + str(uuid4()) + ".tmp"
@@ -298,6 +312,9 @@ class Coordinator:
     def step(self):
         if self.lock_fd is None:
             raise RuntimeError("Exclusive worker lease required")
+        heartbeats = getattr(self.store, "heartbeats", None)
+        if heartbeats:
+            heartbeats.process(self)
         sources = getattr(self.store, "repository_goals", None)
         if sources:
             sources.process_operations()
@@ -306,14 +323,30 @@ class Coordinator:
         if not self.service.policy.load()["enabled"]:
             return
         rows = self.store.list()
+        if heartbeats:
+            for agent in self.agents():
+                if (
+                    not any(
+                        r["agent"] == agent and r["status"] == "active" for r in rows
+                    )
+                    and heartbeats.get(agent)["next_at"] <= self.store.clock()
+                ):
+                    heartbeats.schedule(agent, 14400, "No active goals; quiet recheck")
         if self.last_key in [r["id"] for r in rows]:
             index = [r["id"] for r in rows].index(self.last_key) + 1
             rows = rows[index:] + rows[:index]
         for row in rows:
             if row["status"] != "active" or row["phase"] == "attention":
                 continue
-            if row["phase"] == "idle" and row["next_at"] > self.store.clock():
-                continue
+            if row["phase"] == "idle":
+                if heartbeats:
+                    if (
+                        heartbeats.blocked(row["id"])
+                        or heartbeats.get(row["agent"])["next_at"] > self.store.clock()
+                    ):
+                        continue
+                elif row["next_at"] > self.store.clock():
+                    continue
             key = row["id"]
             self.last_key = key
             if sources and sources.source(key):
@@ -348,16 +381,37 @@ class Coordinator:
                     context = dict(row)
                     if sources:
                         context["source"] = sources.source(key)
+                    if heartbeats:
+                        context["agent_context"] = heartbeats.context(row["agent"])
                     plan = self.planner(context)
                     if (
                         not isinstance(plan, dict)
-                        or set(plan) != {"report"}
+                        or (not heartbeats and set(plan) != {"report"})
                         or not isinstance(plan["report"], str)
                         or not 1 <= len(plan["report"]) <= 4096
                     ):
                         raise ValueError("Planner must return a bounded report")
+                    if (
+                        self.store.get(key)["run_number"] != run
+                        or self.store.get(key)["status"] != "active"
+                    ):
+                        return
+                    if heartbeats:
+                        heartbeats.propose(row, plan)
+                        heartbeats.schedule(
+                            row["agent"],
+                            plan.get("next_delay_seconds"),
+                            plan.get("scheduling_reason"),
+                            generation=key + ":" + str(run),
+                        )
                     checkpoint = json.dumps(
-                        {"report": plan["report"], "run_number": run}
+                        {
+                            "report": plan["report"],
+                            "run_number": run,
+                            "heartbeat_generation": key + ":" + str(run),
+                            "next_delay_seconds": plan.get("next_delay_seconds"),
+                            "scheduling_reason": plan.get("scheduling_reason"),
+                        }
                     )
                     if not self.store.update_if_run(
                         key, run, phase="waiting", checkpoint=checkpoint
@@ -391,11 +445,31 @@ class Coordinator:
                     + " in its isolated Always-On workspace",
                     adapter=self._write_report,
                     details=plan["report"],
+                    goal_decision=(
+                        heartbeats.permission(
+                            row,
+                            {
+                                "kind": "save_note",
+                                "permission": "autonomous",
+                                "quote": row["autonomous_instructions"],
+                            },
+                        )
+                        if heartbeats
+                        else None
+                    ),
                     preflight=lambda: self.store.get(key)["status"] == "active"
                     and self.store.get(key)["run_number"] == plan["run_number"],
                 )
                 status = result["status"]
                 if status == "succeeded":
+                    if heartbeats:
+                        heartbeats.schedule(
+                            row["agent"],
+                            plan.get("next_delay_seconds"),
+                            plan.get("scheduling_reason"),
+                            generation=plan.get("heartbeat_generation"),
+                            finish=True,
+                        )
                     self.store.update_if_run(
                         key,
                         plan["run_number"],
@@ -440,6 +514,13 @@ class Coordinator:
                         ),
                     )
                     return
+                if heartbeats:
+                    heartbeats.schedule(
+                        row["agent"],
+                        3600,
+                        "Run waiting or failed; bounded recheck",
+                        failed=True,
+                    )
                 if isinstance(exc, BudgetExceeded):
                     self.store.update_if_run(
                         key, row["run_number"], phase="attention", error=str(exc)
@@ -484,15 +565,21 @@ def create_responsibility_router(store, service, authenticate, agents):
             raise HTTPException(400, str(exc))
 
     sources = getattr(store, "repository_goals", None)
+
     def public(row):
-        return public_responsibility(sources.enrich(row) if sources else row)
+        row = sources.enrich(row) if sources else dict(row)
+        if getattr(store, "heartbeats", None):
+            row["heartbeat"] = store.heartbeats.get(row["agent"])
+        return public_responsibility(row)
 
     @router.get("/responsibilities")
     def listing(agent: str = "", auth=Depends(authenticate)):
         return guarded(
             lambda: {
                 "responsibilities": [
-                    public(r) for r in store.list(principal(auth)[0]) if not agent or r["agent"] == agent
+                    public(r)
+                    for r in store.list(principal(auth)[0])
+                    if not agent or r["agent"] == agent
                 ]
             }
         )
@@ -517,6 +604,7 @@ def create_responsibility_router(store, service, authenticate, agents):
                 raise KeyError(key)
             with service.policy.locked():
                 return public(store.delete(key, owner))
+
         return guarded(remove)
 
     @router.put("/responsibilities/{key}")
@@ -526,7 +614,9 @@ def create_responsibility_router(store, service, authenticate, agents):
             if agent and store.get(key, owner)["agent"] != agent:
                 raise KeyError(key)
             if sources and sources.source(key):
-                raise ValueError("Revise this goal in its linked GitHub issue, then sync")
+                raise ValueError(
+                    "Revise this goal in its linked GitHub issue, then sync"
+                )
             with service.policy.locked():
                 return public(store.revise(key, body.goal, owner))
 
@@ -539,13 +629,17 @@ def create_responsibility_router(store, service, authenticate, agents):
             if agent and store.get(key, owner)["agent"] != agent:
                 raise KeyError(key)
             if body.command == "resume" and sources and not sources.validate(key):
-                raise ValueError("Linked issue must be open, flagged always-on, and assigned to exactly one available agent")
+                raise ValueError(
+                    "Linked issue must be open, flagged always-on, and assigned to exactly one available agent"
+                )
             with service.policy.locked():
                 if agent and store.get(key, owner)["agent"] != agent:
                     raise KeyError(key)
                 row = store.control(key, body.command, owner)
                 if body.command == "resume":
                     service.policy.set_enabled(True)
+                    if getattr(store, "heartbeats", None):
+                        store.heartbeats.wake(row["agent"])
                 if body.command == "cancel":
                     with service.approvals._transaction() as db:
                         ids = [

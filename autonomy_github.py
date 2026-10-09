@@ -433,6 +433,37 @@ class RepositoryGoals:
                     "INSERT INTO goal_sources(responsibility,repo,number,issue_id,title,body,revision,mode,eligible,sync_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (key, repo, number, identity, title, body, revision, mode, 1, now),
                 )
+        # Issue remit changes are task data until a human explicitly resumes
+        # the paused goal. Never import a grant into a currently running goal.
+        if getattr(self.store, "heartbeats", None):
+            begin, end = "<!-- wee-autonomy-remit -->", "<!-- /wee-autonomy-remit -->"
+            if begin in body and end in body[body.index(begin) :]:
+                text = body.split(begin, 1)[1].split(end, 1)[0].strip()
+                header, separator = (
+                    "## Allowed autonomously\n",
+                    "\n## Ask permission first\n",
+                )
+                if text.startswith(header) and separator in text:
+                    autonomous, required = text[len(header) :].split(separator, 1)
+                    if len(autonomous) <= 8000 and len(required) <= 8000:
+                        with self.service.policy.locked(), self.store.db._transaction() as db:
+                            current = self.store._get(db, key, OWNER)
+                            if (
+                                current["autonomous_instructions"],
+                                current["permission_required_instructions"],
+                            ) != (autonomous, required):
+                                db.execute(
+                                    "UPDATE responsibilities SET autonomous_instructions=?,permission_required_instructions=?,instruction_version=instruction_version+1,status=CASE WHEN status='cancelled' THEN status ELSE 'paused' END,phase='idle',checkpoint='{}',run_number=run_number+1 WHERE id=?",
+                                    (autonomous, required, key),
+                                )
+                                db.execute(
+                                    "UPDATE goal_steps SET status='invalidated' WHERE goal_id=? AND status='pending'",
+                                    (key,),
+                                )
+                                db.execute(
+                                    "UPDATE steering_requests SET status='invalidated' WHERE goal_id=? AND status='pending'",
+                                    (key,),
+                                )
         return self.enrich(self.store.get(key))
 
     def validate(self, key):
@@ -529,7 +560,7 @@ class RepositoryGoals:
             request_id = str(__import__("uuid").UUID(request_id))
         except (ValueError, TypeError):
             raise ValueError("request_id must be a UUID") from None
-        if kind not in ("create", "link", "complete"):
+        if kind not in ("create", "link", "complete", "instructions"):
             raise ValueError("Unknown goal operation")
         if payload.get("mode", "recurring") not in ("recurring", "finite"):
             raise ValueError("Invalid goal mode")
@@ -554,11 +585,23 @@ class RepositoryGoals:
             if row["agent"] != agent or row["status"] == "cancelled":
                 raise ValueError("Goal belongs to another agent or is cancelled")
             source = self.source(row["id"])
+            if kind == "instructions" and (not source or source["repo"] != repo):
+                raise ValueError("Instructions require a linked issue")
+            if kind == "instructions":
+                for field in (
+                    "autonomous_instructions",
+                    "permission_required_instructions",
+                ):
+                    if (
+                        not isinstance(payload.get(field), str)
+                        or len(payload[field]) > 8000
+                    ):
+                        raise ValueError("Invalid instructions")
             if kind == "complete" and (
                 not source or source["repo"] != repo or source["mode"] != "finite"
             ):
                 raise ValueError("Only a linked finite goal can be completed")
-            if kind == "complete":
+            if kind in ("complete", "instructions"):
                 with self.store.db._transaction() as db:
                     previous = db.execute(
                         "SELECT payload FROM goal_repo_operations WHERE id=?",
@@ -576,7 +619,7 @@ class RepositoryGoals:
                 }
             if kind in ("create", "link") and source:
                 raise ValueError("Goal is already linked")
-        elif kind == "complete":
+        elif kind in ("complete", "instructions"):
             raise ValueError("A responsibility is required")
         if kind == "link" and payload.get("responsibility"):
             with self.store.db._transaction() as db:
@@ -644,7 +687,7 @@ class RepositoryGoals:
                 payload = json.loads(row["payload"])
                 source = (
                     self.source(payload.get("responsibility", ""))
-                    if row["kind"] == "complete"
+                    if row["kind"] in ("complete", "instructions")
                     else None
                 )
                 number = payload.get("number", source["number"] if source else None)
@@ -673,7 +716,7 @@ class RepositoryGoals:
                                 or current["status"] == "cancelled"
                             ):
                                 return False
-                        if row["kind"] == "complete":
+                        if row["kind"] in ("complete", "instructions"):
                             if not self.validate(payload["responsibility"]):
                                 return False
                             current_source = self.source(payload["responsibility"])
@@ -693,7 +736,7 @@ class RepositoryGoals:
                     # Arguments come only from the persisted, fingerprinted action.
                     args = json.loads(approved.arguments_json)
                     repo = row["repo"]
-                    if args["kind"] == "complete":
+                    if args["kind"] in ("complete", "instructions"):
                         if not self.validate(args["responsibility"]):
                             raise ValueError("Issue is no longer eligible")
                         current_source = self.source(args["responsibility"])
@@ -704,9 +747,31 @@ class RepositoryGoals:
                             raise ValueError(
                                 "Issue changed since completion was requested"
                             )
-                        issue = self.github.request(
-                            "PATCH", resource, {"state": "closed"}
-                        )
+                        changes = {"state": "closed"}
+                        if args["kind"] == "instructions":
+                            body = current_source["body"]
+                            begin, end = (
+                                "<!-- wee-autonomy-remit -->",
+                                "<!-- /wee-autonomy-remit -->",
+                            )
+                            if begin in body and end in body:
+                                body = (
+                                    body[: body.index(begin)]
+                                    + body[
+                                        body.index(end, body.index(begin)) + len(end) :
+                                    ]
+                                )
+                            remit = (
+                                begin
+                                + "\n## Allowed autonomously\n"
+                                + args["autonomous_instructions"]
+                                + "\n## Ask permission first\n"
+                                + args["permission_required_instructions"]
+                                + "\n"
+                                + end
+                            )
+                            changes = {"body": body.rstrip() + "\n\n" + remit}
+                        issue = self.github.request("PATCH", resource, changes)
                         self.ingest(repo, issue)
                         return {
                             "url": issue["html_url"],
@@ -837,6 +902,8 @@ def create_repository_router(goals, authenticate):
         request_id: str
         title: str = Field(default="", max_length=256)
         body: str = Field(default="", max_length=60000)
+        autonomous_instructions: str = Field(default="", max_length=8000)
+        permission_required_instructions: str = Field(default="", max_length=8000)
         number: int | None = None
         responsibility: str | None = None
         interval_seconds: int = Field(default=3600, ge=300, le=604800)
