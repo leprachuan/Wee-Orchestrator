@@ -233,3 +233,5 @@ Always-On setup lives under **Agents → selected agent → Always-On** in WebUI
 ### Repository-backed Always-On goals
 
 Track recurring responsibilities and finite goals as GitHub issues in configured work repositories, labeled `always-on` and `agent:<name>`. Agent Always-On panels provide repo defaults, create/link requests, explicit legacy migration and a view across agents. See [setup and lifecycle](docs/always-on-repository-goals.md).
+
+Adaptive Always-On, goal permission text, shared device requests and APNs setup: [implementation guide](docs/always-on-adaptive-heartbeats.md).

@@ -15,6 +15,7 @@ export function canAlwaysAllow(request) {
   return !['shell.execute', 'python.execute', 'browser.execute', 'delegate.execute'].includes(request.scope.operation);
 }
 export function initAutonomy({request, isAuthenticated}) {
+  startGlobalInbox({request, isAuthenticated});
   let selectedAgent = '', generation = 0;
   const rawRequest = request;
   request = (method, path, body) => rawRequest(method, path + (path.includes('?') ? '&' : '?') + 'agent=' + encodeURIComponent(selectedAgent), body);
@@ -132,7 +133,7 @@ export function initAutonomy({request, isAuthenticated}) {
     for (const row of work.responsibilities) {
       const card = document.createElement('article');card.style.cssText='border-bottom:1px solid #8885;padding:12px 0;margin:8px 0';
       text(card, 'h4', row.agent + ' · ' + row.goal);
-      text(card, 'p', row.status + ' · ' + row.phase + ' · every ' + row.interval_seconds + ' seconds');
+      text(card, 'p', row.status + ' · ' + row.phase + ' · adaptive heartbeat (5 minutes–4 hours)');
       if(row.source){
         const a=document.createElement('a');a.style.color='var(--accent,#8fe0cb)';a.href=row.source.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.source.repo+' #'+row.source.number+' · '+row.source.mode;card.append(a);
         text(card,'p','Next run: '+new Date(row.next_at*1000).toLocaleString()+' · Last sync: '+new Date(row.source.sync_at*1000).toLocaleString());
@@ -143,6 +144,19 @@ export function initAutonomy({request, isAuthenticated}) {
         }
       }else{
         text(card,'p','Unlinked legacy goal');const link=document.createElement('button');link.className='btn btn-ghost btn-sm';link.textContent='Link to GitHub issue';link.onclick=()=>{const repository=window.prompt('Configured owner/repository:',repositories.default_repository);if(!repository)return;const number=window.prompt('Existing open issue number:');if(!number)return;mutate(()=>request('POST','/autonomy/repository-operations',{agent:selectedAgent,repository,number:Number(number),kind:'link',request_id:newOperationId(),responsibility:row.id,interval_seconds:row.interval_seconds}));};if(row.status!=='cancelled')card.append(link);
+      }
+      if (row.heartbeat) text(card, 'p', 'Next heartbeat: '+new Date(row.heartbeat.next_at*1000).toLocaleString()+' · '+row.heartbeat.reason);
+      if (row.status !== 'cancelled') {
+        const edit = document.createElement('details'); text(edit,'summary','Autonomy and permissions');
+        const allowed=document.createElement('textarea'), ask=document.createElement('textarea');
+        allowed.value=row.autonomous_instructions||''; ask.value=row.permission_required_instructions||'';
+        allowed.maxLength=ask.maxLength=8000; allowed.rows=ask.rows=4;
+        allowed.style.cssText=ask.style.cssText='width:100%;display:block;margin:8px 0';
+        text(edit,'label','Allowed autonomously').append(allowed);text(edit,'label','Ask permission first').append(ask);
+        text(edit,'p','The agent reads this text every heartbeat. Ask-first takes precedence. Saving pauses the goal for review.');
+        const save=document.createElement('button');save.textContent='Save instructions and pause';save.className='btn btn-ghost';
+        save.onclick=()=>mutate(()=>request('PUT','/autonomy/responsibilities/'+encodeURIComponent(row.id)+'/instructions',{autonomous_instructions:allowed.value,permission_required_instructions:ask.value}));
+        edit.append(save);card.append(edit);
       }
       if (row.report) text(card, 'pre', row.report).style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
       if (row.error) text(card, 'p', row.error);
@@ -167,12 +181,12 @@ export function initAutonomy({request, isAuthenticated}) {
     if (!responsibilityForm) {
     const form = document.createElement('form');
     const values = {};
-    for (const [key,label,value] of [['agent','Agent name',''],['repository','Configured owner/repository',repositories.default_repository],['title','New issue title',''],['body','Issue description and task checklist',''],['number','Existing issue number (optional; leave empty to create)',''],['interval_seconds','Interval in seconds (minimum 300)','3600']]) {
+    for (const [key,label,value] of [['agent','Agent name',''],['repository','Configured owner/repository',repositories.default_repository],['title','New issue title',''],['body','Issue description and task checklist',''],['number','Existing issue number (optional; leave empty to create)','']]) {
       const el=document.createElement(key==='body'?'textarea':'input');el.className='glass-input';el.required=!['body','number'].includes(key);el.value=key==='agent'?selectedAgent:value;el.readOnly=key==='agent';el.maxLength=key==='body'?48000:key==='title'?256:1024;el.style.cssText='display:block;width:100%;margin:4px 0 10px';
       const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(el);form.append(wrapper);values[key]=el;
     }
     const mode=document.createElement('select');for(const name of ['recurring','finite']){const option=document.createElement('option');option.value=name;option.textContent=name;mode.append(option);}form.append(mode);const create=document.createElement('button');create.className='btn btn-primary';create.textContent='Request create / link issue (starts paused)';form.append(create);
-    let requestId=null;form.onsubmit=e=>{e.preventDefault();requestId ||= newOperationId();const number=values.number.value.trim();const body={agent:selectedAgent,repository:values.repository.value.trim(),kind:number?'link':'create',request_id:requestId,title:values.title.value.trim(),body:values.body.value,interval_seconds:Number(values.interval_seconds.value),mode:mode.value};if(number)body.number=Number(number);mutate(async()=>{await request('POST','/autonomy/repository-operations',body);requestId=null;values.title.value='';values.body.value='';values.number.value='';values.title.required=true;});};values.number.oninput=()=>{values.title.required=!values.number.value.trim();};form.addEventListener('input',()=>{requestId=null;});responsibilityForm=form; }
+    let requestId=null;form.onsubmit=e=>{e.preventDefault();requestId ||= newOperationId();const number=values.number.value.trim();const body={agent:selectedAgent,repository:values.repository.value.trim(),kind:number?'link':'create',request_id:requestId,title:values.title.value.trim(),body:values.body.value,interval_seconds:3600,mode:mode.value};if(number)body.number=Number(number);mutate(async()=>{await request('POST','/autonomy/repository-operations',body);requestId=null;values.title.value='';values.body.value='';values.number.value='';values.title.required=true;});};values.number.oninput=()=>{values.title.required=!values.number.value.trim();};form.addEventListener('input',()=>{requestId=null;});responsibilityForm=form; }
     responsibilities.append(responsibilityForm);
     inbox.replaceChildren(); rules.replaceChildren();
     const pending = data.requests.filter(r => ['pending','rule_pending'].includes(r.status));
@@ -234,4 +248,67 @@ export function initAutonomy({request, isAuthenticated}) {
   window.addEventListener('online', () => refresh(true));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
   document.getElementById('asf-agent-selector')?.addEventListener('change', () => { generation++; modal.classList.add('hidden'); });
+}
+
+
+// This poll runs independently of the agent settings modal and selected agent.
+export function startGlobalInbox({request, isAuthenticated}) {
+  const button=document.createElement('button');button.className='btn btn-primary';
+  button.style.cssText='position:fixed;bottom:20px;right:20px;z-index:1000';button.hidden=true;
+  button.setAttribute('aria-live','polite');document.body.append(button);
+  const modal=document.createElement('div');modal.className='modal-overlay hidden';
+  const box=document.createElement('section');box.className='modal-box glass-panel';
+  box.style.cssText='max-width:750px;max-height:90vh;overflow:auto;padding:20px;width:95%';
+  box.setAttribute('role','dialog');box.setAttribute('aria-label','All agent approvals and steering');box.setAttribute('aria-modal','true');
+  const title=document.createElement('h2');title.textContent='Approvals and steering';
+  const close=document.createElement('button');close.className='btn btn-ghost';close.textContent='Close';
+  close.onclick=()=>{modal.classList.add('hidden');button.focus();};
+  const content=document.createElement('div'),status=document.createElement('p');status.setAttribute('role','status');
+  box.append(title,close,status,content);modal.append(box);document.body.append(modal);
+  button.onclick=()=>{modal.classList.remove('hidden');close.focus();};
+  let busy=false, snapshot='', polling=false;
+  const text=(parent,tag,value)=>{const node=document.createElement(tag);node.textContent=value;parent.append(node);return node;};
+  const decide=async(origin,id,body)=>{
+    if(busy)return;busy=true;box.querySelectorAll('button').forEach(b=>b.disabled=true);
+    try{await request('POST','/autonomy/inbox/'+encodeURIComponent(origin)+'/'+encodeURIComponent(id)+'/decision',body);status.textContent='Response submitted.';snapshot='';}
+    catch(error){status.textContent=error.message;}
+    finally{busy=false;box.querySelectorAll('button').forEach(b=>b.disabled=false);await poll();}
+  };
+  async function poll(){
+    if(polling||busy)return;
+    if(!isAuthenticated()){button.hidden=true;content.replaceChildren();snapshot='';return;}
+    polling=true;
+    try{
+      const inbox=await request('GET','/autonomy/inbox');
+      const groups=[inbox,...(inbox.peers||[])];
+      const count=groups.reduce((n,g)=>n+g.approvals.length+g.steering.length,0);
+      button.hidden=count===0;button.textContent=count+' agent request'+(count===1?'':'s');
+      const signature=JSON.stringify(inbox,(key,value)=>key==='last_seen_at'?undefined:value);
+      if(signature===snapshot)return;snapshot=signature;
+      // Preserve in-progress steering text across arrivals/resolutions elsewhere.
+      const drafts=new Map([...content.querySelectorAll('textarea')].map(t=>[t.dataset.key,t.value]));
+      content.replaceChildren();
+      for(const group of groups){
+        text(content,'h3',group.instance_id===inbox.instance_id?'This orchestrator':'Connected instance '+group.instance_id.slice(0,8));
+        for(const approval of group.approvals){
+          const card=document.createElement('article');card.style.cssText='border-bottom:1px solid #8885;padding:12px 0';
+          text(card,'h4',approval.scope.agent+' · '+approval.preview.summary);
+          text(card,'p',permanentScope(approval));if(approval.preview.details)text(card,'pre',approval.preview.details).style.whiteSpace='pre-wrap';
+          if(approval.status==='awaiting_origin')text(card,'p','Response queued; waiting for originating instance.');
+          else for(const [label,decision] of [['Approve once','approve_once'],['Deny','reject']]){const b=document.createElement('button');b.className='btn btn-ghost';b.textContent=label;b.onclick=()=>decide(group.instance_id,approval.id,{kind:'approval',decision,fingerprint:approval.fingerprint});card.append(b);}
+          content.append(card);
+        }
+        for(const question of group.steering){
+          const card=document.createElement('article');text(card,'h4',question.agent+' · '+question.question);
+          if(question.status==='awaiting_origin')text(card,'p','Answer queued; waiting for originating instance.');
+          else{const answer=document.createElement('textarea');answer.dataset.key=group.instance_id+question.id;answer.value=drafts.get(answer.dataset.key)||'';answer.maxLength=4000;answer.rows=3;answer.style.width='100%';
+            const send=document.createElement('button');send.className='btn btn-ghost';send.textContent='Send steering';send.disabled=!answer.value;answer.oninput=()=>send.disabled=!answer.value;
+            send.onclick=()=>decide(group.instance_id,question.id,{kind:'steering',answer:answer.value,revision:question.revision});card.append(answer,send);}
+          content.append(card);
+        }
+      }
+      if(!count)text(content,'p','No pending requests.');
+    }catch(error){status.textContent=error.message;}finally{polling=false;}
+  }
+  poll();setInterval(poll,5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
 }
