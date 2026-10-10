@@ -23,7 +23,7 @@ export function initAutonomy({request, isAuthenticated}) {
   modal.className = 'modal-overlay hidden';
   const box = document.createElement('section');
   box.className = 'modal-box glass-panel';
-  box.style.cssText = 'max-width:800px;max-height:90vh;overflow:auto;padding:20px;width:95%;';
+  box.style.cssText = 'max-width:1000px;max-height:90vh;overflow:auto;padding:20px;width:95%;';
   box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
   box.setAttribute('aria-label', 'Agent Always-On');
   const heading = document.createElement('h2'); heading.textContent = 'Always-On';
@@ -39,14 +39,30 @@ export function initAutonomy({request, isAuthenticated}) {
   let editing = null, busy = false, last = '', cursor = 0, identityPresent = false, responsibilityForm = null, repositoryForm = null, modelLoaded = false;
   const modelFields = {};
   const budgetForm = document.createElement('form');
-  const budgetTitle = document.createElement('h3'); budgetTitle.textContent = 'Routine model and budgets';
-  const budgetStatus = document.createElement('p');
-  for (const [key,label] of [['routine_runtime','Routine runtime'],['routine_model','Default model for selected runtime'],['escalation_runtime','Escalation runtime'],['escalation_models','Permitted escalation models (comma-separated, optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Requested output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
-    const input=document.createElement(key.endsWith('_runtime') ? 'select' : 'input');input.className='glass-input';input.style.cssText='display:block;width:100%;margin:4px 0 10px';modelFields[key]=input;
-    const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(input);budgetForm.append(wrapper);
+  const budgetTitle = document.createElement('h3'); budgetTitle.textContent = 'Runtime and model';
+  const setupStyle=document.createElement('style');setupStyle.textContent='.autonomy-columns{display:grid;grid-template-columns:1fr 1fr;gap:20px}.autonomy-columns label{display:block}.autonomy-columns textarea{box-sizing:border-box;width:100%;min-height:240px;resize:vertical;padding:12px}.autonomy-columns input,.autonomy-columns select{box-sizing:border-box}@media(max-width:640px){.autonomy-columns{grid-template-columns:1fr}}';box.append(setupStyle);
+  const modelColumns=document.createElement('div');modelColumns.className='autonomy-columns';
+  const primary=document.createElement('section'),backup=document.createElement('section');
+  const primaryTitle=document.createElement('h4');primaryTitle.textContent='Primary';primary.append(primaryTitle);
+  const backupTitle=document.createElement('h4');backupTitle.textContent='Backup';backup.append(backupTitle);
+  modelColumns.append(primary,backup);budgetForm.append(modelColumns);
+  const advanced=document.createElement('details');const advancedTitle=document.createElement('summary');advancedTitle.textContent='Advanced limits';advanced.append(advancedTitle);
+  const instructionColumns=document.createElement('div');instructionColumns.className='autonomy-columns';
+  const agentAllowed=document.createElement('textarea'),agentAsk=document.createElement('textarea');
+  for(const [input,title,description] of [[agentAllowed,'Allowed autonomously','What this agent may do on its own.'],[agentAsk,'Requires approval','What this agent must ask before doing.']]){
+    input.className='glass-input';input.maxLength=8000;input.rows=10;
+    const label=document.createElement('label');const heading=document.createElement('h3');heading.textContent=title;
+    const help=document.createElement('p');help.textContent=description;label.append(heading,help,input);instructionColumns.append(label);
   }
-  const budgetSave=document.createElement('button');budgetSave.className='btn btn-primary';budgetSave.textContent='Save model budgets';budgetForm.append(budgetSave);
-  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_runtime:modelFields.routine_runtime.value,escalation_runtime:modelFields.escalation_runtime.value,routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.split(',').map(v=>v.trim()).filter(Boolean)};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(async()=>{await request('PUT','/autonomy/model-settings',body);modelLoaded=false;});};
+
+  const budgetStatus = document.createElement('p');
+  for (const [key,label] of [['routine_runtime','Runtime'],['routine_model','Model'],['escalation_runtime','Runtime'],['escalation_models','Model (optional)'],['max_requests_per_run','Maximum requests per run (1–3)'],['max_output_tokens','Requested output tokens (128–2048)'],['daily_requests','Daily request limit (1–100)'],['daily_token_budget','Daily reserved token budget (1024–200000)']]) {
+    const input=document.createElement(key.endsWith('_runtime') ? 'select' : 'input');input.className='glass-input';input.style.cssText='display:block;width:100%;margin:4px 0 10px';modelFields[key]=input;
+    const wrapper=document.createElement('label');wrapper.textContent=label;wrapper.append(input);(key.startsWith('routine_') ? primary : key.startsWith('escalation_') ? backup : advanced).append(wrapper);
+  }
+  const instructionHelp=document.createElement('p');instructionHelp.textContent='These instructions apply to every goal. Approval requirements take precedence. Saving instructions pauses goals for review.';
+  const budgetSave=document.createElement('button');budgetSave.className='btn btn-primary';budgetSave.textContent='Save setup';budgetForm.append(instructionColumns,instructionHelp,budgetSave,advanced);
+  budgetForm.onsubmit=e=>{e.preventDefault();const body={routine_runtime:modelFields.routine_runtime.value,escalation_runtime:modelFields.escalation_runtime.value,routine_model:modelFields.routine_model.value.trim(),escalation_models:modelFields.escalation_models.value.trim() ? [modelFields.escalation_models.value.trim()] : []};for(const key of ['max_requests_per_run','max_output_tokens','daily_requests','daily_token_budget'])body[key]=Number(modelFields[key].value);mutate(async()=>{await request('PUT','/autonomy/model-settings',body);await request('PUT','/autonomy/agent-instructions',{autonomous_instructions:agentAllowed.value,permission_required_instructions:agentAsk.value});modelLoaded=false;});};
   async function loadRuntimeModels(kind) {
     const runtime = modelFields[kind+'_runtime'].value; const opened = generation;
     try {
@@ -61,7 +77,7 @@ export function initAutonomy({request, isAuthenticated}) {
     } catch(error) { status.textContent=error.message; }
   }
   for (const kind of ['routine','escalation']) modelFields[kind+'_runtime'].onchange=()=>loadRuntimeModels(kind);
-  budgets.append(budgetTitle,budgetStatus,budgetForm);
+  advanced.append(budgetStatus);budgets.append(budgetTitle,budgetForm);
   const inputs = {};
   for (const key of ['agent', 'operation', 'host', 'resource']) {
     const label = document.createElement('label'); label.textContent = key[0].toUpperCase() + key.slice(1);
@@ -83,7 +99,10 @@ export function initAutonomy({request, isAuthenticated}) {
     await mutate(() => request(editing ? 'PUT' : 'POST', '/autonomy/rules' + (editing ? '/' + encodeURIComponent(editing) : ''), body));
     editing = null; editor.reset(); inputs.agent.value=selectedAgent;
   };
-  box.append(heading, close, status, inbox, responsibilities, budgets, ruleHeading, rules, editor); modal.append(box); document.body.append(modal);
+  const goalsSection=document.createElement('details'),rulesSection=document.createElement('details'),approvalSection=document.createElement('details');
+  for(const [section,title] of [[goalsSection,'Goals and repositories'],[rulesSection,'Advanced action rules'],[approvalSection,'Agent approvals']]){const summary=document.createElement('summary');summary.textContent=title;section.append(summary);section.style.margin='16px 0';}
+  goalsSection.append(responsibilities);rulesSection.append(ruleHeading,rules,editor);approvalSection.append(inbox);
+  box.append(heading, close, status, budgets, goalsSection, approvalSection, rulesSection); modal.append(box); document.body.append(modal);
   window.addEventListener('wee:agent-always-on', e => {
     if (busy || !e.detail?.agent) return;
     selectedAgent = e.detail.agent; generation++; modelLoaded=false; last=''; cursor=0;
@@ -102,13 +121,13 @@ export function initAutonomy({request, isAuthenticated}) {
     catch (error) { status.textContent = error.message; }
     finally { busy = false; box.querySelectorAll('button').forEach(b => b.disabled = false); await refresh(true); }
   }
-  function render(data, policy, work, models, catalog, repositories, operations) {
+  function render(data, policy, work, models, catalog, repositories, operations, instructions) {
     if (!modelLoaded) {
       for (const key of ['routine_runtime','escalation_runtime']) {
         modelFields[key].replaceChildren();
         for (const runtime of catalog.runtimes) { const opt=document.createElement('option');opt.value=runtime.id;opt.textContent=runtime.label+(runtime.available?'':' (unavailable on API host)');modelFields[key].append(opt); }
       }
-      for (const [key,input] of Object.entries(modelFields)) input.value = key === 'escalation_models' ? models.config[key].join(', ') : models.config[key]; modelLoaded=true; loadRuntimeModels('routine'); loadRuntimeModels('escalation'); }
+      for (const [key,input] of Object.entries(modelFields)) input.value = key === 'escalation_models' ? (models.config[key][0]||'') : models.config[key]; agentAllowed.value=instructions.autonomous_instructions;agentAsk.value=instructions.permission_required_instructions;modelLoaded=true; loadRuntimeModels('routine'); loadRuntimeModels('escalation'); }
     budgetStatus.textContent = `Today: ${models.usage.requests} requests · ${models.usage.reserved_tokens} reserved tokens · ${models.usage.unknown_usage} unknown usage readings. Escalation needs recorded failed checks, an allowed model, budget and shared approval. Price in dollars is unavailable. ${models.cost_note || ""}`;
     responsibilities.replaceChildren();
     text(responsibilities, 'h3', 'Always-On responsibilities');
@@ -237,10 +256,10 @@ export function initAutonomy({request, isAuthenticated}) {
       const events = await request('GET', `/autonomy/events?after=${cursor}`);
       const changed = events.cursor !== cursor; cursor = events.cursor;
       if (!force && !changed && last && modal.classList.contains('hidden')) return;
-      const [data, policy, work, models, catalog, repositories, operations] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings'), request('GET','/autonomy/runtime-catalog'),request('GET','/autonomy/repositories'),request('GET','/autonomy/repository-operations')]);
+      const [data, policy, work, models, catalog, repositories, operations, instructions] = await Promise.all([request('GET','/autonomy/approvals'), request('GET','/autonomy/rules'), request('GET','/autonomy/responsibilities'), request('GET','/autonomy/model-settings'), request('GET','/autonomy/runtime-catalog'),request('GET','/autonomy/repositories'),request('GET','/autonomy/repository-operations'),request('GET','/autonomy/agent-instructions')]);
       if (opened !== generation || modal.classList.contains('hidden')) return;
-      const version = JSON.stringify([data, policy, work, models, repositories, operations]);
-      if (version !== last && (force || !document.activeElement?.closest('form'))) { render(data, policy, work, models, catalog, repositories, operations); last = version; }
+      const version = JSON.stringify([data, policy, work, models, repositories, operations, instructions]);
+      if (version !== last && (force || !document.activeElement?.matches('textarea,input,select'))) { render(data, policy, work, models, catalog, repositories, operations, instructions); last = version; }
     } catch (error) { if (!modal.classList.contains('hidden')) status.textContent = error.message; }
   }
   // Connected delivery and authoritative catch-up after sleep/network interruption.
