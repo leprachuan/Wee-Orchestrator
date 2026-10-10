@@ -42,6 +42,9 @@ class Heartbeats:
                     db.execute(
                         f"ALTER TABLE responsibilities ADD COLUMN {field} {definition}"
                     )
+            db.execute("""CREATE TABLE IF NOT EXISTS agent_instructions (
+                agent TEXT PRIMARY KEY, autonomous_instructions TEXT NOT NULL,
+                permission_required_instructions TEXT NOT NULL)""")
             db.execute(
                 """CREATE TABLE IF NOT EXISTS agent_heartbeats (
                 agent TEXT PRIMARY KEY, next_at REAL NOT NULL, last_completed_at REAL NOT NULL DEFAULT 0,
@@ -176,6 +179,32 @@ class Heartbeats:
         self.wake(row["agent"])
         return self.store.get(key)
 
+    def agent_instructions(self, agent):
+        if agent not in self.agents():
+            raise KeyError(agent)
+        with self.store.db._transaction() as db:
+            row = db.execute("SELECT autonomous_instructions,permission_required_instructions FROM agent_instructions WHERE agent=?", (agent,)).fetchone()
+        return dict(row) if row else {"autonomous_instructions": "", "permission_required_instructions": ""}
+
+    def save_agent_instructions(self, agent, autonomous, ask):
+        self.agent_instructions(agent)
+        for value in (autonomous, ask):
+            if not isinstance(value, str) or len(value) > 8000 or "\0" in value:
+                raise ValueError("Instructions must be plain text, at most 8000 characters each")
+        with self.service.policy.locked():
+            if self.agent_instructions(agent) == {"autonomous_instructions": autonomous, "permission_required_instructions": ask}:
+                return self.agent_instructions(agent)
+            with self.store.db._transaction() as db:
+                db.execute("INSERT OR REPLACE INTO agent_instructions VALUES (?,?,?)", (agent, autonomous, ask))
+                db.execute("UPDATE responsibilities SET status='paused',phase='idle',checkpoint='{}',run_number=run_number+1,instruction_version=instruction_version+1 WHERE agent=? AND status!='cancelled'", (agent,))
+                db.execute("UPDATE goal_steps SET status='invalidated' WHERE agent=? AND status='pending'", (agent,))
+                db.execute("UPDATE steering_requests SET status='invalidated' WHERE agent=? AND status='pending'", (agent,))
+            for approval in self.service.approvals.list(owner=OWNER):
+                if approval['scope']['agent'] == agent and approval['status'] in ('pending', 'approved'):
+                    self.service.approvals.cancel(approval['id'], owner=OWNER, actor='agent-instructions-edited')
+        self.wake(agent)
+        return self.agent_instructions(agent)
+
     def context(self, agent):
         goals = []
         sources = getattr(self.store, "repository_goals", None)
@@ -207,6 +236,7 @@ class Heartbeats:
                 )
             ]
         return {
+            "agent_instructions": self.agent_instructions(agent),
             "active_goals": goals,
             "steering_answers": answers,
             "heartbeat": self.get(agent),
@@ -342,7 +372,8 @@ class Heartbeats:
         }
         kind = step["kind"]
         required = terms.get(kind, ())
-        ask = row["permission_required_instructions"].lower()
+        agent_policy = self.agent_instructions(row["agent"])
+        ask = (agent_policy["permission_required_instructions"] + "\n" + row["permission_required_instructions"]).lower()
         if any(word in ask for word in required) or any(
             word in ask for word in ("every action", "all actions", "anything")
         ):
@@ -353,7 +384,7 @@ class Heartbeats:
             for word in ("not ", "never ", "ask ", "permission", "approval")
         ):
             return "ask"
-        allowed = row["autonomous_instructions"]
+        allowed = agent_policy["autonomous_instructions"] + "\n" + row["autonomous_instructions"]
         if (
             step["permission"] == "autonomous"
             and quote
@@ -545,6 +576,14 @@ def create_heartbeat_router(heartbeats, authenticate):
             raise HTTPException(404, "Not found")
         except (ValueError, PermissionError) as exc:
             raise HTTPException(400, str(exc))
+
+    @router.get("/agent-instructions")
+    def agent_instructions(agent: str, auth=Depends(authenticate)):
+        return guard(auth, lambda: heartbeats.agent_instructions(agent))
+
+    @router.put("/agent-instructions")
+    def save_agent_instructions(body: Instructions, agent: str, auth=Depends(authenticate)):
+        return guard(auth, lambda: heartbeats.save_agent_instructions(agent, body.autonomous_instructions, body.permission_required_instructions))
 
     @router.get("/heartbeats")
     def listing(agent: str = "", auth=Depends(authenticate)):

@@ -23,3 +23,9 @@ Registration: authenticated `PUT /inbox/devices/{device}` with token and `sandbo
 ## Development validation
 
 Develop/test on `192.168.1.100`, API service `agent-manager-api-dev`, port 8001. The adaptive regression suite covers cadence bounds, completion clocks, restart durability, full instructions, ask/deny precedence, stale work, single-winner steering, note execution, issue mirroring/import, authenticated global visibility, offline relay replay and quiet multi-device notification delivery. Native builds and shared JSON contract checks cover all client schemas. Production promotion uses the existing validated versioned release workflow.
+
+## Agent setup
+
+macOS and WebUI show primary and backup runtime/model choices above two permission panels: **Allowed autonomously** on the left and **Requires approval** on the right. Agent instructions apply to every tracked goal. Per-goal approval requirements still apply and take precedence over allowances. Goals, repositories, detailed rules and budget limits remain in expandable sections. Backup use retains the existing failed-check and shared approval policy.
+
+`GET/PUT /api/v1/autonomy/agent-instructions?agent=<name>` reads/saves the two plain-text fields `autonomous_instructions` and `permission_required_instructions` (8000 characters each). A changed remit pauses the agent’s non-cancelled goals, invalidates pending work and steering, and cancels old approvals. Unchanged instructions preserve running goals. Every heartbeat receives agent instructions alongside goal instructions.

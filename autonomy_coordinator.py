@@ -451,7 +451,7 @@ class Coordinator:
                             {
                                 "kind": "save_note",
                                 "permission": "autonomous",
-                                "quote": row["autonomous_instructions"],
+                                "quote": row["autonomous_instructions"] or heartbeats.agent_instructions(row["agent"])["autonomous_instructions"],
                             },
                         )
                         if heartbeats
